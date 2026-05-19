@@ -26,6 +26,11 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
+      - name: Configure Gradle toolchain detection
+        run: |
+          mkdir -p ~/.gradle
+          echo "org.gradle.java.installations.fromEnv=JAVA_HOME_21_X64,JAVA_HOME" >> ~/.gradle/gradle.properties
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
