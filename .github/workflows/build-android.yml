@@ -37,8 +37,10 @@ jobs:
 
       - name: Revert gradle-plugin toolchain requirement to 17 for CI
         run: |
-          grep -rl "jvmToolchain(18)" node_modules/@react-native/gradle-plugin/ | \
-            xargs sed -i 's/jvmToolchain(18)/jvmToolchain(17)/g'
+          grep -rl "jvmToolchain(18)\|VERSION_18" node_modules/@react-native/gradle-plugin/ | \
+            xargs sed -i \
+              -e 's/jvmToolchain(18)/jvmToolchain(17)/g' \
+              -e 's/JavaVersion\.VERSION_18/JavaVersion.VERSION_17/g'
 
       - name: Prebuild Android
         run: npx expo prebuild --platform android --clean
