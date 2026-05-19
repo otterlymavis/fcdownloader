@@ -26,9 +26,6 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Register Java 21 in /usr/lib/jvm for Gradle toolchain detection
-        run: sudo ln -sfn "$JAVA_HOME" /usr/lib/jvm/temurin-21
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
@@ -37,6 +34,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Revert gradle-plugin toolchain requirement to 17 for CI
+        run: |
+          find node_modules/@react-native/gradle-plugin -name "*.kts" -o -name "*.gradle" | \
+            xargs grep -l "jvmToolchain(18)" 2>/dev/null | \
+            xargs sed -i 's/jvmToolchain(18)/jvmToolchain(17)/g'
 
       - name: Prebuild Android
         run: npx expo prebuild --platform android --clean
