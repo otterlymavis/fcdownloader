@@ -37,8 +37,7 @@ jobs:
 
       - name: Revert gradle-plugin toolchain requirement to 17 for CI
         run: |
-          find node_modules/@react-native/gradle-plugin -name "*.kts" -o -name "*.gradle" | \
-            xargs grep -l "jvmToolchain(18)" 2>/dev/null | \
+          grep -rl "jvmToolchain(18)" node_modules/@react-native/gradle-plugin/ | \
             xargs sed -i 's/jvmToolchain(18)/jvmToolchain(17)/g'
 
       - name: Prebuild Android
