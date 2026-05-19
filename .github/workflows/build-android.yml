@@ -35,13 +35,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Configure toolchain for @react-native/gradle-plugin included build
+        run: |
+          printf "\norg.gradle.java.installations.paths=%s\n" "$JAVA_HOME" \
+            >> node_modules/@react-native/gradle-plugin/gradle.properties
+
       - name: Prebuild Android
         run: npx expo prebuild --platform android --clean
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-
-      - name: Inject Java toolchain path into android/gradle.properties
-        run: printf "\norg.gradle.java.installations.paths=%s\n" "$JAVA_HOME" >> android/gradle.properties
 
       - name: Generate keystore
         run: |
