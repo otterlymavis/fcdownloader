@@ -26,11 +26,6 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Configure Gradle toolchain detection
-        run: |
-          mkdir -p ~/.gradle
-          echo "org.gradle.java.installations.fromEnv=JAVA_HOME_21_X64,JAVA_HOME" >> ~/.gradle/gradle.properties
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
@@ -44,6 +39,9 @@ jobs:
         run: npx expo prebuild --platform android --clean
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Inject Java toolchain path into android/gradle.properties
+        run: printf "\norg.gradle.java.installations.paths=%s\n" "$JAVA_HOME" >> android/gradle.properties
 
       - name: Generate keystore
         run: |
