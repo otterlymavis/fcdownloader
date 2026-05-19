@@ -57,14 +57,19 @@ export default function MediaActionSheet({
           {items.map((item) => (
             <View key={item.id} style={[styles.row, c.row]}>
               <View style={{ flex: 1, gap: 4 }}>
-                <Text
-                  style={[
-                    styles.badge,
-                    item.mediaType === 'hls' ? styles.hlsBadge : styles.dashBadge,
-                  ]}
-                >
-                  {item.mediaType.toUpperCase()}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text
+                    style={[
+                      styles.badge,
+                      item.mediaType === 'hls' ? styles.hlsBadge : styles.dashBadge,
+                    ]}
+                  >
+                    {item.mediaType.toUpperCase()}
+                  </Text>
+                  {item.label ? (
+                    <Text style={[styles.label, c.text]}>{item.label}</Text>
+                  ) : null}
+                </View>
                 <Text style={[styles.url, c.subtext]} numberOfLines={2}>
                   {item.url}
                 </Text>
@@ -147,6 +152,7 @@ const styles = StyleSheet.create({
   },
   hlsBadge: { backgroundColor: '#0a84ff' },
   dashBadge: { backgroundColor: '#30d158' },
+  label: { fontSize: 13, fontWeight: '600' },
   url: { fontSize: 12, lineHeight: 16 },
   pageMeta: { fontSize: 11, opacity: 0.6 },
   actions: { flexDirection: 'row', gap: 8, alignSelf: 'flex-end' },

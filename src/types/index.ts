@@ -24,6 +24,7 @@ export interface DetectedMedia {
   timestamp: number;
   mimeType?: string;
   mediaType: MediaType;
+  label?: string;
 }
 
 export interface DownloadTask {

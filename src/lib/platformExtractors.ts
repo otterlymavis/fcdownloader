@@ -26,7 +26,7 @@ async function fetchHtml(url: string, ua = DESKTOP_UA): Promise<string> {
   return res.text();
 }
 
-function makeItem(url: string, pageUrl: string): DetectedMedia {
+function makeItem(url: string, pageUrl: string, label?: string): DetectedMedia {
   const clean = url
     .replace(/\\u0026/g, '&')
     .replace(/\\\//g, '/')
@@ -39,6 +39,7 @@ function makeItem(url: string, pageUrl: string): DetectedMedia {
     userAgent: '',
     timestamp: Date.now(),
     mediaType: clean.toLowerCase().includes('.mpd') ? 'dash' : 'hls',
+    label,
   };
 }
 
@@ -179,18 +180,60 @@ async function extractYouTube(pageUrl: string): Promise<DetectedMedia[]> {
         const data = JSON.parse(ytMatch[1]) as any;
         const sd = data.streamingData;
         if (sd) {
-          if (sd.hlsManifestUrl) results.push(makeItem(sd.hlsManifestUrl, pageUrl));
-          const fmts: Array<{ url?: string; mimeType?: string }> = [
-            ...(sd.formats ?? []),
-            ...(sd.adaptiveFormats ?? []),
-          ];
-          for (const f of fmts) {
-            if (f.url && f.mimeType?.startsWith('video/') && !results.some(r => r.url === f.url)) {
-              results.push(makeItem(f.url, pageUrl));
+          // HLS manifest — single URL, quality-adaptive, best choice
+          if (sd.hlsManifestUrl) {
+            results.push(makeItem(sd.hlsManifestUrl, pageUrl, 'HLS (best)'));
+          }
+
+          // Progressive formats only — video+audio in one file, sorted highest quality first.
+          // Adaptive formats are video-only or audio-only and require ffmpeg to merge, so skip them.
+          const progressive: Array<{ url: string; qualityLabel?: string; bitrate?: number }> =
+            (sd.formats ?? [])
+              .filter((f: any) => f.url && f.mimeType?.startsWith('video/'))
+              .sort((a: any, b: any) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+
+          for (const f of progressive) {
+            if (!results.some(r => r.url === f.url)) {
+              results.push(makeItem(f.url, pageUrl, f.qualityLabel));
             }
           }
         }
       } catch {}
+    }
+
+    return results;
+  } catch { return []; }
+}
+
+// ── TVer ──────────────────────────────────────────────────────────
+async function extractTVer(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const episodeMatch = pageUrl.match(/tver\.jp\/episodes\/(ep[A-Za-z0-9]+)/);
+    if (!episodeMatch) return [];
+    const episodeId = episodeMatch[1];
+
+    const res = await fetch(
+      `https://platform-api.tver.jp/service/api/v1/callEpisode/${episodeId}`,
+      {
+        headers: {
+          'x-tver-platform-type': 'web',
+          'Origin': 'https://tver.jp',
+          'Referer': 'https://tver.jp/',
+          'User-Agent': DESKTOP_UA,
+        },
+      },
+    );
+    if (!res.ok) return [];
+
+    const json = JSON.stringify(await res.json());
+    const results: DetectedMedia[] = [];
+
+    extractUrls(json, /(https?:\/\/[^"\\]+\.m3u8[^"\\]*)/g)
+      .forEach(u => results.push(makeItem(u, pageUrl)));
+
+    if (results.length === 0) {
+      extractUrls(json, /(https?:\/\/[^"\\]+\.mp4[^"\\]*)/g)
+        .forEach(u => results.push(makeItem(u, pageUrl)));
     }
 
     return results;
@@ -260,6 +303,7 @@ const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[
   { re: /(?:youtube\.com\/(?:watch|shorts)|youtu\.be\/)[?/]?[A-Za-z0-9_-]{11}/,   fn: extractYouTube     },
   { re: /facebook\.com\/(?:watch|reel|video)|fb\.watch/,                            fn: extractFacebook    },
   { re: /pinterest\.(?:com|[a-z]{2,3})\/pin\/\d+/,                                 fn: extractPinterest   },
+  { re: /tver\.jp\/episodes\/ep[A-Za-z0-9]+/,                                       fn: extractTVer        },
 ];
 
 /** Returns true if the URL looks like a social-media post page (not a CDN media URL). */
