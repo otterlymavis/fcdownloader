@@ -1,0 +1,129 @@
+diff --git a/node_modules/react-native-webview/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewClient.java b/node_modules/react-native-webview/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewClient.java
+index 0287e1c..9ec0d2d 100644
+--- a/node_modules/react-native-webview/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewClient.java
++++ b/node_modules/react-native-webview/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewClient.java
+@@ -4,6 +4,8 @@ import android.annotation.TargetApi;
+ import android.graphics.Bitmap;
+ import android.net.http.SslError;
+ import android.os.Build;
++import android.os.Handler;
++import android.os.Looper;
+ import android.os.SystemClock;
+ import android.util.Log;
+ import android.webkit.HttpAuthHandler;
+@@ -35,6 +37,8 @@ import com.reactnativecommunity.webview.events.TopShouldStartLoadWithRequestEven
+ import android.webkit.CookieManager;
+ import android.webkit.CookieSyncManager;
+ 
++import org.json.JSONObject;
++
+ import java.util.concurrent.atomic.AtomicReference;
+ 
+ public class RNCWebViewClient extends WebViewClient {
+@@ -146,6 +150,106 @@ public class RNCWebViewClient extends WebViewClient {
+         return this.shouldOverrideUrlLoading(view, url);
+     }
+ 
++    // ── Native-level request interception for video stream detection ──────────
++    // Called by Android for EVERY resource request (including native <video> playback).
++    // JS injection alone misses these because WebKit's media engine requests them
++    // outside the JavaScript context.
++    private static final Handler sMainHandler = new Handler(Looper.getMainLooper());
++
++    @TargetApi(Build.VERSION_CODES.LOLLIPOP)
++    @Override
++    public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
++        final String url = request.getUrl().toString();
++        final java.util.Map<String, String> headers = request.getRequestHeaders();
++        maybeEmitCapturedUrl(view, url);
++        maybeEmitVideoUrl(view, url, headers != null ? headers.get("Accept") : null);
++        return super.shouldInterceptRequest(view, request);
++    }
++
++    private static boolean shouldLogUrl(String url) {
++        String u = url.toLowerCase(java.util.Locale.ROOT);
++        if (u.length() < 12 || u.startsWith("blob:") || u.startsWith("data:") || u.startsWith("file:")) return false;
++        return !u.matches(".*\\.(png|jpe?g|gif|svg|ico|webp|avif|woff2?|ttf|eot|otf|css|js|mjs|map)(\\?.*)?$");
++    }
++
++    private static boolean looksLikeVideo(String url, String accept) {
++        String u = url.toLowerCase(java.util.Locale.ROOT);
++        // URL-extension heuristics
++        if (u.contains(".m3u8") || u.contains(".mpd")) return true;
++        if (u.matches(".*\\.ts(\\?.*)?$") || u.contains(".m4s") || u.contains(".mp4")) return true;
++        // MIME / Accept-header heuristics
++        if (accept != null) {
++            String a = accept.toLowerCase(java.util.Locale.ROOT);
++            if (a.contains("mpegurl") || a.contains("dash") || a.contains("video/") ||
++                a.contains("audio/") || a.contains("m3u8")) return true;
++        }
++        // Common manifest path patterns (no extension)
++        if (u.matches(".*/?(master|playlist|manifest|index|stream)(\\.|\\?|/|$).*") &&
++            !u.matches(".*\\.(html?|js|css|json|woff2?|png|jpe?g|gif|svg)(\\?.*)?$")) return true;
++        return false;
++    }
++
++    private void maybeEmitCapturedUrl(final WebView view, final String url) {
++        if (!shouldLogUrl(url)) return;
++        sMainHandler.post(new Runnable() {
++            @Override
++            public void run() {
++                String quotedUrl = JSONObject.quote(url);
++                String js =
++                    "(function(){" +
++                    "try{" +
++                    "if(!window.ReactNativeWebView)return;" +
++                    "if(window.__rn_fcd_native_log_seen===undefined)window.__rn_fcd_native_log_seen=new Set();" +
++                    "var u=" + quotedUrl + ";" +
++                    "if(window.__rn_fcd_native_log_seen.has(u))return;" +
++                    "window.__rn_fcd_native_log_seen.add(u);" +
++                    "window.ReactNativeWebView.postMessage(JSON.stringify({" +
++                    "event:'URL_CAPTURED'," +
++                    "url:u," +
++                    "timestamp:Date.now()," +
++                    "source:'native'" +
++                    "}));" +
++                    "}catch(e){}" +
++                    "})();";
++                view.evaluateJavascript(js, null);
++            }
++        });
++    }
++
++    private void maybeEmitVideoUrl(final WebView view, final String url, final String accept) {
++        if (!looksLikeVideo(url, accept)) return;
++        // evaluateJavascript must run on the main thread
++        sMainHandler.post(new Runnable() {
++            @Override
++            public void run() {
++                String quotedUrl = JSONObject.quote(url);
++                String js =
++                    "(function(){" +
++                    "try{" +
++                    "if(!window.ReactNativeWebView)return;" +
++                    "if(window.__rn_fcd_native_seen===undefined)window.__rn_fcd_native_seen=new Set();" +
++                    "var u=" + quotedUrl + ";" +
++                    "if(window.__rn_fcd_native_seen.has(u))return;" +
++                    "window.__rn_fcd_native_seen.add(u);" +
++                    "var t=u.toLowerCase().indexOf('.mpd')!==-1?'dash':'hls';" +
++                    "window.ReactNativeWebView.postMessage(JSON.stringify({" +
++                    "event:'MEDIA_DETECTED'," +
++                    "url:u," +
++                    "pageUrl:location.href," +
++                    "userAgent:navigator.userAgent," +
++                    "mimeType:null," +
++                    "mediaType:t," +
++                    "timestamp:Date.now()," +
++                    "source:'native'" +
++                    "}));" +
++                    "}catch(e){}" +
++                    "})();";
++                view.evaluateJavascript(js, null);
++            }
++        });
++    }
++    // ── End native request interception ──────────────────────────────────────
++
+     @Override
+     public void onReceivedHttpAuthRequest(WebView view, HttpAuthHandler handler, String host, String realm) {
+         if (basicAuthCredential != null) {
