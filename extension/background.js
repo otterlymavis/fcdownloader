@@ -117,13 +117,32 @@ async function callExtract(pageUrl, referer, cookies) {
   const body = { pageUrl };
   if (referer) body.referer = referer;
   if (cookies) body.cookies = cookies;
-  const r = await fetch(`${backend}/extract`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error(`${r.status} ${await r.text().catch(() => "")}`);
-  return r.json();
+
+  // Hard-cap the request. yt-dlp retries + generic-extractor fallback take
+  // up to ~20s on hard sites; anything longer is almost certainly a hang.
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 25_000);
+
+  try {
+    const r = await fetch(`${backend}/extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ac.signal,
+    });
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      throw new Error(`HTTP ${r.status} — ${text.slice(0, 240)}`);
+    }
+    return await r.json();
+  } catch (e) {
+    if (e.name === "AbortError") {
+      throw new Error("Backend timed out after 25s. The site probably blocked the server, or yt-dlp can't extract it. Check fly logs for the real reason.");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function backendDownloadUrl(backend, pageUrl, referer, cookies) {
@@ -212,11 +231,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     if (msg.type === "fcdl:extract") {
       // Popup-initiated: hit backend /extract with pageUrl + cookies
+      const t0 = Date.now();
       try {
         const cookies = await cookieHeaderFor(msg.pageUrl);
+        console.log("[fcdl] extract →", msg.pageUrl, "cookies:", cookies.length, "chars");
         const info = await callExtract(msg.pageUrl, msg.referer || null, cookies || null);
+        console.log("[fcdl] extract ←", Date.now() - t0, "ms, kind=", info?.kind);
         sendResponse({ ok: true, info });
       } catch (e) {
+        const elapsed = Date.now() - t0;
+        console.warn("[fcdl] extract failed in", elapsed, "ms:", e);
         sendResponse({ ok: false, error: String(e.message || e) });
       }
       return;

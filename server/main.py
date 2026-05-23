@@ -113,11 +113,17 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS — set ALLOWED_ORIGINS to a comma-separated list of your web frontend
 # origins to lock this down. Leave unset / "*" for a fully-public API.
+# Browser-extension origins (chrome-extension://, moz-extension://) are ALWAYS
+# allowed — extensions go through the OS install chain so the trust boundary
+# is already at the user; restricting them by per-install random ID is
+# impractical and breaks the legit use case.
 _allowed = os.environ.get("ALLOWED_ORIGINS", "*").strip()
 _origins = ["*"] if _allowed == "*" else [o.strip() for o in _allowed.split(",") if o.strip()]
+_extension_origin_regex = r"^(chrome|moz|safari-web|edge)-extension://[a-zA-Z0-9_-]+$"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
+    allow_origin_regex=_extension_origin_regex,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
