@@ -542,6 +542,9 @@ export default function App() {
                   or browse for a video →
                 </Text>
               </Pressable>
+              <Text style={[s.browseHint, { color: t.ink3, fontSize: fs(11) }]}>
+                Tip: signing in via Browse unlocks HD on more YouTube videos
+              </Text>
             </View>
 
             {/* Active downloads (compact) */}
@@ -1197,6 +1200,7 @@ const s = StyleSheet.create({
   primaryBtnLabel: { fontWeight: '600' },
   browseLink:      { alignItems: 'center', paddingVertical: S.xs },
   browseLinkLabel: { fontWeight: '400' },
+  browseHint:      { alignSelf: 'center', textAlign: 'center', marginTop: 2, fontWeight: '400', opacity: 0.85 },
 
   section:      { gap: S.sm },
   sectionLabel: { fontWeight: '600', letterSpacing: 0.6, textTransform: 'uppercase' },

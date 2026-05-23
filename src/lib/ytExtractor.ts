@@ -16,6 +16,7 @@
  */
 
 import { DetectedMedia } from '../types';
+import { extractSessionCookies } from './cookieManager';
 
 const INNERTUBE_URL =
   'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
@@ -93,6 +94,14 @@ export async function extractYouTubeStreams(
   const videoId = extractYouTubeVideoId(pageUrl);
   if (!videoId) return [];
 
+  // Forward youtube.com cookies if the user has signed in via the in-app
+  // browser. With a logged-in session, InnerTube returns hlsManifestUrl for
+  // more videos (incl. some age-/region-gated content) and triggers the
+  // bot-check less often. No cookies = anonymous request (works for most
+  // public videos but unlocks fewer).
+  let ytCookies = '';
+  try { ytCookies = await extractSessionCookies('https://www.youtube.com/'); } catch {}
+
   // Collect results across both clients so HLS (IOS, up to 4K) and the muxed
   // 360p mp4 (ANDROID) are both available even if one client is rate-limited.
   // Returned items are ordered HLS → muxed → DASH; the caller picks the first
@@ -109,6 +118,7 @@ export async function extractYouTubeStreams(
         'Origin': 'https://www.youtube.com',
         'Referer': `https://www.youtube.com/watch?v=${videoId}`,
       };
+      if (ytCookies) headers['Cookie'] = ytCookies;
 
       const body = {
         videoId,
