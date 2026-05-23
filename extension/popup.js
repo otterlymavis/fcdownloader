@@ -63,7 +63,23 @@ function escapeHtml(s) {
   }[c]));
 }
 
-// ── Initial load ────────────────────────────────────────────────────────
+// ── Initial load + auto-refresh ─────────────────────────────────────────
+
+let lastItemsKey = "";
+
+function refresh() {
+  if (currentTabId == null) return;
+  chrome.runtime.sendMessage({ type: "fcdl:list", tabId: currentTabId }, (resp) => {
+    if (!resp) return;
+    const items = resp.items || [];
+    // Only re-render when something changed — avoids flashing the list on every poll.
+    const key = items.map((i) => i.url).join("|");
+    if (key !== lastItemsKey) {
+      lastItemsKey = key;
+      render(items);
+    }
+  });
+}
 
 (async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -74,22 +90,37 @@ function escapeHtml(s) {
   currentTabId = tab.id;
   currentPageUrl = tab.url || "";
   pageInfo.textContent = hostname(currentPageUrl) || currentPageUrl;
-
-  // Ask the service worker for the items the content script has already detected.
-  chrome.runtime.sendMessage({ type: "fcdl:list", tabId: tab.id }, (resp) => {
-    if (!resp) return;
-    render(resp.items || []);
-  });
+  refresh();
+  // Content script scans at 0s / 2s / 5s + reactively. Poll while the popup
+  // is open so new detections appear without manual reload.
+  setInterval(refresh, 1500);
 })();
 
 // ── "Find videos on this page" — sends pageUrl + cookies to /extract ────
 
 extractBtn.addEventListener("click", async () => {
   extractBtn.disabled = true;
-  setStatus("Resolving stream URLs via backend…");
+
+  // Prefer an already-detected embed iframe URL over the parent page URL.
+  // yt-dlp can extract https://player.vimeo.com/... directly with the parent
+  // as Referer, but it can't handle https://amuseplus.jp/... (no extractor).
+  // This is the AmusePlus / Patreon / paywalled-fanclub flow.
+  const currentItems = await new Promise((res) =>
+    chrome.runtime.sendMessage({ type: "fcdl:list", tabId: currentTabId }, (r) => res(r?.items || []))
+  );
+  const knownEmbed = currentItems.find((it) =>
+    /(?:player\.vimeo\.com\/video\/|youtube\.com\/embed\/|player\.twitch\.tv|dailymotion\.com\/embed)/.test(it.url)
+  );
+  const targetUrl = knownEmbed ? knownEmbed.url : currentPageUrl;
+  const referer   = knownEmbed ? currentPageUrl : null;
+
+  setStatus(knownEmbed
+    ? `Resolving ${hostname(knownEmbed.url)} (referer: ${hostname(currentPageUrl)})…`
+    : "Resolving stream URLs via backend…"
+  );
   try {
     const resp = await new Promise((resolve) =>
-      chrome.runtime.sendMessage({ type: "fcdl:extract", pageUrl: currentPageUrl }, resolve)
+      chrome.runtime.sendMessage({ type: "fcdl:extract", pageUrl: targetUrl, referer }, resolve)
     );
     if (!resp?.ok) {
       setStatus(resp?.error || "Backend returned an error.", true);
@@ -97,16 +128,19 @@ extractBtn.addEventListener("click", async () => {
     }
     setStatus("");
     const info = resp.info;
-    // Surface the extracted media as a clickable item alongside content-script items.
+    // Surface the extracted media as a clickable item. The Download button
+    // routes back through /download with the same (targetUrl + referer) pair,
+    // so the backend doesn't have to re-figure-out which URL is the actual
+    // video and which is the embedding page.
     const item = {
       url: info.kind === "paired" ? info.videoUrl : info.url,
       title: info.title,
       label: info.label,
       kind: info.kind,
       source: "backend",
-      // Backend result implies we should re-route through /download so muxing happens server-side.
       backendRouted: true,
-      pageUrl: currentPageUrl,
+      pageUrl: targetUrl,      // ← the URL we sent (could be a player.vimeo URL)
+      referer:  referer,       // ← the page that embeds it (Vimeo's domain check)
     };
     chrome.runtime.sendMessage(
       { type: "fcdl:detected", items: [item] },

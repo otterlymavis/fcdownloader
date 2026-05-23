@@ -156,31 +156,36 @@ function backendDownloadUrl(backend, pageUrl, referer, cookies) {
 
 async function downloadItem(tabId, item) {
   const tab = await chrome.tabs.get(tabId);
-  const pageUrl = tab?.url || item.pageUrl;
-  const cookies = await cookieHeaderFor(pageUrl);
+  // Prefer the item's own page+referer (from popup-resolved Vimeo embeds);
+  // fall back to the tab's URL for content-script-detected items.
+  const downloadPageUrl = item.pageUrl || tab?.url || "";
+  const referer = item.referer || tab?.url || null;
+  // Read cookies for whichever site we're downloading from — usually the
+  // embedding site, since that's where the user signed in.
+  const cookieSourceUrl = referer || downloadPageUrl;
+  const cookies = await cookieHeaderFor(cookieSourceUrl);
 
   // For HLS / DASH / known-server-only sites, always route through the
   // backend so ffmpeg can mux / convert to a single mp4.
   const needsMux = item.kind === "hls" || item.kind === "dash" ||
-                   /youtube\.com|youtu\.be|googlevideo\.com|vimeo\.com|player\.vimeo\.com/.test(item.url || pageUrl);
+                   /youtube\.com|youtu\.be|googlevideo\.com|vimeo\.com|player\.vimeo\.com/.test(item.url || downloadPageUrl);
 
   if (needsMux) {
     const { backend } = await getSettings();
-    const dlUrl = backendDownloadUrl(backend, item.pageUrl || pageUrl, pageUrl, cookies);
+    const dlUrl = backendDownloadUrl(backend, downloadPageUrl, referer, cookies);
     return chromeDownload(dlUrl, suggestedFilename(item, pageUrl));
   }
 
-  // Direct browser download for plain mp4/webm URLs that allow cross-origin
-  // fetch with their CDN's CORS. chrome.downloads.download() doesn't need
-  // CORS but does need the URL to be reachable; we let the CDN reject if it
-  // can't serve to the browser. Falls back to backend on failure.
+  // Direct browser download for plain mp4/webm URLs. chrome.downloads.download
+  // doesn't need CORS but does need the URL reachable; we let the CDN reject
+  // if it can't serve to the browser. Falls back to backend on failure.
   try {
-    return await chromeDownload(item.url, suggestedFilename(item, pageUrl));
+    return await chromeDownload(item.url, suggestedFilename(item, downloadPageUrl));
   } catch (e) {
     console.warn("[fcdl] direct download failed, falling back to backend:", e);
     const { backend } = await getSettings();
-    const dlUrl = backendDownloadUrl(backend, item.url, pageUrl, cookies);
-    return chromeDownload(dlUrl, suggestedFilename(item, pageUrl));
+    const dlUrl = backendDownloadUrl(backend, item.url, referer, cookies);
+    return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl));
   }
 }
 
