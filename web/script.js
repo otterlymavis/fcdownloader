@@ -62,16 +62,35 @@ const bookmarklet  = $("bookmarklet");
 // forwards readable cookies for paywalled / login-gated pages. HttpOnly
 // cookies aren't readable by bookmarklets, but most session cookies are.
 
+// The bookmarklet runs in the user's authenticated browser tab where the
+// JS-rendered DOM has any embed iframes the static page HTML doesn't expose
+// (AmusePlus → Vimeo is the canonical case). Strategy:
+//   1. Scan the rendered DOM for known embed iframes (Vimeo, YouTube, Twitch,
+//      Dailymotion). If found, that's the *real* video URL — send it as
+//      ?url=. The original page URL goes as ?ref= so Vimeo's domain check
+//      passes.
+//   2. If no embed iframe is found, send the page URL itself and hope
+//      yt-dlp's matchers handle it.
+//   3. Always include readable cookies. HttpOnly cookies aren't accessible
+//      from a bookmarklet — for those sites, the mobile app is still needed.
 const FRONTEND = location.origin + location.pathname;
 function buildBookmarklet() {
   const src =
     `(function(){` +
     `var u=location.href;` +
-    `var c=document.cookie||'';` +
-    `var t='${FRONTEND}#url='+encodeURIComponent(u)` +
-      `+'&ref='+encodeURIComponent(u)` +
-      `+(c?'&cookies='+encodeURIComponent(c):'');` +
-    `window.open(t,'_blank');` +
+    `var v=null;` +
+    `var hosts=["player.vimeo.com","www.youtube.com/embed","youtube.com/embed",` +
+              `"player.twitch.tv","www.dailymotion.com/embed","fast.wistia.net/embed"];` +
+    `var ifs=document.querySelectorAll("iframe[src]");` +
+    `for(var i=0;i<ifs.length&&!v;i++){` +
+      `var s=ifs[i].src||"";` +
+      `for(var j=0;j<hosts.length;j++)if(s.indexOf(hosts[j])>-1){v=s;break;}` +
+    `}` +
+    `var c=document.cookie||"";` +
+    `var t="${FRONTEND}#url="+encodeURIComponent(v||u)` +
+      `+"&ref="+encodeURIComponent(u)` +
+      `+(c?"&cookies="+encodeURIComponent(c):"");` +
+    `window.open(t,"_blank");` +
     `})();`;
   return "javascript:" + encodeURIComponent(src);
 }
