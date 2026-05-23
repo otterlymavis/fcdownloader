@@ -1,0 +1,85 @@
+# fcdownloader web
+
+Static frontend for the fcdownloader extractor backend. Three files —
+`index.html`, `style.css`, `script.js`. No build step, no framework. Deploy
+to any static host (Vercel, Cloudflare Pages, GitHub Pages, your own
+nginx, …).
+
+## Configure the backend URL
+
+The frontend needs to know where your Fly extractor lives. Order of
+precedence (highest first):
+
+1. `?api=https://your-backend` query string  — handy for testing
+2. `window.EXTRACTOR_URL = "..."` inline `<script>` before `script.js`
+3. `<meta name="extractor-url" content="...">` in `index.html`
+4. Hard-coded `DEFAULT_BACKEND` in `script.js` (`fcdownloader-extractor.fly.dev`)
+
+For your own deploy, the cleanest path is option 3 — edit `index.html`:
+
+```html
+<meta name="extractor-url" content="https://your-app.fly.dev">
+```
+
+Or option 4 — edit `DEFAULT_BACKEND` at the top of `script.js`.
+
+## Deploy to Vercel (1 minute)
+
+```bash
+npm i -g vercel
+cd web
+vercel               # accept defaults; pick "static" as the framework
+vercel --prod        # promote the preview to prod
+```
+
+You get a URL like `fcdownloader.vercel.app`. Subsequent pushes to the repo
+auto-deploy if you link the project to GitHub.
+
+## Deploy to Cloudflare Pages
+
+1. Sign in at https://pages.cloudflare.com
+2. **Create a project → Connect to Git** → pick your fcdownloader repo
+3. Build settings:
+   - **Build command**: (leave empty)
+   - **Build output directory**: `web`
+4. Save and deploy. URL is `<project>.pages.dev`.
+
+## Deploy to GitHub Pages
+
+```bash
+# From the repo root, push the web/ directory to a gh-pages branch:
+git subtree push --prefix web origin gh-pages
+```
+
+Then in repo settings → Pages → Branch: `gh-pages`, folder: `/ (root)`.
+
+## CORS
+
+The frontend will make a `POST /extract` request to your Fly backend from a
+different origin (e.g. `vercel.app` → `fly.dev`). The backend's CORS is
+permissive (`*`) by default. To lock it down once you have a public domain:
+
+```powershell
+fly secrets set ALLOWED_ORIGINS="https://your-frontend.vercel.app"
+fly deploy
+```
+
+Comma-separate multiple origins:
+`ALLOWED_ORIGINS="https://fcdl.vercel.app,https://fcdl.pages.dev"`
+
+## What the page does
+
+1. User pastes a YouTube URL → clicks **Fetch**
+2. Frontend `POST /extract` → gets `{title, thumbnail, duration, kind, label, …}`
+3. Preview card shows thumbnail + title + quality
+4. **Download** button navigates the browser to
+   `GET /download?url=...`
+5. Backend runs yt-dlp + ffmpeg, streams the muxed mp4 back, browser saves it.
+
+## Cost notes
+
+Unlike the mobile app where the phone fetches CDN bytes directly, the web
+flow has the server proxying every byte (ffmpeg downloads from googlevideo,
+mux's, streams to the browser). At Fly's $0.02/GB egress this works out to
+~$0.002 per 100 MB video. A spend cap on the Fly dashboard is recommended
+before you publish the URL widely.

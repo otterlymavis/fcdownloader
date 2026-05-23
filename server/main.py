@@ -19,12 +19,15 @@ from __future__ import annotations
 import base64
 import os
 import re
+import shlex
+import subprocess
 import tempfile
 import time
-from typing import Any
+from typing import Any, Iterator
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -105,6 +108,17 @@ app = FastAPI(title="fcdownloader-extractor", version="2.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# CORS — set ALLOWED_ORIGINS to a comma-separated list of your web frontend
+# origins to lock this down. Leave unset / "*" for a fully-public API.
+_allowed = os.environ.get("ALLOWED_ORIGINS", "*").strip()
+_origins = ["*"] if _allowed == "*" else [o.strip() for o in _allowed.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+)
+
 # ── Cache ────────────────────────────────────────────────────────────────────
 
 # Simple in-memory dict cache. For one Fly machine this is fine; if you scale
@@ -158,45 +172,14 @@ def health() -> dict[str, Any]:
     }
 
 
-@app.post("/extract")
-@limiter.limit(RATE_LIMIT, exempt_when=lambda: False)  # placeholder; real exemption below
-def extract(
-    request: Request,
-    req: ExtractRequest,
-    authorization: str | None = Header(default=None),
-    token: str | None = Query(default=None),
-) -> dict[str, Any]:
-    # Trusted callers bypass the rate limit. SlowAPI doesn't natively support
-    # per-call exemptions cleanly, so we re-check the limit ourselves and
-    # short-circuit when trusted. (The decorator above still applies, but
-    # SlowAPI evaluates exempt_when on every call; we use a separate trusted
-    # check after the fact for simplicity.)
-    is_trusted = bool(
-        TRUSTED_TOKEN and (
-            (authorization or "").strip() == f"Bearer {TRUSTED_TOKEN}"
-            or token == TRUSTED_TOKEN
-        )
-    )
-    # NB: when is_trusted, the @limiter.limit decorator has already counted
-    # this request. That's fine — trusted callers aren't typically the ones
-    # straining the limit.
-
-    cache_key = _cache_key(req.pageUrl)
-    cached = _cache_get(cache_key)
-    if cached:
-        return cached
-
+# Shared yt-dlp invocation — used by both /extract and /download
+def _run_ydl(page_url: str) -> dict[str, Any]:
     ydl_opts: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "format": FORMAT_SPEC,
         "skip_download": True,
         "outtmpl": "/tmp/%(id)s.%(ext)s",
-        # Force android_vr / tv_simply first — they're the only clients that
-        # reliably return non-SABR URLs on datacenter IPs. The default `web`
-        # client returns SABR-only streams (no extractable URLs) when called
-        # from Fly even with valid cookies, which is what caused our
-        # "Requested format is not available" failures.
         "extractor_args": {
             "youtube": {
                 "player_client": ["android_vr", "tv_simply", "mweb"],
@@ -205,32 +188,143 @@ def extract(
     }
     if COOKIES_FILE and os.path.exists(COOKIES_FILE):
         ydl_opts["cookiefile"] = COOKIES_FILE
-
     try:
         with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(req.pageUrl, download=False)
+            info = ydl.extract_info(page_url, download=False)
     except Exception as e:  # noqa: BLE001
-        # Log a one-line summary so `fly logs` shows what failed without
-        # repeating the multi-line yt-dlp warning blob.
-        print(f"[extract] yt-dlp failed for {req.pageUrl}: {str(e)[:200]}")
+        print(f"[ydl] failed for {page_url}: {str(e)[:200]}")
         raise HTTPException(502, f"yt-dlp: {e}")
-
     if not info:
         raise HTTPException(502, "yt-dlp returned no info")
+    return info
 
+
+@app.post("/extract")
+@limiter.limit(RATE_LIMIT)
+def extract(
+    request: Request,
+    req: ExtractRequest,
+) -> dict[str, Any]:
+    cache_key = _cache_key(req.pageUrl)
+    if (cached := _cache_get(cache_key)) is not None:
+        return cached
+
+    info = _run_ydl(req.pageUrl)
     response = _to_response(info)
+    # Title / thumbnail / duration are useful for web UIs that preview before
+    # download. Extract once; cheap to include.
+    response["title"]     = info.get("title")
+    response["thumbnail"] = info.get("thumbnail")
+    response["duration"]  = info.get("duration")
 
-    # One-line picked-format log — invaluable for diagnosing "still 360p"
-    # complaints and SABR-related fallthroughs.
     if response.get("kind") == "paired":
-        print(f"[extract] paired: video={info.get('requested_formats', [{}])[0].get('format_id')} "
-              f"audio={info.get('requested_formats', [{}, {}])[1].get('format_id')} "
-              f"{response.get('label')}")
+        rf = info.get("requested_formats", [{}, {}])
+        print(f"[extract] paired: video={rf[0].get('format_id')} audio={rf[1].get('format_id')} {response.get('label')}")
     else:
         print(f"[extract] {response.get('kind')}: itag={info.get('format_id')} {response.get('label')}")
 
     _cache_put(cache_key, response)
     return response
+
+
+# ── /download — server-muxed mp4 streamed to the client ─────────────────────
+
+
+def _safe_filename(title: str | None, video_id: str) -> str:
+    base = title if title else video_id
+    # Strip path-unsafe chars; collapse whitespace; cap length.
+    s = re.sub(r"[^\w\-一-鿿぀-ヿ ]", "", base, flags=re.UNICODE).strip()
+    s = re.sub(r"\s+", " ", s) or video_id
+    return s[:80] + ".mp4"
+
+
+def _ffmpeg_stream(video_url: str, audio_url: str | None, hls_master: str | None) -> Iterator[bytes]:
+    """
+    Run ffmpeg as a subprocess, pipe its stdout to the HTTP response.
+
+    Two muxing scenarios:
+     - Paired (audio_url given): `-i video -i audio -c copy` → mp4 (fast, no re-encode)
+     - HLS (hls_master given):  `-i master.m3u8 -c copy`     → mp4
+     - Direct single mp4:        not handled here — caller redirects to the URL instead
+    """
+    if audio_url:
+        args = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", video_url,
+            "-i", audio_url,
+            "-c", "copy",
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+            "-f", "mp4", "pipe:1",
+        ]
+    elif hls_master:
+        args = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", hls_master,
+            "-c", "copy",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+            "-f", "mp4", "pipe:1",
+        ]
+    else:
+        raise HTTPException(500, "internal: no mux source")
+
+    print("[download] ffmpeg", shlex.join(args[:12]) + " ...")
+    proc = subprocess.Popen(
+        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
+    )
+    try:
+        while True:
+            chunk = proc.stdout.read(64 * 1024) if proc.stdout else b""
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try: proc.wait(timeout=5)
+            except subprocess.TimeoutExpired: proc.kill()
+
+
+@app.get("/download")
+@limiter.limit(RATE_LIMIT)
+def download(
+    request: Request,
+    url: str = Query(..., description="YouTube page URL"),
+) -> StreamingResponse:
+    info = _run_ydl(url)
+    response = _to_response(info)
+    video_id = info.get("id") or _cache_key(url)
+    filename = _safe_filename(info.get("title"), video_id)
+
+    headers = {
+        # Content-Disposition with both forms — RFC 5987 filename* for unicode,
+        # plain filename= as ASCII fallback for older browsers.
+        "Content-Disposition": (
+            f'attachment; filename="{video_id}.mp4"; '
+            f"filename*=UTF-8''{_url_quote(filename)}"
+        ),
+        "Cache-Control": "no-store",
+    }
+
+    kind = response["kind"]
+    if kind == "paired":
+        return StreamingResponse(
+            _ffmpeg_stream(response["videoUrl"], response["audioUrl"], None),
+            media_type="video/mp4", headers=headers,
+        )
+    if kind == "hls":
+        return StreamingResponse(
+            _ffmpeg_stream("", None, response["url"]),
+            media_type="video/mp4", headers=headers,
+        )
+    # kind == "direct" → already a single mp4, redirect the browser straight to
+    # googlevideo (saves server bandwidth — 100% of the bytes go phone↔CDN).
+    return RedirectResponse(response["url"], status_code=307, headers=headers)
+
+
+def _url_quote(s: str) -> str:
+    from urllib.parse import quote
+    return quote(s, safe="")
 
 
 # ── Response shaping ─────────────────────────────────────────────────────────

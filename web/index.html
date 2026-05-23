@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="description" content="Paste a YouTube link, get an MP4. HD when available." />
+  <title>FCDownloader</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <h1>FCDownloader</h1>
+      <p class="tagline">Paste a YouTube link, get an MP4.</p>
+    </header>
+
+    <form id="form" autocomplete="off">
+      <input
+        id="url"
+        type="url"
+        name="url"
+        inputmode="url"
+        autocapitalize="none"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="https://www.youtube.com/watch?v=..."
+        required
+      />
+      <button type="submit" id="submit">Fetch</button>
+    </form>
+
+    <section id="status" hidden></section>
+
+    <section id="preview" hidden>
+      <img id="thumb" alt="" />
+      <div class="preview-body">
+        <h2 id="title"></h2>
+        <p id="meta"></p>
+        <button id="download">Download <span id="quality"></span></button>
+      </div>
+    </section>
+
+    <footer>
+      <p>
+        HD via a self-hosted <a href="https://github.com/yt-dlp/yt-dlp" target="_blank" rel="noopener">yt-dlp</a> backend.
+        Source on <a id="repo-link" href="https://github.com/otterlymavis/fcdownloader" target="_blank" rel="noopener">GitHub</a>.
+      </p>
+    </footer>
+  </main>
+
+  <script src="./script.js"></script>
+</body>
+</html>
