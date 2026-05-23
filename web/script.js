@@ -51,7 +51,6 @@ const metaEl   = $("meta");
 const downloadLink = $("download");
 const settingsBtn  = $("settings-btn");
 const settingsDlg  = $("settings");
-const backendInput = $("backend-input");
 const themeSelect  = $("theme-select");
 const bookmarklet  = $("bookmarklet");
 
@@ -166,16 +165,13 @@ form.addEventListener("submit", async (e) => {
 // ── Settings dialog ─────────────────────────────────────────────────────────
 
 settingsBtn.addEventListener("click", () => {
-  backendInput.value = settings.backend || "";
-  backendInput.placeholder = DEFAULT_BACKEND;
   themeSelect.value = settings.theme || "system";
   settingsDlg.showModal();
 });
 
 settingsDlg.addEventListener("close", () => {
   if (settingsDlg.returnValue !== "save") return;
-  settings.backend = backendInput.value.trim();
-  settings.theme   = themeSelect.value;
+  settings.theme = themeSelect.value;
   saveSettings();
   applyTheme(settings.theme);
 });
