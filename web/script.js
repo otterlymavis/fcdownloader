@@ -75,19 +75,41 @@ const bookmarklet  = $("bookmarklet");
 //      from a bookmarklet — for those sites, the mobile app is still needed.
 const FRONTEND = location.origin + location.pathname;
 function buildBookmarklet() {
+  // Scans the rendered DOM in priority order:
+  //   1. iframes with src matching a known embed host
+  //   2. iframes with data-src / data-lazy-src attributes (some sites
+  //      lazy-load the player)
+  //   3. <video src> / <source src> direct media tags
+  //   4. Vimeo / YouTube URLs anywhere in the page HTML (matches inline
+  //      <script> blocks, JSON-LD, JS strings, etc.)
+  // Shows an alert listing every iframe seen so you can debug why a site
+  // isn't being detected. If nothing is found, falls back to the page URL.
   const src =
     `(function(){` +
     `var u=location.href;` +
     `var v=null;` +
-    `var hosts=["player.vimeo.com","www.youtube.com/embed","youtube.com/embed",` +
-              `"player.twitch.tv","www.dailymotion.com/embed","fast.wistia.net/embed"];` +
-    `var ifs=document.querySelectorAll("iframe[src]");` +
-    `for(var i=0;i<ifs.length&&!v;i++){` +
-      `var s=ifs[i].src||"";` +
-      `for(var j=0;j<hosts.length;j++)if(s.indexOf(hosts[j])>-1){v=s;break;}` +
+    `var re=/https?:\\/\\/(?:player\\.vimeo\\.com\\/video\\/\\d+|www\\.youtube\\.com\\/embed\\/[\\w-]+|youtube\\.com\\/embed\\/[\\w-]+|player\\.twitch\\.tv\\/[^\\s"']+|(?:www\\.)?dailymotion\\.com\\/embed\\/[\\w-]+|fast\\.wistia\\.net\\/embed\\/[^\\s"']+)/;` +
+    // 1. iframes
+    `var ifs=document.querySelectorAll("iframe");` +
+    `var seen=[];` +
+    `for(var i=0;i<ifs.length;i++){` +
+      `var s=ifs[i].src||ifs[i].getAttribute("data-src")||ifs[i].getAttribute("data-lazy-src")||"";` +
+      `if(s)seen.push(s);` +
+      `if(s&&re.test(s)&&!v)v=s.match(re)[0];` +
+    `}` +
+    // 2. direct <video src> / <source src>
+    `if(!v){` +
+      `var vs=document.querySelectorAll("video[src],video source[src]");` +
+      `for(var k=0;k<vs.length&&!v;k++)v=vs[k].currentSrc||vs[k].src;` +
+    `}` +
+    // 3. scan whole-page HTML for embed URLs
+    `if(!v){var m=document.documentElement.outerHTML.match(re);if(m)v=m[0];}` +
+    `if(!v){` +
+      `alert("FCDownload: no recognised embed/video found on this page.\\n\\nIframes seen:\\n"+(seen.length?seen.join("\\n"):"(none)"));` +
+      `return;` +
     `}` +
     `var c=document.cookie||"";` +
-    `var t="${FRONTEND}#url="+encodeURIComponent(v||u)` +
+    `var t="${FRONTEND}#url="+encodeURIComponent(v)` +
       `+"&ref="+encodeURIComponent(u)` +
       `+(c?"&cookies="+encodeURIComponent(c):"");` +
     `window.open(t,"_blank");` +
