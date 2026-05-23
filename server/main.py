@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import re
 import shlex
 import subprocess
 import tempfile
 import time
+import urllib.request
 from typing import Any, Iterator
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
@@ -186,6 +188,104 @@ def health() -> dict[str, Any]:
     }
 
 
+# ── Threads / Meta HTML extractor ────────────────────────────────────────────
+#
+# yt-dlp has no Threads extractor (Meta's threads.net site). The mobile app
+# handles it by treating Threads URLs the same as Instagram and regex-scanning
+# the page HTML for the standard Meta `video_url` JSON field. We mirror that
+# here so the web app and the mobile app behave identically.
+
+_MOBILE_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+)
+
+def _extract_meta_threads(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """Fetch the Threads page HTML and pull out a video_url, an og:video tag,
+    or any direct mp4 / m3u8 URL. Returns the standard response shape or
+    None when nothing usable was found (caller falls through to yt-dlp)."""
+    try:
+        req = urllib.request.Request(page_url, headers={
+            "User-Agent": _MOBILE_UA,
+            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            **({"Cookie": cookies} if cookies else {}),
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+    except Exception as e:  # noqa: BLE001
+        print(f"[threads] fetch failed for {page_url}: {str(e)[:200]}")
+        return None
+
+    # Meta JSON-encodes URLs with escaped slashes + unicode. Decode patterns.
+    def _decode(u: str) -> str:
+        return (u.replace("\\u0026", "&")
+                 .replace("\\/", "/")
+                 .replace("\\\\", "\\"))
+
+    candidates: list[str] = []
+
+    # 1. JSON-embedded "video_url" / "playable_url"
+    for pattern in (r'"video_url":"(https?:[^"]+)"',
+                    r'"playable_url(?:_quality_hd)?":"(https?:[^"]+)"',
+                    r'"browser_native_(?:hd|sd)_url":"(https?:[^"]+)"'):
+        for m in re.finditer(pattern, html):
+            candidates.append(_decode(m.group(1)))
+
+    # 2. og:video meta tag (always-present fallback)
+    for m in re.finditer(
+        r'<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["\'](?:og:video(?::url)?|twitter:player:stream)["\']'
+        r'[^>]+content\s*=\s*["\']([^"\']+)["\']', html, re.IGNORECASE):
+        candidates.append(_decode(m.group(1)))
+
+    # 3. raw fbcdn / threads-cdn URLs in the page
+    for m in re.finditer(
+        r'https?:\\?/\\?/(?:[\w-]+\.)?(?:fbcdn|threadscdn|instagram)\.com/[^\s"\'<>\\]+\.(?:mp4|m3u8)(?:\?[^\s"\'<>\\]*)?',
+        html):
+        candidates.append(_decode(m.group(0)))
+
+    # De-dupe, preserve order, prefer mp4 then m3u8
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for u in candidates:
+        if u.startswith("http") and u not in seen:
+            seen.add(u)
+            uniq.append(u)
+    uniq.sort(key=lambda u: (0 if ".mp4" in u else 1, len(u)))
+
+    if not uniq:
+        return None
+
+    chosen = uniq[0]
+    is_hls = ".m3u8" in chosen
+
+    title = None
+    title_m = re.search(r'<meta\s+property\s*=\s*["\']og:title["\'][^>]+content\s*=\s*["\']([^"\']+)["\']', html, re.IGNORECASE)
+    if title_m:
+        title = title_m.group(1)
+    thumb = None
+    thumb_m = re.search(r'<meta\s+property\s*=\s*["\']og:image["\'][^>]+content\s*=\s*["\']([^"\']+)["\']', html, re.IGNORECASE)
+    if thumb_m:
+        thumb = _decode(thumb_m.group(1))
+
+    print(f"[threads] extracted {len(uniq)} candidate(s); using {chosen[:100]}")
+
+    # Return a *yt-dlp-shaped info dict* so the rest of the pipeline (_to_response,
+    # /download → ffmpeg, /extract caching) treats it identically to a real yt-dlp
+    # extraction. We only fill the fields the downstream code looks at.
+    return {
+        "url": chosen,
+        "http_headers": {"User-Agent": _MOBILE_UA, "Referer": page_url},
+        "title": title,
+        "thumbnail": thumb,
+        "duration": None,
+        "ext": "m3u8" if is_hls else "mp4",
+        "protocol": "m3u8_native" if is_hls else "https",
+        "format_note": "HD" if ("hd_url" in chosen or "_hd_" in chosen) else None,
+        "id": _cache_key(page_url),
+    }
+
+
 # Shared yt-dlp invocation — used by both /extract and /download
 def _run_ydl(
     page_url: str,
@@ -222,6 +322,15 @@ def _run_ydl(
         ydl_opts["referer"] = referer
     if http_headers:
         ydl_opts["http_headers"] = http_headers
+    # Threads (Meta) has no yt-dlp extractor — handle it here by mirroring the
+    # mobile app's Instagram-style HTML regex extraction. Returns a
+    # yt-dlp-shaped info dict so the rest of the pipeline is unchanged.
+    if "threads.net" in page_url or "threads.com" in page_url:
+        threads_info = _extract_meta_threads(page_url, cookies)
+        if threads_info:
+            return threads_info
+        print(f"[threads] HTML scrape found nothing; falling back to yt-dlp for {page_url}")
+
     try:
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(page_url, download=False)
