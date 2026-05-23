@@ -81,11 +81,21 @@ RATE_LIMIT = os.environ.get("RATE_LIMIT", "30/minute;300/hour;1500/day")
 CACHE_TTL = int(os.environ.get("CACHE_TTL", "300"))  # 5 min default
 CACHE_MAX = int(os.environ.get("CACHE_MAX", "2000")) # hard cap on entries
 
-# yt-dlp format spec: prefer best 1080p h264 video + m4a audio as a pair.
+# yt-dlp format spec — tiered from "ideal for Android MediaMuxer" down to
+# "anything yt-dlp can produce". MediaMuxer needs h264+aac in mp4 container;
+# the higher-priority alternatives target that pair. Lower-priority fallbacks
+# accept any codec/container so we don't fail entire videos when YouTube only
+# serves vp9/opus for a particular region+client combination.
 FORMAT_SPEC = (
+    # Ideal — h264/avc1 video + m4a/aac audio (MediaMuxer-compatible)
     "bv*[height<=1080][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/"
     "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/"
-    "b[ext=mp4]/b"
+    # Any 1080p video + best audio (might need re-encode if vp9/opus on Android)
+    "bv*[height<=1080]+ba/"
+    # Any pre-muxed file (single download, no mux step at all)
+    "b[ext=mp4][height<=1080]/"
+    "b[height<=1080]/"
+    "b"
 )
 
 # ── App + middleware ─────────────────────────────────────────────────────────
@@ -182,11 +192,14 @@ def extract(
         "format": FORMAT_SPEC,
         "skip_download": True,
         "outtmpl": "/tmp/%(id)s.%(ext)s",
-        # Try clients in order — mweb/tv_simply trigger bot-check less often on
-        # datacenter IPs. android_vr is the historical workhorse for HD formats.
+        # Force android_vr / tv_simply first — they're the only clients that
+        # reliably return non-SABR URLs on datacenter IPs. The default `web`
+        # client returns SABR-only streams (no extractable URLs) when called
+        # from Fly even with valid cookies, which is what caused our
+        # "Requested format is not available" failures.
         "extractor_args": {
             "youtube": {
-                "player_client": ["default", "mweb", "tv_simply", "android_vr"],
+                "player_client": ["android_vr", "tv_simply", "mweb"],
             },
         },
     }
@@ -197,12 +210,25 @@ def extract(
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(req.pageUrl, download=False)
     except Exception as e:  # noqa: BLE001
+        # Log a one-line summary so `fly logs` shows what failed without
+        # repeating the multi-line yt-dlp warning blob.
+        print(f"[extract] yt-dlp failed for {req.pageUrl}: {str(e)[:200]}")
         raise HTTPException(502, f"yt-dlp: {e}")
 
     if not info:
         raise HTTPException(502, "yt-dlp returned no info")
 
     response = _to_response(info)
+
+    # One-line picked-format log — invaluable for diagnosing "still 360p"
+    # complaints and SABR-related fallthroughs.
+    if response.get("kind") == "paired":
+        print(f"[extract] paired: video={info.get('requested_formats', [{}])[0].get('format_id')} "
+              f"audio={info.get('requested_formats', [{}, {}])[1].get('format_id')} "
+              f"{response.get('label')}")
+    else:
+        print(f"[extract] {response.get('kind')}: itag={info.get('format_id')} {response.get('label')}")
+
     _cache_put(cache_key, response)
     return response
 

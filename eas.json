@@ -31,6 +31,12 @@
         "buildConfiguration": "Release"
       }
     },
+    "production-apk": {
+      "extends": "production",
+      "android": {
+        "buildType": "apk"
+      }
+    },
     "local-only": {
       "extends": "production",
       "channel": "local-only",
