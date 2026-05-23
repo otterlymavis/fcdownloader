@@ -98,6 +98,10 @@ jobs:
             echo "::warning::EXPO_PUBLIC_EXTRACTOR_URL secret missing; HD extractor will be disabled in this build"
           fi
 
+      - name: Ensure gradlew is executable
+        # Windows-tracked gradlew arrives without the +x bit on Linux runners.
+        run: chmod +x android/gradlew
+
       - name: Build release APK
         working-directory: android
         env:
