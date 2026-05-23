@@ -1,78 +1,124 @@
 name: Build Android APK
 
+# Triggers:
+#   - push to either branch → builds whichever branch was pushed
+#   - manual trigger from the Actions tab → builds the branch you select
+#
+# Required GitHub secrets (Settings → Secrets and variables → Actions):
+#   RELEASE_KEYSTORE_BASE64      (required)
+#                                base64-encoded release keystore. Generate with:
+#                                  base64 -w0 android/app/fcdownloader.keystore | clip
+#                                on Windows PowerShell:
+#                                  [Convert]::ToBase64String([IO.File]::ReadAllBytes(
+#                                    "android\app\fcdownloader.keystore")) | Set-Clipboard
+#
+#   EXPO_PUBLIC_EXTRACTOR_URL    (optional)
+#                                Fly.io backend URL for the HD extractor. Only used
+#                                when building the `backend-version` branch. Leave
+#                                unset for master-only builds.
+
 on:
   push:
-    branches: [main, master]
+    branches: [master, backend-version]
+    paths-ignore:
+      - '**.md'
+      - 'server/**'
+      - '.gitignore'
   workflow_dispatch:
 
 jobs:
   build:
+    name: Build APK (${{ github.ref_name }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node 22
+      - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
 
-      - name: Setup Java 21
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Setup Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: ''   # Gradle will pull just what build.gradle requests
 
-      - name: Install NDK
-        run: sdkmanager "ndk;26.1.10909125" "platforms;android-35"
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/**/gradle-wrapper.properties', 'package-lock.json') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
-      - name: Install dependencies
+      - name: Install npm deps
         run: npm ci
 
-      - name: Revert gradle-plugin toolchain requirement to 17 for CI
+      # Older RN gradle-plugin assumes JDK 18 toolchain; CI has JDK 21. Patch
+      # in-place rather than installing a 4th JDK.
+      - name: Patch RN gradle-plugin toolchain to JDK 21
         run: |
           grep -rl "jvmToolchain(18)\|VERSION_18" node_modules/@react-native/gradle-plugin/ | \
             xargs sed -i \
-              -e 's/jvmToolchain(18)/jvmToolchain(17)/g' \
-              -e 's/JavaVersion\.VERSION_18/JavaVersion.VERSION_17/g'
+              -e 's/jvmToolchain(18)/jvmToolchain(21)/g' \
+              -e 's/JavaVersion\.VERSION_18/JavaVersion.VERSION_21/g'
 
-      - name: Prebuild Android
-        run: npx expo prebuild --platform android --clean
+      - name: Restore release keystore
         env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-
-      - name: Generate keystore
+          KS: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
-          keytool -genkey -v \
-            -keystore fcdownloader.keystore \
-            -alias fcdownloader \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=FCDownloader, OU=Dev, O=FCDownloader, L=City, ST=State, C=US" \
-            -storepass android \
-            -keypass android
+          if [ -z "$KS" ]; then
+            echo "::error::RELEASE_KEYSTORE_BASE64 secret is not set. See README/workflow header for setup."
+            exit 1
+          fi
+          echo "$KS" | base64 -d > android/app/fcdownloader.keystore
+          ls -l android/app/fcdownloader.keystore
+
+      - name: Inline server URL into .env.local (backend-version only)
+        if: github.ref_name == 'backend-version'
+        env:
+          EXTRACTOR_URL: ${{ secrets.EXPO_PUBLIC_EXTRACTOR_URL }}
+        run: |
+          if [ -n "$EXTRACTOR_URL" ]; then
+            echo "EXPO_PUBLIC_EXTRACTOR_URL=$EXTRACTOR_URL" > .env.local
+            echo "wrote .env.local (length=$(wc -c < .env.local))"
+          else
+            echo "::warning::EXPO_PUBLIC_EXTRACTOR_URL secret missing; HD extractor will be disabled in this build"
+          fi
 
       - name: Build release APK
-        run: |
-          cd android
-          ./gradlew assembleRelease \
-            -PMYAPP_UPLOAD_STORE_FILE=../fcdownloader.keystore \
-            -PMYAPP_UPLOAD_KEY_ALIAS=fcdownloader \
-            -PMYAPP_UPLOAD_STORE_PASSWORD=android \
-            -PMYAPP_UPLOAD_KEY_PASSWORD=android
+        working-directory: android
         env:
+          # Expo's Metro inlines EXPO_PUBLIC_* env vars at bundle time. Belt-and-
+          # suspenders alongside the .env.local file above.
+          EXPO_PUBLIC_EXTRACTOR_URL: ${{ secrets.EXPO_PUBLIC_EXTRACTOR_URL }}
           GRADLE_OPTS: '-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m'
+        run: |
+          ./gradlew assembleRelease \
+            --no-daemon \
+            -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
 
-      - name: Upload APK
+      - name: Show APK info
+        run: |
+          ls -lh android/app/build/outputs/apk/release/
+          file android/app/build/outputs/apk/release/app-release.apk || true
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FCDownloader-release-${{ github.run_number }}
+          name: fcdownloader-${{ github.ref_name }}-${{ github.run_number }}
           path: android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30
+          if-no-files-found: error
