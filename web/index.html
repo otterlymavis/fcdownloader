@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="description" content="Paste a YouTube link, get an MP4. HD when available." />
+  <meta name="description" content="Paste a video URL, get an MP4. YouTube, Vimeo, TikTok, and 1800+ more." />
   <title>FCDownloader</title>
   <link rel="stylesheet" href="./style.css" />
 </head>
@@ -12,42 +12,87 @@
   <main>
     <header>
       <h1>FCDownloader</h1>
-      <p class="tagline">Paste a YouTube link, get an MP4.</p>
+      <p class="tagline">Paste a video URL, get an MP4. YouTube, Vimeo, TikTok, and 1800+ more.</p>
+      <button id="settings-btn" type="button" aria-label="Settings" title="Settings">⚙</button>
     </header>
 
     <form id="form" autocomplete="off">
       <input
         id="url"
         type="url"
-        name="url"
         inputmode="url"
         autocapitalize="none"
         autocomplete="off"
         spellcheck="false"
-        placeholder="https://www.youtube.com/watch?v=..."
+        placeholder="https://www.youtube.com/watch?v=...  or  https://amuseplus.jp/..."
         required
       />
       <button type="submit" id="submit">Fetch</button>
+
+      <details id="advanced">
+        <summary>Restricted / paywalled site? <span class="muted">(cookies + referer)</span></summary>
+        <input
+          id="referer"
+          type="url"
+          inputmode="url"
+          autocapitalize="none"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Embedding page URL (sent as Referer — usually the same as the main URL)"
+        />
+        <textarea
+          id="cookies"
+          rows="2"
+          spellcheck="false"
+          placeholder="Optional Cookie header: name=value; other=value"
+        ></textarea>
+        <p class="hint">
+          Drag <a id="bookmarklet" href="#" draggable="true">📎 FCDownload</a> to your bookmarks bar.
+          Click it on any video page to auto-fill these fields with your session cookies.
+        </p>
+      </details>
     </form>
 
     <section id="status" hidden></section>
 
     <section id="preview" hidden>
       <img id="thumb" alt="" />
-      <div class="preview-body">
+      <div class="body">
         <h2 id="title"></h2>
         <p id="meta"></p>
-        <button id="download">Download <span id="quality"></span></button>
+        <a id="download" class="primary" download>Download</a>
       </div>
     </section>
 
     <footer>
       <p>
-        HD via a self-hosted <a href="https://github.com/yt-dlp/yt-dlp" target="_blank" rel="noopener">yt-dlp</a> backend.
-        Source on <a id="repo-link" href="https://github.com/otterlymavis/fcdownloader" target="_blank" rel="noopener">GitHub</a>.
+        Self-hosted <a href="https://github.com/yt-dlp/yt-dlp" target="_blank" rel="noopener">yt-dlp</a> backend.
+        <a id="repo-link" href="https://github.com/otterlymavis/fcdownloader" target="_blank" rel="noopener">Source</a>.
       </p>
     </footer>
   </main>
+
+  <dialog id="settings">
+    <form method="dialog">
+      <h2>Settings</h2>
+      <label>
+        Backend URL
+        <input id="backend-input" type="url" inputmode="url" spellcheck="false" placeholder="https://your-app.fly.dev" />
+      </label>
+      <label>
+        Theme
+        <select id="theme-select">
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+      <div class="row">
+        <button value="cancel" type="submit">Cancel</button>
+        <button value="save" type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="./script.js"></script>
 </body>

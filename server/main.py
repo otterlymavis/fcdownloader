@@ -17,6 +17,7 @@ Endpoint:
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import re
 import shlex
@@ -157,6 +158,19 @@ def _cache_key(page_url: str) -> str:
 
 class ExtractRequest(BaseModel):
     pageUrl: str
+    # Optional embedding-page URL. For Vimeo videos restricted to a specific
+    # domain (e.g. AmusePlus pages embedding a Vimeo player), passing the
+    # embedding URL as Referer is what unlocks playback. yt-dlp's Vimeo
+    # extractor reads this and forwards it on the /config request.
+    referer: str | None = None
+    # Optional raw Cookie header for logged-in pages. Do not send this in a URL.
+    cookies: str | None = None
+
+
+class DownloadRequest(BaseModel):
+    pageUrl: str
+    referer: str | None = None
+    cookies: str | None = None
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -173,26 +187,46 @@ def health() -> dict[str, Any]:
 
 
 # Shared yt-dlp invocation — used by both /extract and /download
-def _run_ydl(page_url: str) -> dict[str, Any]:
+def _run_ydl(
+    page_url: str,
+    referer: str | None = None,
+    cookies: str | None = None,
+) -> dict[str, Any]:
+    http_headers: dict[str, str] = {}
+    if referer:
+        http_headers["Referer"] = referer
+    if cookies:
+        http_headers["Cookie"] = cookies
+
+    extractor_args: dict[str, Any] = {
+        "youtube": {"player_client": ["android_vr", "tv_simply", "mweb"]},
+    }
+    # Vimeo's embed-only check reads its `referer` extractor_arg first, then
+    # falls back to `ydl_opts['referer']`. Set BOTH to be robust across
+    # yt-dlp versions; otherwise we get the "Cannot download embed-only
+    # video without embedding URL" error even with the Referer http header set.
+    if referer:
+        extractor_args["vimeo"] = {"referer": [referer]}
+
     ydl_opts: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "format": FORMAT_SPEC,
         "skip_download": True,
         "outtmpl": "/tmp/%(id)s.%(ext)s",
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android_vr", "tv_simply", "mweb"],
-            },
-        },
+        "extractor_args": extractor_args,
     }
     if COOKIES_FILE and os.path.exists(COOKIES_FILE):
         ydl_opts["cookiefile"] = COOKIES_FILE
+    if referer:
+        ydl_opts["referer"] = referer
+    if http_headers:
+        ydl_opts["http_headers"] = http_headers
     try:
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(page_url, download=False)
     except Exception as e:  # noqa: BLE001
-        print(f"[ydl] failed for {page_url}: {str(e)[:200]}")
+        print(f"[ydl] failed for {page_url} (referer={referer}, cookies={bool(cookies)}): {str(e)[:200]}")
         raise HTTPException(502, f"yt-dlp: {e}")
     if not info:
         raise HTTPException(502, "yt-dlp returned no info")
@@ -205,11 +239,13 @@ def extract(
     request: Request,
     req: ExtractRequest,
 ) -> dict[str, Any]:
-    cache_key = _cache_key(req.pageUrl)
+    # Different referers can produce different responses (Vimeo /config domain
+    # check), so include it in the cache key.
+    cache_key = _request_cache_key(req.pageUrl, req.referer, req.cookies)
     if (cached := _cache_get(cache_key)) is not None:
         return cached
 
-    info = _run_ydl(req.pageUrl)
+    info = _run_ydl(req.pageUrl, referer=req.referer, cookies=req.cookies)
     response = _to_response(info)
     # Title / thumbnail / duration are useful for web UIs that preview before
     # download. Extract once; cheap to include.
@@ -238,7 +274,27 @@ def _safe_filename(title: str | None, video_id: str) -> str:
     return s[:80] + ".mp4"
 
 
-def _ffmpeg_stream(video_url: str, audio_url: str | None, hls_master: str | None) -> Iterator[bytes]:
+def _ffmpeg_header_arg(headers: dict[str, str] | None) -> str | None:
+    if not headers:
+        return None
+    return "".join(f"{k}: {v}\r\n" for k, v in headers.items() if v)
+
+
+def _download_headers(referer: str | None, cookies: str | None) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if referer:
+        headers["Referer"] = referer
+    if cookies:
+        headers["Cookie"] = cookies
+    return headers
+
+
+def _ffmpeg_stream(
+    video_url: str,
+    audio_url: str | None,
+    hls_master: str | None,
+    request_headers: dict[str, str] | None = None,
+) -> Iterator[bytes]:
     """
     Run ffmpeg as a subprocess, pipe its stdout to the HTTP response.
 
@@ -247,11 +303,14 @@ def _ffmpeg_stream(video_url: str, audio_url: str | None, hls_master: str | None
      - HLS (hls_master given):  `-i master.m3u8 -c copy`     → mp4
      - Direct single mp4:        not handled here — caller redirects to the URL instead
     """
+    ff_headers = _ffmpeg_header_arg(request_headers)
+    input_header_args = ["-headers", ff_headers] if ff_headers else []
+
     if audio_url:
         args = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-i", video_url,
-            "-i", audio_url,
+            *input_header_args, "-i", video_url,
+            *input_header_args, "-i", audio_url,
             "-c", "copy",
             "-map", "0:v:0", "-map", "1:a:0",
             "-movflags", "frag_keyframe+empty_moov+default_base_moof",
@@ -260,7 +319,7 @@ def _ffmpeg_stream(video_url: str, audio_url: str | None, hls_master: str | None
     elif hls_master:
         args = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-i", hls_master,
+            *input_header_args, "-i", hls_master,
             "-c", "copy",
             "-movflags", "frag_keyframe+empty_moov+default_base_moof",
             "-f", "mp4", "pipe:1",
@@ -289,9 +348,10 @@ def _ffmpeg_stream(video_url: str, audio_url: str | None, hls_master: str | None
 @limiter.limit(RATE_LIMIT)
 def download(
     request: Request,
-    url: str = Query(..., description="YouTube page URL"),
+    url: str = Query(..., description="Video page or player URL"),
+    referer: str | None = Query(None, description="Optional Referer for domain-restricted embeds (e.g. AmusePlus → Vimeo)"),
 ) -> StreamingResponse:
-    info = _run_ydl(url)
+    info = _run_ydl(url, referer=referer)
     response = _to_response(info)
     video_id = info.get("id") or _cache_key(url)
     filename = _safe_filename(info.get("title"), video_id)
@@ -322,9 +382,54 @@ def download(
     return RedirectResponse(response["url"], status_code=307, headers=headers)
 
 
+@app.post("/download")
+@limiter.limit(RATE_LIMIT)
+def download_post(
+    request: Request,
+    req: DownloadRequest,
+) -> StreamingResponse:
+    info = _run_ydl(req.pageUrl, referer=req.referer, cookies=req.cookies)
+    response = _to_response(info)
+    video_id = info.get("id") or _cache_key(req.pageUrl)
+    filename = _safe_filename(info.get("title"), video_id)
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="{video_id}.mp4"; '
+            f"filename*=UTF-8''{_url_quote(filename)}"
+        ),
+        "Cache-Control": "no-store",
+    }
+    request_headers = _download_headers(req.referer, req.cookies)
+
+    kind = response["kind"]
+    if kind == "paired":
+        return StreamingResponse(
+            _ffmpeg_stream(response["videoUrl"], response["audioUrl"], None, request_headers),
+            media_type="video/mp4", headers=headers,
+        )
+    if kind == "hls":
+        return StreamingResponse(
+            _ffmpeg_stream("", None, response["url"], request_headers),
+            media_type="video/mp4", headers=headers,
+        )
+    return StreamingResponse(
+        _ffmpeg_stream("", None, response["url"], request_headers),
+        media_type="video/mp4", headers=headers,
+    )
+
+
 def _url_quote(s: str) -> str:
     from urllib.parse import quote
     return quote(s, safe="")
+
+
+def _request_cache_key(page_url: str, referer: str | None, cookies: str | None) -> str:
+    key = _cache_key(page_url)
+    if referer:
+        key += "|" + referer
+    if cookies:
+        key += "|cookies:" + hashlib.sha256(cookies.encode("utf-8")).hexdigest()[:16]
+    return key
 
 
 # ── Response shaping ─────────────────────────────────────────────────────────
@@ -381,6 +486,8 @@ def _headers_for(f: dict[str, Any]) -> dict[str, str]:
     h = (f.get("http_headers") or {}).copy()
     h.pop("Authorization", None)
     h.pop("authorization", None)
+    h.pop("Cookie", None)
+    h.pop("cookie", None)
     return h
 
 
