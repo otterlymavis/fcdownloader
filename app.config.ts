@@ -46,6 +46,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     entitlements: {
       'com.apple.developer.networking.wifi-info': true,
+      'com.apple.security.application-groups': ['group.com.mabisuuu.fcdownloader'],
     },
   },
   plugins: [
@@ -65,9 +66,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         android: {
           newArchEnabled: false,
           minSdkVersion: 24,
+          // Allow HTTP (not just HTTPS) so a self-hosted HD extractor on the
+          // user's LAN — e.g. http://192.168.1.x:8080 — is reachable. Public
+          // deploys use HTTPS so this only affects local-network setups.
+          usesCleartextTraffic: true,
         },
       },
     ],
+    // iOS native MediaMuxer (AVAssetExportSession) — used for HD YouTube mux on iOS
+    './plugins/withMediaMuxer',
+    // iOS Share Extension — appears in Safari's share sheet
+    './plugins/withShareExtension',
     // Uncomment after running `npx expo prebuild` and adding the Swift module:
     // './plugins/withBackgroundAssetDownload',
   ],
@@ -75,5 +84,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     eas: {
       projectId: '47226a0f-42c7-47ba-8e7e-c52d907118fe',
     },
+    // Built-in HD extractor backend. Set in .env.local:
+    //   EXPO_PUBLIC_EXTRACTOR_URL=https://your-app.fly.dev
+    //   EXPO_PUBLIC_EXTRACTOR_TOKEN=...
+    // These are inlined at build time. Leave unset to fall back to on-device 360p.
+    bundledExtractorUrl:   process.env.EXPO_PUBLIC_EXTRACTOR_URL   ?? '',
+    bundledExtractorToken: process.env.EXPO_PUBLIC_EXTRACTOR_TOKEN ?? '',
   },
 });

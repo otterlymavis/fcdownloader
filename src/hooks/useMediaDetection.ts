@@ -1,17 +1,23 @@
 import { useCallback, useRef, useState } from 'react';
 import { WebViewMessageEvent } from 'react-native-webview';
-import { DetectedMedia, MediaType } from '../types';
+import { DetectedMedia, MediaType, Provenance } from '../types';
 
 let _seq = 0;
 const genId = () => `media_${Date.now()}_${_seq++}`;
 
 function guessType(url: string): MediaType {
-  return url.toLowerCase().includes('.mpd') ? 'dash' : 'hls';
+  const u = url.toLowerCase();
+  if (u.includes('.mpd')) return 'dash';
+  if (u.includes('.m3u8')) return 'hls';
+  return 'hls';
 }
 
 function isSegmentUrl(url: string): boolean {
   const clean = url.split('#')[0].split('?')[0].toLowerCase();
   const lower = url.toLowerCase();
+  // YouTube adaptive segment requests (byte-range AND sequence-number variants)
+  if (/googlevideo\.com\/videoplayback/i.test(url) &&
+      /[?&](?:range=|sq=)\d/i.test(url)) return true;
   return /\.(ts|m4s|aac|m4a|cmfv|cmfa)$/.test(clean) ||
     (lower.includes('vimeocdn.com/') && lower.includes('/v2/range/') && lower.includes('/avf/'));
 }
@@ -41,6 +47,19 @@ export function useMediaDetection() {
         return;
       }
 
+      if (data.event === 'PAGE_NAVIGATE') {
+        // SPA navigation detected — reset detection state for new page
+        const newUrl = String(data.url ?? '').trim();
+        if (newUrl && newUrl !== currentPageUrl.current) {
+          currentPageUrl.current = newUrl;
+          setDetected([]);
+          setNetworkLog([]);
+          setMseActive(false);
+          setScanDone(false);
+        }
+        return;
+      }
+
       if (data.event === 'MEDIA_DETECTED') {
         const url = String(data.url ?? '').trim();
         if (!url || isSegmentUrl(url)) return;
@@ -51,9 +70,41 @@ export function useMediaDetection() {
           userAgent: (data.userAgent as string) ?? '',
           timestamp: (data.timestamp as number) ?? Date.now(),
           mimeType: data.mimeType ?? undefined,
-          mediaType: (data.mediaType as MediaType) ?? 'hls',
+          mediaType: (data.mediaType as MediaType) ?? guessType(url),
+          label: data.label ?? undefined,
+          confidence: typeof data.confidence === 'number' ? data.confidence : 0.5,
+          provenance: (data.provenance as Provenance) ?? 'perf-observer',
+          // Bilibili and other paired-track streams
+          audioTrackUrl: data.audioTrackUrl ?? undefined,
+          audioTrackCodecs: data.audioTrackCodecs ?? undefined,
+          width: typeof data.width === 'number' ? data.width : undefined,
+          height: typeof data.height === 'number' ? data.height : undefined,
+          bitrate: typeof data.bitrate === 'number' ? data.bitrate : undefined,
+          codecs: data.codecs ?? undefined,
+          hasAudio: data.hasAudio ?? undefined,
+          hasVideo: data.hasVideo ?? undefined,
         };
-        setDetected((prev) => prev.some((m) => m.url === url) ? prev : [item, ...prev]);
+        setDetected((prev) => {
+          const idx = prev.findIndex((m) => m.url === url);
+          if (idx === -1) return [item, ...prev];
+          // Upgrade confidence in-place if a higher-confidence event arrives
+          if ((item.confidence ?? 0) > (prev[idx].confidence ?? 0)) {
+            const updated = [...prev];
+            updated[idx] = {
+              ...prev[idx],
+              confidence:    item.confidence,
+              provenance:    item.provenance,
+              // Upgrade type/mime when a higher-confidence source corrects them
+              mediaType:     item.mediaType    ?? prev[idx].mediaType,
+              mimeType:      item.mimeType     ?? prev[idx].mimeType,
+              audioTrackUrl: item.audioTrackUrl ?? prev[idx].audioTrackUrl,
+              width:         item.width         ?? prev[idx].width,
+              height:        item.height        ?? prev[idx].height,
+            };
+            return updated;
+          }
+          return prev;
+        });
         return;
       }
 
@@ -70,7 +121,7 @@ export function useMediaDetection() {
         const isVimeoJson = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i.test(url);
         const isDirectMp4 = /\.(mp4|m4v|webm|mov)(\?|$)/i.test(url) &&
           !/vimeocdn\.com\/.*\/v2\/range\//i.test(url);
-        const isCdnVideo  = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/)/i.test(url);
+        const isCdnVideo  = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/)/i.test(url);
         if (isManifest || isVimeoJson || isDirectMp4 || isCdnVideo) {
           const mediaType: MediaType = u.includes('.mpd') ? 'dash' : 'hls';
           setDetected((prev) => {
@@ -81,13 +132,39 @@ export function useMediaDetection() {
               userAgent: '',
               timestamp: Date.now(),
               mediaType,
+              confidence: 0.4,
+              provenance: 'perf-observer' as const,
             }, ...prev];
           });
         }
         return;
       }
 
-      if (data.event === 'MSE_STREAM' || data.event === 'BLOB_URL_CREATED') {
+      if (data.event === 'YT_DETECTED') {
+        // Telemetry from the injected script's YouTube extractor.
+        // Useful for debugging; no state change needed.
+        if (__DEV__) {
+          console.log('[YT]', {
+            videoId:      data.videoId,
+            formats:      data.formatsCount,
+            adaptive:     data.adaptiveCount,
+            hasDirect:    data.hasDirect,
+            hasDash:      data.hasDash,
+            hasHls:       data.hasHls,
+            isIOS:        data.isIOS,
+            emitted:      data.emitted,
+          });
+        }
+        return;
+      }
+
+      if (data.event === 'MSE_STREAM' || data.event === 'MSE_ACTIVE') {
+        setMseActive(true);
+        return;
+      }
+
+      if (data.event === 'MSE_TRACK') {
+        // MSE codec info — could enhance display later
         setMseActive(true);
         return;
       }
@@ -99,21 +176,21 @@ export function useMediaDetection() {
     } catch {}
   }, []);
 
-  // Add a manually-typed or source-scanned URL as a detected item
   const addDetected = useCallback((url: string, pageUrl?: string) => {
     url = url.trim();
     if (!url) return false;
     if (!url.startsWith('http')) return false;
     if (isSegmentUrl(url)) return false;
     setDetected((prev) => {
-      if (prev.some((m) => m.url === url)) return prev;
+      if (prev.some((m) => m.url === url)) return false as any;
       return [{
-        id: genId(),
-        url,
+        id: genId(), url,
         pageUrl: pageUrl ?? currentPageUrl.current,
         userAgent: '',
         timestamp: Date.now(),
         mediaType: guessType(url),
+        confidence: 0.75,
+        provenance: 'manual' as const,
       }, ...prev];
     });
     return true;

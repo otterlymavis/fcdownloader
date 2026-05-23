@@ -3,16 +3,18 @@
  *
  * Detection layers:
  *  1. BRIDGE_READY ping
- *  2. PerformanceObserver — catches every resource including native <video>
- *  3. fetch hook — intercepts JS fetch + response body
- *  4. XHR hook  — intercepts XHR + response body
- *  5. HTMLMediaElement src / currentSrc setters
- *  6. MediaSource / URL.createObjectURL
- *  7. hls.js / JW Player / Video.js / Shaka / Dash.js SDK hooks
- *  8. MutationObserver for dynamically added <video>/<source>
- *  9. Page-global data scan (__NEXT_DATA__, ytInitialData, TikTok, etc.)
- * 10. Periodic currentSrc poll
- * 11. window.__fcdownloader_scan() — deep on-demand scan
+ *  2. SPA navigation hooks (pushState / replaceState / popstate)
+ *  3. PerformanceObserver — catches every resource including native <video>
+ *  4. fetch hook — intercepts JS fetch + response body + blob lineage
+ *  5. XHR hook  — intercepts XHR + response body
+ *  6. HTMLMediaElement src / currentSrc setters (blob URL resolved via lineage)
+ *  7. MediaSource / URL.createObjectURL (MSE_ACTIVE + blob lineage WeakMap)
+ *  8. SourceBuffer.appendBuffer hook (active playback confirmation)
+ *  9. hls.js / JW Player / Video.js / Shaka / Dash.js SDK hooks
+ * 10. MutationObserver for dynamically added <video>/<source>
+ * 11. Page-global data scan (__NEXT_DATA__, ytInitialData, TikTok, Bilibili, etc.)
+ * 12. Periodic currentSrc poll
+ * 13. window.__fcdownloader_scan() — deep on-demand scan
  */
 export const INJECTED_SCRIPT = `
 (function () {
@@ -47,6 +49,14 @@ export const INJECTED_SCRIPT = `
 
   post({ event: 'BRIDGE_READY', timestamp: Date.now() });
 
+  // ── Blob URL lineage tracking ─────────────────────────────────
+  // WeakMap: Response  → original fetch URL
+  // WeakMap: Blob      → original fetch URL
+  // Map:     blobUrl   → { url, mime }
+  var _blobLineageResp = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  var _blobLineageBlob = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  var _blobUrlMap      = new Map();
+
   // ── Type detection ────────────────────────────────────────────
   function detectType(url, mime) {
     if (!url) return null;
@@ -65,19 +75,21 @@ export const INJECTED_SCRIPT = `
     if (/\\bvideo\\.twimg\\.com\\//.test(url))                      return 'hls';
     if (/\\btiktokcdn\\.com\\//.test(url))                          return 'hls';
     if (/\\btiktokcdn-us\\.com\\//.test(url))                       return 'hls';
-    if (/\\bv\\d+-webapp\\.tiktok\\.com\\//.test(url))             return 'hls'; // TikTok v19/v39
+    if (/\\bv\\d+-webapp\\.tiktok\\.com\\//.test(url))             return 'hls';
     if (/\\btiktok\\.com\\/video\\//.test(url))                     return 'hls';
     if (/\\bcdninstagram\\.com\\//.test(url))                       return 'hls';
-    if (/\\bscontent[-\\w]*\\.cdninstagram\\.com\\//.test(url))    return 'hls'; // Instagram scontent
+    if (/\\bscontent[-\\w]*\\.cdninstagram\\.com\\//.test(url))    return 'hls';
     if (/\\binstagram\\.com\\/.*\\bvideo\\b/.test(url))             return 'hls';
     if (/\\bv\\.redd\\.it\\//.test(url))                            return 'hls';
     if (/\\bfbcdn\\.net\\/.*\\bvideo/.test(url))                    return 'hls';
     if (/\\bfbcdn\\.net\\/.*\\.mp4/.test(url))                      return 'hls';
     if (/\\bdailymotion\\.com\\/cdn/.test(url))                     return 'hls';
-    if (/\\bdmcdn\\.net\\//.test(url))                              return 'hls'; // Dailymotion CDN
-    if (/\\bgooglevideo\\.com\\/videoplayback/.test(url))           return 'hls'; // YouTube
-    if (/\\bpinimg\\.com\\/videos\\//.test(url))                    return 'hls'; // Pinterest
-    if (/\\busher\\.twitch\\.tv\\//.test(url))                      return 'hls'; // Twitch
+    if (/\\bdmcdn\\.net\\//.test(url))                              return 'hls';
+    if (/\\bgooglevideo\\.com\\/videoplayback/.test(url))           return 'hls';
+    if (/\\bmanifest\\.googlevideo\\.com\\/api\\/manifest\\/dash/.test(url)) return 'dash';
+    if (/\\bpinimg\\.com\\/videos\\//.test(url))                    return 'hls';
+    if (/\\busher\\.twitch\\.tv\\//.test(url))                      return 'hls';
+    if (/\\bbilivideo\\.com\\//.test(url))                          return 'hls';
     // Generic path heuristics
     if (/\\/(master|playlist|manifest|stream|hls|dash)(\\.|\\?|\\/|$)/i.test(url) &&
         !/\\.(html?|js|css|woff|png|jpe?g|gif|svg)(\\?|$)/i.test(url)) return 'hls';
@@ -87,16 +99,38 @@ export const INJECTED_SCRIPT = `
   var LOG_SEEN = new Set();
   var SKIP_EXT = /\\.(png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot|otf|css|js|map)(\\?|$)/i;
 
-  function emit(url, mime) {
+  // Assign a confidence score based on URL/mime heuristics
+  function confForUrl(url, mime, base) {
+    if (!base) base = 0.5;
+    if (!url) return base;
+    var u = url.toLowerCase();
+    if (/\\.m3u8(\\?|$)/.test(u) || /mpegurl/i.test(mime || '')) return Math.max(base, 0.85);
+    if (/\\.mpd(\\?|$)/.test(u) || /dash\\+xml/i.test(mime || '')) return Math.max(base, 0.85);
+    if (/\\.mp4(\\?|$)/.test(u)) return Math.max(base, 0.75);
+    if (/vimeocdn\\.com.*playlist\\.json/.test(u)) return Math.max(base, 0.88);
+    if (/googlevideo\\.com\\/videoplayback/.test(u)) return Math.max(base, 0.9);
+    if (/bilivideo\\.com\\//.test(u)) return Math.max(base, 0.88);
+    if (/manifest\\.googlevideo\\.com/.test(u)) return Math.max(base, 0.95);
+    return base;
+  }
+
+  function emit(url, mime, provenance, confidence) {
     if (!url || typeof url !== 'string') return;
     url = url.trim();
     if (!url || url.startsWith('blob:') || url.startsWith('data:') || url.length < 8) return;
     var type = detectType(url, mime);
-    if (!type || SEEN.has(url)) return;
+    if (!type) return;
+    // Allow re-emit when a concrete mime type arrives for an already-seen URL:
+    // the first emit uses URL heuristics (may be wrong); the body-read emit
+    // has the real Content-Type and should correct the mediaType on the app side.
+    if (SEEN.has(url) && !mime) return;
     SEEN.add(url);
+    var conf = confForUrl(url, mime, typeof confidence === 'number' ? confidence : 0.5);
     post({ event: 'MEDIA_DETECTED', url: url, pageUrl: location.href,
            userAgent: navigator.userAgent, mimeType: mime || null,
-           mediaType: type, timestamp: Date.now() });
+           mediaType: type, timestamp: Date.now(),
+           provenance: provenance || 'perf-observer',
+           confidence: conf });
   }
 
   function log(url) {
@@ -110,20 +144,15 @@ export const INJECTED_SCRIPT = `
   }
 
   // ── Text scanning (JSON response bodies, page globals) ────────
-  // Finds video URLs inside JSON/text blobs — critical for Twitter,
-  // Reddit, TikTok, Next.js apps, and player config objects.
   function scanText(text) {
     if (!text || typeof text !== 'string' || text.length < 10) return;
-    // Unescape common JSON encodings
     var variants = [
       text,
       text.replace(/\\\\\\/g, '/').replace(/\\\\u0026/g, '&').replace(/\\\\u003d/g, '=')
            .replace(/\\\\u002F/gi, '/'),
     ];
-    // Extension-based URLs
     var extRe = /https?:\\/\\/[^"'\\\\\\s<>]{4,}?\\.(m3u8|mpd|mp4|webm|mov|m4v)[^"'\\\\\\s<>]*/gi;
-    // Known video CDN domains (no extension needed)
-    var cdnRe = /https?:\\/\\/[^"'\\\\\\s<>]*(?:video\\.twimg\\.com|tiktokcdn\\.com|tiktokcdn-us\\.com|v\\d+-webapp\\.tiktok\\.com|cdninstagram\\.com|scontent[-\\w]*\\.cdninstagram\\.com|v\\.redd\\.it|fbcdn\\.net\\/videos|vimeocdn\\.com\\/video|googlevideo\\.com\\/videoplayback|pinimg\\.com\\/videos|dmcdn\\.net|usher\\.twitch\\.tv)[^"'\\\\\\s<>]{4,}/gi;
+    var cdnRe = /https?:\\/\\/[^"'\\\\\\s<>]*(?:video\\.twimg\\.com|tiktokcdn\\.com|tiktokcdn-us\\.com|v\\d+-webapp\\.tiktok\\.com|cdninstagram\\.com|scontent[-\\w]*\\.cdninstagram\\.com|v\\.redd\\.it|fbcdn\\.net\\/videos|vimeocdn\\.com\\/video|googlevideo\\.com\\/videoplayback|pinimg\\.com\\/videos|dmcdn\\.net|usher\\.twitch\\.tv|bilivideo\\.com)[^"'\\\\\\s<>]{4,}/gi;
     variants.forEach(function (body) {
       var m;
       extRe.lastIndex = 0;
@@ -141,34 +170,62 @@ export const INJECTED_SCRIPT = `
     });
   }
 
-  // Scan well-known page-global objects injected by React/Next.js apps,
-  // TikTok, YouTube, etc. — these often contain the raw video URL.
+  // ── SPA navigation hooks ──────────────────────────────────────
+  // Intercept pushState / replaceState so we know when a SPA navigates
+  // without a full page reload (YouTube, TikTok, Twitter, etc.)
+  (function () {
+    function wrapHistory(method) {
+      var orig = history[method];
+      if (!orig) return;
+      history[method] = function () {
+        var ret = orig.apply(this, arguments);
+        try {
+          var newUrl = String(arguments[2] || location.href);
+          if (newUrl && newUrl !== location.href) {
+            post({ event: 'PAGE_NAVIGATE', url: newUrl, timestamp: Date.now() });
+          }
+        } catch (_) {}
+        return ret;
+      };
+    }
+    try { wrapHistory('pushState'); } catch (_) {}
+    try { wrapHistory('replaceState'); } catch (_) {}
+    window.addEventListener('popstate', function () {
+      try { post({ event: 'PAGE_NAVIGATE', url: location.href, timestamp: Date.now() }); } catch (_) {}
+    });
+  })();
+
+  // ── Page-global data scan ─────────────────────────────────────
   function scanGlobals() {
     [
-      '__NEXT_DATA__',          // Twitter/X, Reddit, many Next.js apps
-      'ytInitialData',          // YouTube initial page data
-      'ytInitialPlayerResponse',// YouTube player response (contains stream URLs)
-      '__INIT_PROPS__',         // TikTok
-      'PAGE_CONTEXT_DATA',      // TikTok
-      '__universal_data__',     // TikTok
-      '__DEFAULT_SCOPE__',      // TikTok (newer — contains playAddr)
-      '__NUXT__',               // Nuxt.js apps (Dailymotion, etc.)
-      '__staticRouterHydrationData', // React Router v6 apps
+      '__NEXT_DATA__',
+      'ytInitialData',
+      'ytInitialPlayerResponse',
+      '__INIT_PROPS__',
+      'PAGE_CONTEXT_DATA',
+      '__universal_data__',
+      '__DEFAULT_SCOPE__',
+      '__NUXT__',
+      '__staticRouterHydrationData',
     ].forEach(function (key) {
       try {
         if (window[key]) scanText(JSON.stringify(window[key]));
       } catch (_) {}
     });
-    // Facebook video data injected via require()
+
+    // Facebook video data
     try {
       if (window.require && window.require.entries) {
         scanText(JSON.stringify(window.require.entries));
       }
     } catch (_) {}
 
-    // YouTube — extract muxed video streams from ytInitialPlayerResponse directly.
-    // These are the unencrypted MP4/WebM formats (usually ≤360p muxed or ≤1080p adaptive).
-    // Higher-quality adaptive formats use signatureCipher which we cannot decode here.
+    // YouTube — extract all usable stream sources from ytInitialPlayerResponse.
+    // Priority:
+    //  1. Muxed progressive MP4 with direct URL (audio+video, no DRM, direct download)
+    //  2. DASH manifest (separate video+audio tracks, routes to dashDownloader)
+    //  3. HLS manifest — skip on iOS because YouTube serves FairPlay HLS to Safari UAs;
+    //     on desktop/Android UAs the HLS uses standard AES-128 (handled by hlsDownloader)
     try {
       var ytpr = window.ytInitialPlayerResponse;
       if (!ytpr && window.ytplayer && window.ytplayer.config) {
@@ -176,44 +233,97 @@ export const INJECTED_SCRIPT = `
         if (typeof raw === 'string') try { ytpr = JSON.parse(raw); } catch(_2) {}
       }
       if (ytpr && ytpr.streamingData) {
-        var allFmts = [].concat(ytpr.streamingData.formats || [], ytpr.streamingData.adaptiveFormats || []);
-        allFmts.forEach(function(f) {
-          if (f && f.url && f.mimeType && f.mimeType.indexOf('video/') === 0) {
-            emit(f.url, f.mimeType);
-          }
+        var sd2 = ytpr.streamingData;
+        var isIOSua = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+        var ytEmitted = false;
+
+        // 1. Muxed progressive — only if URL is directly available (no signatureCipher)
+        var fmts2 = (sd2.formats || []).filter(function(f) {
+          return f && f.url && f.mimeType && f.mimeType.indexOf('video/') === 0;
+        }).sort(function(a, b) { return (b.bitrate || 0) - (a.bitrate || 0); });
+        if (fmts2.length > 0) {
+          emit(fmts2[0].url, fmts2[0].mimeType, 'yt-player-response', 0.95);
+          ytEmitted = true;
+        }
+
+        // 2. DASH manifest (video+audio separate tracks — dashDownloader handles it)
+        if (sd2.dashManifestUrl) {
+          emit(sd2.dashManifestUrl, 'application/dash+xml', 'yt-player-response', ytEmitted ? 0.72 : 0.88);
+          ytEmitted = true;
+        }
+
+        // 3. HLS manifest — skip on iOS (FairPlay); on other UAs uses AES-128
+        if (sd2.hlsManifestUrl && !isIOSua) {
+          emit(sd2.hlsManifestUrl, 'application/x-mpegurl', 'yt-player-response', ytEmitted ? 0.65 : 0.82);
+        }
+
+        // Telemetry — helps debug what was found / rejected
+        post({
+          event: 'YT_DETECTED',
+          videoId: (ytpr.videoDetails && ytpr.videoDetails.videoId) || '',
+          formatsCount:  (sd2.formats || []).length,
+          adaptiveCount: (sd2.adaptiveFormats || []).length,
+          hasDirect:     fmts2.length > 0,
+          hasDash:       !!sd2.dashManifestUrl,
+          hasHls:        !!sd2.hlsManifestUrl,
+          isIOS:         isIOSua,
+          emitted:       ytEmitted,
+          timestamp:     Date.now(),
         });
       }
     } catch (_) {}
 
-    // Instagram — scan window.__additionalDataLoaded cache and bootstrap data
+    // Bilibili — prefer progressive MP4 (durl) to avoid requiring FFmpeg mux
+    try {
+      var biliPi = window.__playinfo__;
+      if (biliPi && biliPi.data) {
+        var bdata = biliPi.data;
+        if (bdata.durl && bdata.durl.length > 0) {
+          var bUrl = (bdata.durl[0].url || '').replace(/\\\\u0026/g, '&');
+          if (bUrl) emit(bUrl, 'video/mp4', 'page-global', 0.88);
+        } else if (bdata.dash) {
+          // Fallback: best video track only (no FFmpeg for audio mux)
+          var bvids = (bdata.dash.video || []).slice().sort(function(a, b) {
+            return (b.bandwidth || 0) - (a.bandwidth || 0);
+          });
+          if (bvids.length > 0) {
+            var bvUrl = (bvids[0].baseUrl || bvids[0].base_url || '').replace(/\\\\u0026/g, '&');
+            if (bvUrl && !SEEN.has(bvUrl)) {
+              SEEN.add(bvUrl);
+              var bLabel = bvids[0].height ? (bvids[0].height + 'p') : 'Bilibili';
+              emit(bvUrl, 'video/mp4', 'page-global', 0.75);
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    // Instagram
     try {
       ['__additionalDataLoaded', 'instagram_data', '_sharedData', '__initialData'].forEach(function(k) {
         try { if (window[k]) scanText(JSON.stringify(window[k])); } catch(_) {}
       });
     } catch (_) {}
 
-    // Twitter/X — scan their server-side data stores
+    // Twitter/X
     try {
-      // Twitter injects tweet data in __NEXT_DATA__ (already covered above), but also via
-      // window.__initialData__ and window.FEATURE_FLAGS
       ['__initialData__', '__featureFlags', 'initialTimeline'].forEach(function(k) {
         try { if (window[k]) scanText(JSON.stringify(window[k])); } catch(_) {}
       });
-      // In-memory tweet cache that Twitter's React app populates
       try {
         if (window.__TIMELINE_DATA__) scanText(JSON.stringify(window.__TIMELINE_DATA__));
         if (window._data)             scanText(JSON.stringify(window._data));
       } catch(_) {}
     } catch (_) {}
 
-    // Threads — Meta platform sharing Instagram's CDN
+    // Threads
     try {
       ['__bbox', '__relay_store__', 'instagramData'].forEach(function(k) {
         try { if (window[k]) scanText(JSON.stringify(window[k])); } catch(_) {}
       });
     } catch (_) {}
 
-    // Dailymotion — player API object
+    // Dailymotion
     try {
       if (window.DM && window.DM.player) scanText(JSON.stringify(window.DM.player));
       if (window.dmGlobal) scanText(JSON.stringify(window.dmGlobal));
@@ -224,7 +334,7 @@ export const INJECTED_SCRIPT = `
       if (window.__PWS_DATA__) scanText(JSON.stringify(window.__PWS_DATA__));
     } catch (_) {}
 
-    // Modelpress / generic Japanese/Korean news embeds
+    // Video.js global players
     try {
       if (window.videojs && window.videojs.getPlayers) {
         Object.values(window.videojs.getPlayers()).forEach(function(p) {
@@ -254,19 +364,23 @@ export const INJECTED_SCRIPT = `
   var _fetch = window.fetch;
   window.fetch = function (resource, init) {
     var url = resource instanceof Request ? resource.url : String(resource);
-    emit(url, null); log(url);
+    emit(url, null, 'fetch-hook', 0.6); log(url);
     var p = _fetch.apply(this, arguments);
     p.then(function (res) {
       try {
         var ct = res.headers && res.headers.get('Content-Type');
-        if (ct) emit(url, ct);
+        if (ct) emit(url, ct, 'fetch-hook', 0.7);
         var base = url.split('?')[0];
         var isSegment = /\\.(ts|m4s|aac|m4a)$/i.test(base.split('/').pop() || '');
         if (!isSegment) {
+          // Track Response→URL for blob lineage
+          if (_blobLineageResp) {
+            try { _blobLineageResp.set(res, url); } catch(_) {}
+          }
           res.clone().text().then(function (text) {
             var head = (text || '').trimStart().slice(0, 40);
-            if (head.indexOf('#EXTM3U') === 0) emit(url, 'application/x-mpegurl');
-            else if (head.indexOf('<?xml') === 0 && text.indexOf('<MPD ') !== -1) emit(url, 'application/dash+xml');
+            if (head.indexOf('#EXTM3U') === 0) emit(url, 'application/x-mpegurl', 'manifest-parser', 0.92);
+            else if (head.indexOf('<?xml') === 0 && text.indexOf('<MPD ') !== -1) emit(url, 'application/dash+xml', 'manifest-parser', 0.92);
             scanText(text);
           }).catch(function () {});
         }
@@ -275,22 +389,37 @@ export const INJECTED_SCRIPT = `
     return p;
   };
 
+  // Hook Response.prototype.blob to track blob lineage
+  if (typeof Response !== 'undefined' && Response.prototype && Response.prototype.blob) {
+    var _respBlob = Response.prototype.blob;
+    Response.prototype.blob = function () {
+      var self = this;
+      var srcUrl = _blobLineageResp ? (_blobLineageResp.get(self) || '') : '';
+      return _respBlob.call(self).then(function (blob) {
+        try {
+          if (srcUrl && _blobLineageBlob) _blobLineageBlob.set(blob, srcUrl);
+        } catch(_) {}
+        return blob;
+      });
+    };
+  }
+
   // ── 4. XHR ────────────────────────────────────────────────────
   var _xhrOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function (method, url) {
     var xurl = String(url);
-    emit(xurl, null); log(xurl);
+    emit(xurl, null, 'xhr-hook', 0.6); log(xurl);
     this.addEventListener('load', function () {
       try {
         var ct = this.getResponseHeader('Content-Type');
-        if (ct) emit(xurl, ct);
+        if (ct) emit(xurl, ct, 'xhr-hook', 0.7);
         var base = xurl.split('?')[0];
         var isSegment = /\\.(ts|m4s|aac|m4a)$/i.test(base.split('/').pop() || '');
         if (!isSegment && (this.responseType === '' || this.responseType === 'text')) {
           var text = this.responseText || '';
           var head = text.trimStart().slice(0, 40);
-          if (head.indexOf('#EXTM3U') === 0) emit(xurl, 'application/x-mpegurl');
-          else if (head.indexOf('<?xml') === 0 && text.indexOf('<MPD ') !== -1) emit(xurl, 'application/dash+xml');
+          if (head.indexOf('#EXTM3U') === 0) emit(xurl, 'application/x-mpegurl', 'manifest-parser', 0.92);
+          else if (head.indexOf('<?xml') === 0 && text.indexOf('<MPD ') !== -1) emit(xurl, 'application/dash+xml', 'manifest-parser', 0.92);
           scanText(text);
         }
       } catch (_) {}
@@ -307,7 +436,21 @@ export const INJECTED_SCRIPT = `
     Object.defineProperty(proto, 'src', {
       get: desc.get,
       set: function (v) {
-        try { emit(String(v || ''), this.type || null); } catch (_) {}
+        try {
+          var sv = String(v || '');
+          if (sv.startsWith('blob:')) {
+            // Resolve blob → original URL via lineage map
+            var entry = _blobUrlMap.get(sv);
+            if (entry && entry.url) {
+              emit(entry.url, entry.mime || this.type || null, 'media-element', 0.85);
+            } else {
+              // Unknown blob — just signal MSE
+              post({ event: 'MSE_ACTIVE', pageUrl: location.href, timestamp: Date.now() });
+            }
+          } else {
+            emit(sv, this.type || null, 'media-element', 0.85);
+          }
+        } catch (_) {}
         return desc.set.call(this, v);
       },
       configurable: true,
@@ -318,14 +461,46 @@ export const INJECTED_SCRIPT = `
   var _cou = URL.createObjectURL.bind(URL);
   URL.createObjectURL = function (obj) {
     var blobUrl = _cou(obj);
-    post({ event: 'MSE_STREAM', pageUrl: location.href, timestamp: Date.now() });
+    try {
+      if (obj instanceof Blob && !(window.MediaSource && obj instanceof MediaSource)) {
+        // Network blob (not MSE) — look up lineage
+        var srcUrl = _blobLineageBlob ? _blobLineageBlob.get(obj) : '';
+        var mime   = obj.type || '';
+        if (srcUrl) {
+          _blobUrlMap.set(blobUrl, { url: srcUrl, mime: mime });
+          emit(srcUrl, mime || null, 'media-element', 0.82);
+        } else {
+          // No lineage — just record the mime type for later
+          if (mime && /video|audio|mpegurl|dash/i.test(mime)) {
+            _blobUrlMap.set(blobUrl, { url: '', mime: mime });
+          }
+          post({ event: 'MSE_ACTIVE', pageUrl: location.href, timestamp: Date.now() });
+        }
+      } else {
+        // MediaSource blob
+        post({ event: 'MSE_ACTIVE', pageUrl: location.href, timestamp: Date.now() });
+      }
+    } catch (_) {
+      post({ event: 'MSE_ACTIVE', pageUrl: location.href, timestamp: Date.now() });
+    }
     return blobUrl;
   };
+
   if (window.MediaSource) {
     var _addSB = MediaSource.prototype.addSourceBuffer;
     MediaSource.prototype.addSourceBuffer = function (mime) {
-      post({ event: 'MSE_STREAM', mimeType: mime, pageUrl: location.href, timestamp: Date.now() });
-      return _addSB.call(this, mime);
+      post({ event: 'MSE_TRACK', mimeType: mime, pageUrl: location.href, timestamp: Date.now() });
+      var sb = _addSB.call(this, mime);
+      // Hook appendBuffer to confirm active playback
+      if (sb && sb.appendBuffer) {
+        var _origAB = sb.appendBuffer.bind(sb);
+        sb.appendBuffer = function (data) {
+          post({ event: 'MSE_ACTIVE', pageUrl: location.href, timestamp: Date.now() });
+          sb.appendBuffer = _origAB; // only report once per SourceBuffer
+          return _origAB(data);
+        };
+      }
+      return sb;
     };
   }
 
@@ -334,7 +509,7 @@ export const INJECTED_SCRIPT = `
     if (!Hls || !Hls.prototype || !Hls.prototype.loadSource) return;
     var orig = Hls.prototype.loadSource;
     Hls.prototype.loadSource = function (src) {
-      emit(src, 'application/x-mpegurl');
+      emit(src, 'application/x-mpegurl', 'player-sdk-hook', 0.9);
       return orig.call(this, src);
     };
   }
@@ -354,7 +529,7 @@ export const INJECTED_SCRIPT = `
       var orig = shaka.Player.prototype.load;
       if (!orig) return;
       shaka.Player.prototype.load = function (url) {
-        emit(url, null);
+        emit(url, null, 'player-sdk-hook', 0.9);
         return orig.apply(this, arguments);
       };
     } catch (_) {}
@@ -378,9 +553,9 @@ export const INJECTED_SCRIPT = `
           var srcs = cfg && (cfg.sources ||
             (cfg.playlist && cfg.playlist[0] && cfg.playlist[0].sources) || []);
           (Array.isArray(srcs) ? srcs : []).forEach(function (s) {
-            if (s && s.file) emit(s.file, s.type || null);
+            if (s && s.file) emit(s.file, s.type || null, 'player-sdk-hook', 0.9);
           });
-          if (cfg && cfg.file) emit(cfg.file, null);
+          if (cfg && cfg.file) emit(cfg.file, null, 'player-sdk-hook', 0.9);
         } catch (_) {}
         return orig.apply(this, arguments);
       };
@@ -395,15 +570,15 @@ export const INJECTED_SCRIPT = `
   } catch (_) {}
   patchJw(_jwV);
 
-  // ── 10. Video.js / Dash.js ─────────────────────────────────────
+  // ── 10. Video.js / Dash.js ────────────────────────────────────
   function patchVjs(v) {
     if (!v || !v.prototype || !v.prototype.src) return;
     var orig = v.prototype.src;
     v.prototype.src = function (s) {
       try {
-        if (typeof s === 'string') emit(s, null);
-        else if (s && s.src) emit(s.src, s.type || null);
-        else if (Array.isArray(s)) s.forEach(function (x) { if (x && x.src) emit(x.src, x.type || null); });
+        if (typeof s === 'string') emit(s, null, 'player-sdk-hook', 0.85);
+        else if (s && s.src) emit(s.src, s.type || null, 'player-sdk-hook', 0.85);
+        else if (Array.isArray(s)) s.forEach(function (x) { if (x && x.src) emit(x.src, x.type || null, 'player-sdk-hook', 0.85); });
       } catch (_) {}
       return orig.apply(this, arguments);
     };
@@ -424,11 +599,11 @@ export const INJECTED_SCRIPT = `
         m.addedNodes.forEach(function (node) {
           if (node.nodeType !== 1) return;
           if (/^(VIDEO|AUDIO|SOURCE)$/.test(node.tagName)) {
-            emit(node.src || node.currentSrc || node.getAttribute('src'), node.type || null);
+            emit(node.src || node.currentSrc || node.getAttribute('src'), node.type || null, 'mutation-observer', 0.75);
           }
           if (node.querySelectorAll) {
             node.querySelectorAll('video,audio,source').forEach(function (el) {
-              emit(el.src || el.currentSrc || el.getAttribute('src'), el.type || null);
+              emit(el.src || el.currentSrc || el.getAttribute('src'), el.type || null, 'mutation-observer', 0.75);
             });
           }
         });
@@ -446,13 +621,12 @@ export const INJECTED_SCRIPT = `
       });
       performance.getEntriesByType('resource').forEach(function (e) { emit(e.name, null); });
     } catch (_) {}
-    // Scan globals on ticks 2, 6, 12, 20 (1s, 3s, 6s, 10s after load)
     if (_ticks === 2 || _ticks === 6 || _ticks === 12 || _ticks === 20) {
       try { scanGlobals(); } catch(_) {}
     }
   }, 500);
 
-  // ── 13. On-demand deep scan ────────────────────────────────────
+  // ── 13. On-demand deep scan ───────────────────────────────────
   window.__fcdownloader_scan = function () {
     document.querySelectorAll('video,audio,source').forEach(function (el) {
       emit(el.src || el.currentSrc || el.getAttribute('src'), el.type || null);

@@ -44,10 +44,14 @@ const BrowserView = forwardRef<WebView, Props>(
         injectedJavaScriptForMainFrameOnly={false}
         javaScriptEnabled
         onMessage={onMessage}
-        // Cookie sharing — WKHTTPCookieStore ↔ URLSession
-        sharedCookiesEnabled
+        // Cookies — persist in WKHTTPCookieStore / Android CookieManager.
+        // sharedCookiesEnabled is intentionally OFF: it would sync WKWebView cookies into
+        // NSHTTPCookieStorage.shared, which NSURLSession (used by createDownloadResumable)
+        // then auto-attaches to every CDN request, causing HTTP 413 on googlevideo.com.
         thirdPartyCookiesEnabled
         domStorageEnabled
+        cacheEnabled
+        cacheMode="LOAD_DEFAULT"
         // Media
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}

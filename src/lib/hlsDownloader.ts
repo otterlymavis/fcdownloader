@@ -80,9 +80,11 @@ function parseMedia(content: string, baseUrl: string): ParsedPlaylist {
         key = undefined;
         continue;
       }
-      if (method === 'SAMPLE-AES' || method === 'SAMPLE-AES-CTR' ||
-          kf === 'com.apple.streamingkeydelivery' || kf?.startsWith('urn:uuid:'))
-        throw new DRMProtectedError('DRM-protected - cannot download.');
+      // Only DRM when KEYFORMAT explicitly names a DRM system.
+      // SAMPLE-AES / SAMPLE-AES-CTR without a DRM KEYFORMAT is standard HLS
+      // encryption (used by YouTube fMP4 streams); the key URI is public.
+      if (kf === 'com.apple.streamingkeydelivery' || kf?.startsWith('urn:uuid:'))
+        throw new DRMProtectedError('DRM-protected — stream uses platform DRM (FairPlay/Widevine).');
       key = { method, uri: resolveUrl(rawUri, baseUrl), iv };
     } else if (line.startsWith('#EXT-X-MAP:')) {
       const u = line.match(/URI="([^"]+)"/)?.[1];
@@ -106,21 +108,18 @@ function makeHeaders(cookies: string, ua: string, referer: string): Record<strin
 }
 
 async function fetchText(
-  url: string, cookies: string, ua: string, referer: string, signal?: AbortSignal,
+  url: string, headers: Record<string, string>, signal?: AbortSignal,
 ): Promise<string> {
-  const res = await fetch(url, { signal, headers: makeHeaders(cookies, ua, referer) });
+  const res = await fetch(url, { signal, headers });
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching manifest`);
   return res.text();
 }
 
 async function downloadSegment(
-  url: string, destPath: string, cookies: string, ua: string, referer: string,
+  url: string, destPath: string, headers: Record<string, string>,
   signal?: AbortSignal,
 ): Promise<void> {
-  const res = await expoFetch(url, {
-    signal,
-    headers: makeHeaders(cookies, ua, referer),
-  });
+  const res = await expoFetch(url, { signal, headers });
   if (signal?.aborted) throw new Error('Cancelled');
   if (!res.ok) throw new Error(`HTTP ${res.status} - ${url.split('?')[0].split('/').pop()}`);
 
@@ -189,8 +188,8 @@ async function writePlaylist(
     `#EXT-X-TARGETDURATION:${targetDuration}`,
     `#EXT-X-MEDIA-SEQUENCE:${mediaSequence}`,
   ];
-  if (key?.method === 'AES-128' && localKeyPath) {
-    lines.push(`#EXT-X-KEY:METHOD=AES-128,URI="${localKeyPath}"${key.iv ? `,IV=${key.iv}` : ''}`);
+  if (key && localKeyPath) {
+    lines.push(`#EXT-X-KEY:METHOD=${key.method},URI="${localKeyPath}"${key.iv ? `,IV=${key.iv}` : ''}`);
   }
   if (localInitPath) lines.push(`#EXT-X-MAP:URI="${localInitPath}"`);
   segPaths.forEach((p, i) => {
@@ -211,21 +210,29 @@ export async function downloadHLS(
 
   onStatus?.('fetching_manifest');
 
-  const cookies = await extractSessionCookies(media.pageUrl);
   const ua = media.userAgent || 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36';
-  const referer = media.pageUrl;
 
   const taskDir = getTaskDir(taskId);
   await FileSystem.makeDirectoryAsync(taskDir, { intermediates: true });
 
+  // When the extractor stored headers (e.g. YouTube CDN context), use them verbatim.
+  // Otherwise build from session cookies — skip cookies for googlevideo.com CDN URLs.
+  const resolvedHeaders: Record<string, string> = media.httpHeaders
+    ? media.httpHeaders
+    : makeHeaders(
+        /googlevideo\.com\//i.test(media.url) ? '' : await extractSessionCookies(media.pageUrl),
+        ua,
+        media.pageUrl,
+      );
+
   let playlistUrl = media.url;
-  let raw = await fetchText(playlistUrl, cookies, ua, referer, signal);
+  let raw = await fetchText(playlistUrl, resolvedHeaders, signal);
 
   if (raw.includes('#EXT-X-STREAM-INF')) {
     const variant = parseMaster(raw, playlistUrl);
     if (!variant) throw new Error('No variant streams in master playlist');
     playlistUrl = variant;
-    raw = await fetchText(playlistUrl, cookies, ua, referer, signal);
+    raw = await fetchText(playlistUrl, resolvedHeaders, signal);
   }
 
   if (signal?.aborted) throw new Error('Cancelled');
@@ -236,15 +243,15 @@ export async function downloadHLS(
   if (segments.length === 0) throw new Error('No segments found in playlist');
 
   let localKeyPath: string | undefined;
-  if (key?.method === 'AES-128') {
+  if (key) {
     localKeyPath = `${taskDir}enc.key`;
-    await downloadSegment(key.uri, localKeyPath, cookies, ua, referer, signal);
+    await downloadSegment(key.uri, localKeyPath, resolvedHeaders, signal);
   }
 
   let localInitPath: string | undefined;
   if (initSegmentUrl) {
     localInitPath = `${taskDir}init.mp4`;
-    await downloadSegment(initSegmentUrl, localInitPath, cookies, ua, referer, signal);
+    await downloadSegment(initSegmentUrl, localInitPath, resolvedHeaders, signal);
   }
 
   onStatus?.('downloading');
@@ -259,14 +266,16 @@ export async function downloadHLS(
     await Promise.all(batch.map((url, j) => {
       const idx = i + j;
       segPaths[idx] = `${taskDir}seg${String(idx).padStart(6, '0')}.${segExt}`;
-      return downloadSegment(url, segPaths[idx], cookies, ua, referer, signal);
+      return downloadSegment(url, segPaths[idx], resolvedHeaders, signal);
     }));
     onProgress?.(Math.min(i + SEGMENT_BATCH, segments.length), segments.length);
   }
 
   onStatus?.('assembling');
 
-  if (key?.method === 'AES-128') {
+  if (key) {
+    // Encrypted stream (AES-128, SAMPLE-AES, etc.) — write a local playlist
+    // so the player decrypts during playback rather than us muxing raw ciphertext.
     return writePlaylist(
       taskDir,
       segPaths,

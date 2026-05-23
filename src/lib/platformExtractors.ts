@@ -3,7 +3,9 @@
  * Called when the user pastes a site URL (not a direct CDN URL) into the
  * manual-add field. Works best for public / unauthenticated content.
  */
-import { DetectedMedia } from '../types';
+import { DetectedMedia, Provenance } from '../types';
+import { extractYouTubeStreams } from './ytExtractor';
+import { extractViaServer } from './serverExtractor';
 
 let _seq = 0;
 const genId = () => `ext_${Date.now()}_${_seq++}`;
@@ -26,7 +28,7 @@ async function fetchHtml(url: string, ua = DESKTOP_UA): Promise<string> {
   return res.text();
 }
 
-function makeItem(url: string, pageUrl: string, label?: string): DetectedMedia {
+function makeItem(url: string, pageUrl: string, label?: string, provenance: Provenance = 'social-extractor', confidence = 0.85): DetectedMedia {
   const clean = url
     .replace(/\\u0026/g, '&')
     .replace(/\\\//g, '/')
@@ -40,6 +42,8 @@ function makeItem(url: string, pageUrl: string, label?: string): DetectedMedia {
     timestamp: Date.now(),
     mediaType: clean.toLowerCase().includes('.mpd') ? 'dash' : 'hls',
     label,
+    confidence,
+    provenance,
   };
 }
 
@@ -169,40 +173,32 @@ async function extractDailymotion(pageUrl: string): Promise<DetectedMedia[]> {
 }
 
 // ── YouTube ───────────────────────────────────────────────────────
+
+/**
+ * YouTube extraction. Two on-device tiers + one optional off-device tier:
+ *
+ *   1. Server extractor — when the user has configured a backend running real
+ *      yt-dlp (Settings → HD extractor URL). Returns whatever the server gives
+ *      us, typically HD paired streams or an HLS manifest.
+ *   2. InnerTube IOS / ANDROID — HLS HD when YouTube serves hlsManifestUrl
+ *      (opportunistic), 360p muxed itag-18 as the guaranteed fallback.
+ *
+ * Page-scrape (`split("")…join("")` decipher), headless-WebView capture, and
+ * the yt-dlp binary path are intentionally gone — none of them survive
+ * current YouTube anti-bot / Service Worker layers in a way we can rely on.
+ */
 async function extractYouTube(pageUrl: string): Promise<DetectedMedia[]> {
+  // Tier 1: server-assisted HD (only if user configured a backend).
   try {
-    const html = await fetchHtml(pageUrl);
-    const results: DetectedMedia[] = [];
+    const items = await extractViaServer(pageUrl);
+    if (items.length > 0) return items;
+  } catch (e) {
+    console.warn('[extractYouTube] server extractor errored:', String(e).slice(0, 200));
+  }
 
-    const ytMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\});\s*(?:var|const|let|\n|<)/);
-    if (ytMatch) {
-      try {
-        const data = JSON.parse(ytMatch[1]) as any;
-        const sd = data.streamingData;
-        if (sd) {
-          // HLS manifest — single URL, quality-adaptive, best choice
-          if (sd.hlsManifestUrl) {
-            results.push(makeItem(sd.hlsManifestUrl, pageUrl, 'HLS (best)'));
-          }
-
-          // Progressive formats only — video+audio in one file, sorted highest quality first.
-          // Adaptive formats are video-only or audio-only and require ffmpeg to merge, so skip them.
-          const progressive: Array<{ url: string; qualityLabel?: string; bitrate?: number }> =
-            (sd.formats ?? [])
-              .filter((f: any) => f.url && f.mimeType?.startsWith('video/'))
-              .sort((a: any, b: any) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
-
-          for (const f of progressive) {
-            if (!results.some(r => r.url === f.url)) {
-              results.push(makeItem(f.url, pageUrl, f.qualityLabel));
-            }
-          }
-        }
-      } catch {}
-    }
-
-    return results;
-  } catch { return []; }
+  // Tier 2: on-device InnerTube. Returns HLS HD when available, otherwise the
+  // 360p muxed mp4. Always returns at least the 360p item if InnerTube responds.
+  return extractYouTubeStreams(pageUrl);
 }
 
 // ── TVer ──────────────────────────────────────────────────────────
@@ -280,6 +276,39 @@ async function extractPinterest(pageUrl: string): Promise<DetectedMedia[]> {
   } catch { return []; }
 }
 
+// ── Bilibili ──────────────────────────────────────────────────
+async function extractBilibili(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const html = await fetchHtml(pageUrl, DESKTOP_UA);
+    const results: DetectedMedia[] = [];
+
+    const piMatch = html.match(/window\.__playinfo__\s*=\s*(\{[\s\S]+?\})\s*<\/script>/);
+    if (piMatch) {
+      try {
+        const pi = JSON.parse(piMatch[1]);
+        const data = pi?.data;
+        // Prefer progressive MP4 (durl) — single file, no muxing required
+        if (data?.durl?.length > 0) {
+          const url = (data.durl[0].url || '').replace(/\\u0026/g, '&');
+          if (url) results.push(makeItem(url, pageUrl, 'Bilibili MP4', 'social-extractor', 0.80));
+        } else if (data?.dash) {
+          // Fallback: best video-only DASH track
+          const vids = (data.dash.video || []).sort((a: any, b: any) => (b.bandwidth ?? 0) - (a.bandwidth ?? 0));
+          if (vids.length > 0) {
+            const vUrl = (vids[0].baseUrl || vids[0].base_url || '').replace(/\\u0026/g, '&');
+            if (vUrl) {
+              const label = vids[0].height ? `${vids[0].height}p` : 'Bilibili';
+              results.push(makeItem(vUrl, pageUrl, label, 'social-extractor', 0.75));
+            }
+          }
+        }
+      } catch {}
+    }
+
+    return results;
+  } catch { return []; }
+}
+
 // ── Generic OG / meta-tag fallback ────────────────────────────────
 async function extractOgVideo(pageUrl: string): Promise<DetectedMedia[]> {
   try {
@@ -304,6 +333,7 @@ const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[
   { re: /facebook\.com\/(?:watch|reel|video)|fb\.watch/,                            fn: extractFacebook    },
   { re: /pinterest\.(?:com|[a-z]{2,3})\/pin\/\d+/,                                 fn: extractPinterest   },
   { re: /tver\.jp\/episodes\/ep[A-Za-z0-9]+/,                                       fn: extractTVer        },
+  { re: /bilibili\.com\/video\/[ABab][Vv][A-Za-z0-9]+/,                             fn: extractBilibili    },
 ];
 
 /** Returns true if the URL looks like a social-media post page (not a CDN media URL). */

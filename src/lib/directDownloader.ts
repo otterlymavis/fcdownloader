@@ -25,14 +25,19 @@ export async function downloadDirect(
 
   onStatus?.('fetching_manifest');
 
-  const cookies = await extractSessionCookies(media.pageUrl);
   const ua = media.userAgent || 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36';
-  const headers: Record<string, string> = {
-    'User-Agent': ua,
-    'Referer': media.pageUrl,
-    'Accept': '*/*',
-  };
-  if (cookies) headers['Cookie'] = cookies;
+
+  // When the extractor stored headers (e.g. YouTube CDN context), use them verbatim.
+  // Otherwise build from session cookies — skip cookies for googlevideo.com CDN URLs.
+  let headers: Record<string, string>;
+  if (media.httpHeaders) {
+    headers = { ...media.httpHeaders };
+  } else {
+    const needsCookies = !/googlevideo\.com\//i.test(media.url);
+    const cookies = needsCookies ? await extractSessionCookies(media.pageUrl) : '';
+    headers = { 'User-Agent': ua, 'Referer': media.pageUrl, 'Accept': '*/*' };
+    if (cookies) headers['Cookie'] = cookies;
+  }
 
   const ext = guessExt(media.url, media.mimeType);
   const dir = `${FileSystem.documentDirectory}downloads/${taskId}/`;
@@ -65,6 +70,15 @@ export async function downloadDirect(
   if (aborted || signal?.aborted) throw new Error('Cancelled');
   if (!result || result.status < 200 || result.status >= 300) {
     throw new Error(`HTTP ${result?.status ?? 'unknown'} — server rejected the request`);
+  }
+
+  // Reject HTML error pages returned with 200 OK (CDN redirect chains to /404, /error, etc.)
+  const ct = (
+    (result.headers as Record<string, string> | undefined)?.['Content-Type'] ??
+    (result.headers as Record<string, string> | undefined)?.['content-type'] ?? ''
+  ).toLowerCase();
+  if (ct.includes('text/html') || ct.includes('text/xml')) {
+    throw new Error('Server returned an HTML page instead of video — the URL may have expired or require login');
   }
 
   const info = await FileSystem.getInfoAsync(filePath);
