@@ -30,6 +30,12 @@
         "resourceClass": "m-medium",
         "buildConfiguration": "Release"
       }
+    },
+    "production-apk": {
+      "extends": "production",
+      "android": {
+        "buildType": "apk"
+      }
     }
   },
   "submit": {
