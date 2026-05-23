@@ -188,6 +188,15 @@ details > input, details > textarea { margin-top: 8px; }
 }
 .hint a#bookmarklet:active { cursor: grabbing; }
 
+/* Bookmarklet only makes sense on desktop browsers with a draggable bookmarks
+   bar. On touch devices we show a different short hint pointing at the
+   mobile app for paywalled-site use cases. */
+.hint-mobile  { display: none; }
+@media (hover: none) and (pointer: coarse), (max-width: 600px) {
+  .hint-desktop { display: none; }
+  .hint-mobile  { display: block; }
+}
+
 /* ── Status ─────────────────────────────────────────────────────────────── */
 
 #status {
