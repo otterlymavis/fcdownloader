@@ -226,8 +226,24 @@ def _run_ydl(
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(page_url, download=False)
     except Exception as e:  # noqa: BLE001
-        print(f"[ydl] failed for {page_url} (referer={referer}, cookies={bool(cookies)}): {str(e)[:200]}")
-        raise HTTPException(502, f"yt-dlp: {e}")
+        msg = str(e)
+        # yt-dlp returns "Unsupported URL" for sites it doesn't have a
+        # dedicated extractor for. Retry with the generic extractor — it
+        # scrapes the page for video tags / m3u8 URLs / iframe embeds and
+        # often succeeds where the URL-pattern matchers gave up
+        # (AmusePlus → Vimeo iframe is the canonical case).
+        if "Unsupported URL" in msg:
+            print(f"[ydl] retrying with generic extractor for {page_url}")
+            try:
+                ydl_opts["force_generic_extractor"] = True
+                with YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(page_url, download=False)
+            except Exception as e2:  # noqa: BLE001
+                print(f"[ydl] generic also failed for {page_url}: {str(e2)[:200]}")
+                raise HTTPException(502, f"yt-dlp: {e2}")
+        else:
+            print(f"[ydl] failed for {page_url} (referer={referer}, cookies={bool(cookies)}): {msg[:200]}")
+            raise HTTPException(502, f"yt-dlp: {e}")
     if not info:
         raise HTTPException(502, "yt-dlp returned no info")
     return info
