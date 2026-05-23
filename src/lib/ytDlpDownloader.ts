@@ -1,32 +1,20 @@
 /**
- * YouTube download flow.
+ * YouTube download flow — on-device only.
  *
- * The complexity here is intentionally bounded. We do NOT attempt to bypass
- * po_token / BotGuard / Service-Worker-hidden segment requests on-device —
- * those approaches were tried (page-scrape + nsig regex, headless WebView
- * capture, glibc yt-dlp binary in jniLibs) and all failed for the same root
- * cause: modern YouTube adaptive playback is gated on signatures we can't
- * compute on the device.
+ * No bypass attempts for po_token / BotGuard. Always re-extracts via
+ * InnerTube (HLS HD when YouTube serves it, 360p muxed mp4 otherwise) and
+ * routes by media shape: HLS → downloadHLS, direct mp4 → streamToDisk.
  *
- * Two tiers, both already invoked at extraction time in `platformExtractors`:
- *   1. Optional server extractor (if user has configured one)
- *   2. InnerTube — HLS HD when YouTube hands out an hlsManifestUrl, 360p
- *      muxed mp4 (itag 18) as the guaranteed fallback
- *
- * Whatever `media` arrives here, we delegate to the right downloader based on
- * shape: HLS manifest → downloadHLS, paired adaptive (server tier only) →
- * downloadDASH+native mux, direct mp4 → streamToDisk. We also re-extract
- * because browser-captured URLs typically reflect the low-res variant the
- * WebView was streaming.
+ * We re-extract instead of trusting `media.url` because URLs captured during
+ * in-browser playback usually reflect the low-res variant the WebView was
+ * actually streaming.
  */
 import * as FileSystem from 'expo-file-system/legacy';
 import { File } from 'expo-file-system';
 import { fetch as expoFetch } from 'expo/fetch';
 import { DetectedMedia } from '../types';
 import { downloadHLS, DownloadOptions } from './hlsDownloader';
-import { downloadDASH } from './dashDownloader';
 import { extractYouTubeStreams } from './ytExtractor';
-import { extractViaServer } from './serverExtractor';
 
 const YT_CDN_HEADERS: Record<string, string> = {
   'User-Agent':
@@ -95,19 +83,16 @@ export async function downloadWithYtDlp(
   // Always re-extract — browser-captured URLs typically reflect whatever
   // low-res variant the WebView player happened to be streaming.
   console.log('[ytDlp] re-extracting from page:', media.pageUrl);
-  let items = await extractViaServer(media.pageUrl);
-  if (items.length === 0) items = await extractYouTubeStreams(media.pageUrl);
+  const items = await extractYouTubeStreams(media.pageUrl);
 
   if (items.length === 0) {
     throw new Error('YouTube extraction failed — video may be unavailable or require sign-in');
   }
 
   // Preference: HLS manifest (HD when YouTube serves it, no muxing required)
-  //           → paired adaptive (HD from server extractor → native mux)
   //           → muxed mp4 (360p guaranteed fallback).
   const best =
     items.find((f) => f.mediaType === 'hls' && /\.m3u8|\/manifest\//i.test(f.url)) ??
-    items.find((f) => f.audioTrackUrl) ??
     items.find((f) => f.hasAudio && f.hasVideo) ??
     items[0];
 
@@ -120,11 +105,6 @@ export async function downloadWithYtDlp(
   // HLS manifest → segment downloader (handles master playlist + variant pick).
   if (best.mediaType === 'hls' && /\.m3u8|\/manifest\//i.test(best.url)) {
     return downloadHLS(best, taskId, opts);
-  }
-  // Paired adaptive (server tier only) → DASH downloader's paired-track path
-  // muxes via the native MediaMuxerModule.
-  if (best.audioTrackUrl) {
-    return downloadDASH(best, taskId, opts);
   }
 
   // Direct progressive mp4 (360p itag-18 or anything single-file).

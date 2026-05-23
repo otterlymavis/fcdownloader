@@ -1,5 +1,0 @@
-fastapi>=0.115.4
-uvicorn[standard]>=0.32.0
-yt-dlp>=2025.11.12
-pydantic>=2.10.0
-slowapi>=0.1.9

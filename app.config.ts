@@ -84,11 +84,5 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     eas: {
       projectId: '47226a0f-42c7-47ba-8e7e-c52d907118fe',
     },
-    // Built-in HD extractor backend. Set in .env.local:
-    //   EXPO_PUBLIC_EXTRACTOR_URL=https://your-app.fly.dev
-    //   EXPO_PUBLIC_EXTRACTOR_TOKEN=...
-    // These are inlined at build time. Leave unset to fall back to on-device 360p.
-    bundledExtractorUrl:   process.env.EXPO_PUBLIC_EXTRACTOR_URL   ?? '',
-    bundledExtractorToken: process.env.EXPO_PUBLIC_EXTRACTOR_TOKEN ?? '',
   },
 });

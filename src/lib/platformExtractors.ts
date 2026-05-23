@@ -5,7 +5,6 @@
  */
 import { DetectedMedia, Provenance } from '../types';
 import { extractYouTubeStreams } from './ytExtractor';
-import { extractViaServer } from './serverExtractor';
 
 let _seq = 0;
 const genId = () => `ext_${Date.now()}_${_seq++}`;
@@ -175,29 +174,17 @@ async function extractDailymotion(pageUrl: string): Promise<DetectedMedia[]> {
 // ── YouTube ───────────────────────────────────────────────────────
 
 /**
- * YouTube extraction. Two on-device tiers + one optional off-device tier:
+ * YouTube extraction — on-device only.
  *
- *   1. Server extractor — when the user has configured a backend running real
- *      yt-dlp (Settings → HD extractor URL). Returns whatever the server gives
- *      us, typically HD paired streams or an HLS manifest.
- *   2. InnerTube IOS / ANDROID — HLS HD when YouTube serves hlsManifestUrl
- *      (opportunistic), 360p muxed itag-18 as the guaranteed fallback.
+ * Returns HLS HD when YouTube serves `hlsManifestUrl` for the video
+ * (opportunistic — some videos qualify, others don't). Otherwise falls back
+ * to the InnerTube ANDROID itag-18 muxed mp4 (360p, always available).
  *
- * Page-scrape (`split("")…join("")` decipher), headless-WebView capture, and
- * the yt-dlp binary path are intentionally gone — none of them survive
- * current YouTube anti-bot / Service Worker layers in a way we can rely on.
+ * No on-device path can reliably produce HD for videos that lack
+ * hlsManifestUrl because YouTube's po_token / BotGuard layer gates the HD
+ * adaptive URLs. This is by design: app stays simple, no backend, no costs.
  */
 async function extractYouTube(pageUrl: string): Promise<DetectedMedia[]> {
-  // Tier 1: server-assisted HD (only if user configured a backend).
-  try {
-    const items = await extractViaServer(pageUrl);
-    if (items.length > 0) return items;
-  } catch (e) {
-    console.warn('[extractYouTube] server extractor errored:', String(e).slice(0, 200));
-  }
-
-  // Tier 2: on-device InnerTube. Returns HLS HD when available, otherwise the
-  // 360p muxed mp4. Always returns at least the 360p item if InnerTube responds.
   return extractYouTubeStreams(pageUrl);
 }
 

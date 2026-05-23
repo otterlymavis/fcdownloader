@@ -30,24 +30,6 @@
         "resourceClass": "m-medium",
         "buildConfiguration": "Release"
       }
-    },
-    "local-only": {
-      "extends": "production",
-      "channel": "local-only",
-      "env": {
-        "EXPO_PUBLIC_EXTRACTOR_URL": "",
-        "EXPO_PUBLIC_EXTRACTOR_TOKEN": ""
-      },
-      "android": {
-        "buildType": "apk"
-      }
-    },
-    "preview-local-only": {
-      "extends": "preview",
-      "env": {
-        "EXPO_PUBLIC_EXTRACTOR_URL": "",
-        "EXPO_PUBLIC_EXTRACTOR_TOKEN": ""
-      }
     }
   },
   "submit": {
