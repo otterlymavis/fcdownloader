@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "FCDownloader",
+  "version": "1.0.0",
+  "description": "Save videos from YouTube, Vimeo, Twitter, Instagram, Threads, TikTok and 1800+ more.",
+  "permissions": [
+    "downloads",
+    "storage",
+    "activeTab",
+    "tabs",
+    "cookies",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "FCDownloader",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "fcdownloader@mavisssz97.example",
+      "strict_min_version": "115.0"
+    }
+  }
+}

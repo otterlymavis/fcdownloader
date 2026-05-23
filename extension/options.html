@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>FCDownloader Settings</title>
+  <link rel="stylesheet" href="popup.css" />
+  <style>
+    body { width: 420px; padding: 20px; max-height: none; }
+    label { display: block; margin: 14px 0; font-size: 12px; color: var(--ink2); }
+    label input[type="url"] {
+      display: block;
+      width: 100%;
+      margin-top: 6px;
+      padding: 10px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font: inherit;
+      color: var(--ink);
+    }
+    .checkbox-row { display: flex; gap: 8px; align-items: center; margin: 14px 0; }
+    h2 { margin: 0 0 6px; font-size: 16px; }
+    p.hint { margin: 0; color: var(--ink2); font-size: 11px; }
+    .save-row { display: flex; gap: 8px; align-items: center; margin-top: 18px; }
+    #saved { color: var(--ink2); font-size: 11px; }
+  </style>
+</head>
+<body>
+  <h2>FCDownloader settings</h2>
+  <p class="hint">All settings sync across browsers signed into the same account (via chrome.storage.sync).</p>
+
+  <label>
+    Backend URL
+    <input id="backend" type="url" placeholder="https://fcdownloader-extractor.fly.dev" />
+  </label>
+  <p class="hint">Leave empty for the default. Point at your own Fly deployment for personal use.</p>
+
+  <div class="checkbox-row">
+    <input id="muxRemote" type="checkbox" checked />
+    <label for="muxRemote" style="margin: 0;">Route HLS/HD streams through the backend (recommended)</label>
+  </div>
+
+  <div class="save-row">
+    <button id="save" class="primary" type="button" style="margin: 0; width: auto;">Save</button>
+    <span id="saved"></span>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
