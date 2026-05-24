@@ -1,0 +1,110 @@
+name: Release Extension
+
+# Builds the browser extension zip with your backend URL baked in and
+# attaches it to a GitHub Release.
+#
+# Triggers:
+#   - Push of a version tag (e.g. `git tag v1.1.0 && git push origin v1.1.0`)
+#     → packs the extension AND creates a GitHub Release with the zip attached
+#   - Manual `workflow_dispatch` from the Actions tab → packs but does NOT
+#     create a release (artifact only — handy for testing)
+#
+# Required GitHub secret:
+#   EXTENSION_DEFAULT_BACKEND
+#     The public URL of your Fly/Cloudflare extractor deployment, e.g.
+#     https://your-instance.fly.dev. Baked into config.js at packaging
+#     time so end users install a one-click-working extension.
+#
+# Release-only triggered: GITHUB_TOKEN (provided automatically by Actions)
+# is used to create the release.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # required to create releases
+
+jobs:
+  pack:
+    name: Pack extension (${{ github.ref_name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Verify EXTENSION_DEFAULT_BACKEND is set
+        env:
+          B: ${{ secrets.EXTENSION_DEFAULT_BACKEND }}
+        run: |
+          if [ -z "$B" ]; then
+            echo "::error::EXTENSION_DEFAULT_BACKEND secret is not set. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      - name: Pack extension
+        env:
+          EXTENSION_DEFAULT_BACKEND: ${{ secrets.EXTENSION_DEFAULT_BACKEND }}
+        run: npm run pack:extension
+
+      - name: Capture pack output paths
+        id: pack
+        run: |
+          ZIP=$(ls dist/fcdownloader-extension-v*.zip | head -1)
+          VERSION=$(node -p "require('./extension/manifest.json').version")
+          echo "zip=$ZIP"        >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Packed $ZIP (manifest version $VERSION)"
+          ls -lh "$ZIP"
+
+      - name: Verify backend URL was actually baked in
+        run: |
+          # Belt-and-suspenders: if the substitution silently no-op'd, fail
+          # CI rather than ship an empty-default zip.
+          unzip -p "${{ steps.pack.outputs.zip }}" config.js | grep -q 'FCDL_DEFAULT_BACKEND = "https' \
+            || { echo "::error::FCDL_DEFAULT_BACKEND was not substituted into config.js"; exit 1; }
+          echo "FCDL_DEFAULT_BACKEND present in packed config.js ✓"
+
+      - name: Upload zip as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcdownloader-extension-v${{ steps.pack.outputs.version }}-${{ github.run_number }}
+          path: ${{ steps.pack.outputs.zip }}
+          retention-days: 90
+          if-no-files-found: error
+
+      # Release step — only on tag pushes, not on manual dispatch
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          # Idempotent: if the release already exists (e.g. retriggered),
+          # just upload the asset; otherwise create it.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists — uploading asset"
+            gh release upload "$TAG" "${{ steps.pack.outputs.zip }}" --clobber
+          else
+            echo "Creating release $TAG"
+            gh release create "$TAG" \
+              --title "FCDownloader extension $TAG" \
+              --notes "Browser extension build for $TAG.
+
+          Install: download the .zip, unpack, and load as 'unpacked extension' in
+          chrome://extensions (developer mode). Backend URL is baked in — no
+          manual configuration needed on first run." \
+              "${{ steps.pack.outputs.zip }}"
+          fi

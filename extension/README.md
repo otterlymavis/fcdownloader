@@ -117,3 +117,32 @@ without unpacking.
   Falls back to backend on failure.
 - **Firefox Android**: works via custom collection but not officially
   packaged here. Chrome Android does not support extensions at all.
+
+## Releasing a public-distribution build
+
+The committed source has an empty `FCDL_DEFAULT_BACKEND` in `config.js`,
+so building the extension as-is requires the end user to enter the
+backend URL once. For a public-facing release you want the URL baked in.
+
+### One-off local build
+
+```bash
+EXTENSION_DEFAULT_BACKEND=https://your-instance.fly.dev npm run pack:extension
+# produces dist/fcdownloader-extension-v<version>.zip
+```
+
+### Automated via GitHub Actions
+
+1. Add the repo secret `EXTENSION_DEFAULT_BACKEND` (Settings → Secrets and
+   variables → Actions) set to your backend URL.
+2. Tag a version and push the tag:
+   ```bash
+   git tag v1.1.0 && git push origin v1.1.0
+   ```
+3. The `Release Extension` workflow runs, packs the extension with the
+   URL baked in, and attaches `fcdownloader-extension-v1.1.0.zip` to a
+   new GitHub Release named after the tag.
+
+The workflow can also be triggered manually from the Actions tab — that
+produces a workflow artifact only (no GitHub Release), useful for
+verifying a packed build before tagging.
