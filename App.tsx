@@ -517,7 +517,25 @@ export default function App() {
                 style={[s.pasteInput, { backgroundColor: t.card, color: t.ink, fontSize: fs(15),
                   ...(IS_ANDROID && { backgroundColor: t.card2 }) }]}
                 value={pasteUrl}
-                onChangeText={setPasteUrl}
+                onChangeText={(text) => {
+                  // Auto-extract first http(s) URL when the change looks like
+                  // a paste (large delta) and the result contains noise
+                  // around a URL — common with share-sheet output like
+                  // "Watch this: https://… via @user". Manual typing changes
+                  // 1-2 chars at a time so this never disrupts editing.
+                  const delta = Math.abs(text.length - pasteUrl.length);
+                  if (delta >= 6) {
+                    const m = text.match(/https?:\/\/[^\s<>"'`\\]+/i);
+                    if (m) {
+                      const url = m[0].replace(/[.,;:!?)\]}>'"]+$/, '');
+                      if (url !== text.trim()) {
+                        setPasteUrl(url);
+                        return;
+                      }
+                    }
+                  }
+                  setPasteUrl(text);
+                }}
                 placeholder="Paste URL here"
                 placeholderTextColor={t.ink3}
                 autoCapitalize="none"

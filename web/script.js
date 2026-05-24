@@ -1,95 +1,45 @@
-// fcdownloader web frontend — single-screen, no library, no history.
-// Talks to the Fly-hosted yt-dlp backend; the browser handles file saving.
-
 const DEFAULT_BACKEND = "https://fcdownloader-extractor.fly.dev";
-const SETTINGS_KEY = "fcdl.web.settings.v1";
 
-// ── State ───────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
 
-const settings = loadSettings();
-applyTheme(settings.theme);
+const form = $("general-form");
+const urlIn = $("url");
+const submit = $("submit");
+const status = $("status");
+const result = $("result");
+const thumb = $("thumb");
+const titleEl = $("title");
+const metaEl = $("meta");
+const downloadLink = $("download");
+const reset = $("reset");
+const bookmarklet = $("bookmarklet");
 
-function loadSettings() {
-  try {
-    return { theme: "system", backend: "", ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
-  } catch {
-    return { theme: "system", backend: "" };
-  }
-}
-function saveSettings() { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
-
-function applyTheme(theme) {
-  if (theme === "system") document.documentElement.removeAttribute("data-theme");
-  else document.documentElement.setAttribute("data-theme", theme);
-}
+let sharedReferer = "";
+let sharedCookies = "";
 
 function getBackend() {
   const qs = new URLSearchParams(location.search).get("api");
   if (qs) return clean(qs);
-  if (settings.backend) return clean(settings.backend);
+
   if (window.EXTRACTOR_URL) return clean(window.EXTRACTOR_URL);
+
   const meta = document.querySelector('meta[name="extractor-url"]');
   if (meta?.content) return clean(meta.content);
+
   return DEFAULT_BACKEND;
 }
-function clean(url) { return String(url).trim().replace(/\/+$/, ""); }
 
-// ── DOM ─────────────────────────────────────────────────────────────────────
+function clean(url) {
+  return String(url).trim().replace(/\/+$/, "");
+}
 
-const $ = (id) => document.getElementById(id);
-const form     = $("form");
-const urlIn    = $("url");
-const refIn    = $("referer");
-const cookIn   = $("cookies");
-const advanced = $("advanced");
-const submit   = $("submit");
-const status   = $("status");
-const preview  = $("preview");
-const thumb    = $("thumb");
-const titleEl  = $("title");
-const metaEl   = $("meta");
-const downloadLink = $("download");
-const settingsBtn  = $("settings-btn");
-const settingsDlg  = $("settings");
-const themeSelect  = $("theme-select");
-const bookmarklet  = $("bookmarklet");
-
-// ── Bookmarklet ─────────────────────────────────────────────────────────────
-//
-// Runs in the user's browser tab on a video page. Sends the *page URL* to the
-// web app (not the iframe src — yt-dlp's generic extractor handles embed
-// discovery, and using the page URL avoids Vimeo's "embed-only" error). Also
-// forwards readable cookies for paywalled / login-gated pages. HttpOnly
-// cookies aren't readable by bookmarklets, but most session cookies are.
-
-// The bookmarklet runs in the user's authenticated browser tab where the
-// JS-rendered DOM has any embed iframes the static page HTML doesn't expose
-// (AmusePlus → Vimeo is the canonical case). Strategy:
-//   1. Scan the rendered DOM for known embed iframes (Vimeo, YouTube, Twitch,
-//      Dailymotion). If found, that's the *real* video URL — send it as
-//      ?url=. The original page URL goes as ?ref= so Vimeo's domain check
-//      passes.
-//   2. If no embed iframe is found, send the page URL itself and hope
-//      yt-dlp's matchers handle it.
-//   3. Always include readable cookies. HttpOnly cookies aren't accessible
-//      from a bookmarklet — for those sites, the mobile app is still needed.
-const FRONTEND = location.origin + location.pathname;
 function buildBookmarklet() {
-  // Scans the rendered DOM in priority order:
-  //   1. iframes with src matching a known embed host
-  //   2. iframes with data-src / data-lazy-src attributes (some sites
-  //      lazy-load the player)
-  //   3. <video src> / <source src> direct media tags
-  //   4. Vimeo / YouTube URLs anywhere in the page HTML (matches inline
-  //      <script> blocks, JSON-LD, JS strings, etc.)
-  // Shows an alert listing every iframe seen so you can debug why a site
-  // isn't being detected. If nothing is found, falls back to the page URL.
+  const frontend = location.origin + location.pathname;
   const src =
     `(function(){` +
     `var u=location.href;` +
     `var v=null;` +
     `var re=/https?:\\/\\/(?:player\\.vimeo\\.com\\/video\\/\\d+|www\\.youtube\\.com\\/embed\\/[\\w-]+|youtube\\.com\\/embed\\/[\\w-]+|player\\.twitch\\.tv\\/[^\\s"']+|(?:www\\.)?dailymotion\\.com\\/embed\\/[\\w-]+|fast\\.wistia\\.net\\/embed\\/[^\\s"']+)/;` +
-    // 1. iframes
     `var ifs=document.querySelectorAll("iframe");` +
     `var seen=[];` +
     `for(var i=0;i<ifs.length;i++){` +
@@ -97,31 +47,66 @@ function buildBookmarklet() {
       `if(s)seen.push(s);` +
       `if(s&&re.test(s)&&!v)v=s.match(re)[0];` +
     `}` +
-    // 2. direct <video src> / <source src>
     `if(!v){` +
       `var vs=document.querySelectorAll("video[src],video source[src]");` +
       `for(var k=0;k<vs.length&&!v;k++)v=vs[k].currentSrc||vs[k].src;` +
     `}` +
-    // 3. scan whole-page HTML for embed URLs
     `if(!v){var m=document.documentElement.outerHTML.match(re);if(m)v=m[0];}` +
-    `if(!v){` +
-      `alert("FCDownload: no recognised embed/video found on this page.\\n\\nIframes seen:\\n"+(seen.length?seen.join("\\n"):"(none)"));` +
-      `return;` +
-    `}` +
+    `if(!v){alert("FCDownload: no recognised embed/video found on this page.\\n\\nIframes seen:\\n"+(seen.length?seen.join("\\n"):"(none)"));return;}` +
     `var c=document.cookie||"";` +
-    `var t="${FRONTEND}#url="+encodeURIComponent(v)` +
+    `var t="${frontend}#url="+encodeURIComponent(v)` +
       `+"&ref="+encodeURIComponent(u)` +
       `+(c?"&cookies="+encodeURIComponent(c):"");` +
     `window.open(t,"_blank");` +
     `})();`;
+
   return "javascript:" + encodeURIComponent(src);
 }
-if (bookmarklet) bookmarklet.href = buildBookmarklet();
 
-// ── UI helpers ──────────────────────────────────────────────────────────────
+if (bookmarklet) {
+  bookmarklet.href = buildBookmarklet();
+}
+
+// ── Auto-extract URL from messy pastes ───────────────────────────────
+//
+// Browsers' built-in share sheets and copy buttons frequently append junk
+// to the clipboard: titles, tracking text, hashtags, "Sent from my..." sigs.
+// If the user pastes something with a URL buried in it, pluck the URL out
+// and replace the pasted content with just that. We only do this on `paste`
+// (not on every keystroke) so manual typing isn't affected.
+const URL_RE = /https?:\/\/[^\s<>"'`\\]+/i;
+
+function extractFirstUrl(text) {
+  if (!text) return null;
+  const m = text.match(URL_RE);
+  if (!m) return null;
+  // Trim trailing punctuation that's almost certainly not part of the URL
+  // ("Check this out: <URL>." — strip the trailing "." and similar).
+  return m[0].replace(/[.,;:!?)\]}>'"]+$/, "");
+}
+
+if (urlIn) {
+  urlIn.addEventListener("paste", (event) => {
+    const pasted = (event.clipboardData || window.clipboardData)?.getData("text") || "";
+    const url = extractFirstUrl(pasted);
+    if (!url) return;
+    // If the paste is JUST a URL, let the browser handle it normally — no point
+    // intercepting. Only rewrite when there's surrounding noise.
+    if (pasted.trim() === url) return;
+    event.preventDefault();
+    urlIn.value = url;
+    urlIn.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
 
 function setStatus(text, isError = false) {
-  if (!text) { status.hidden = true; status.textContent = ""; status.classList.remove("error"); return; }
+  if (!text) {
+    status.hidden = true;
+    status.textContent = "";
+    status.classList.remove("error");
+    return;
+  }
+
   status.hidden = false;
   status.textContent = text;
   status.classList.toggle("error", isError);
@@ -129,109 +114,101 @@ function setStatus(text, isError = false) {
 
 function setBusy(busy) {
   submit.disabled = busy;
-  submit.textContent = busy ? "Fetching…" : "Fetch";
+  submit.textContent = busy ? "Fetching..." : "Fetch Video";
 }
 
-function fmtDuration(s) {
-  if (!Number.isFinite(s)) return "";
-  s = Math.floor(s);
+function fmtDuration(seconds) {
+  if (!Number.isFinite(seconds)) return "";
+
+  const s = Math.floor(seconds);
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const sec = s % 60;
+
   if (h) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
-
-// ── API ─────────────────────────────────────────────────────────────────────
 
 async function extract(pageUrl, referer, cookies) {
   const body = { pageUrl };
   if (referer) body.referer = referer;
   if (cookies) body.cookies = cookies;
-  const r = await fetch(`${getBackend()}/extract`, {
+
+  const response = await fetch(`${getBackend()}/extract`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) {
-    const detail = await r.text().catch(() => r.statusText);
-    throw new Error(`${r.status} — ${detail.slice(0, 220)}`);
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => response.statusText);
+    throw new Error(`${response.status} - ${detail.slice(0, 180)}`);
   }
-  return r.json();
+
+  return response.json();
 }
 
 function buildDownloadUrl(pageUrl, referer, cookies) {
-  const p = new URLSearchParams({ url: pageUrl });
-  if (referer) p.set("referer", referer);
-  if (cookies) p.set("cookies", cookies);
-  return `${getBackend()}/download?${p.toString()}`;
+  const params = new URLSearchParams({ url: pageUrl });
+  if (referer) params.set("referer", referer);
+  if (cookies) params.set("cookies", cookies);
+  return `${getBackend()}/download?${params.toString()}`;
 }
 
-// ── Form submit ─────────────────────────────────────────────────────────────
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
 
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const url      = urlIn.value.trim();
-  const referer  = (refIn?.value ?? "").trim();
-  const cookies  = (cookIn?.value ?? "").trim();
+  const url = urlIn.value.trim();
   if (!url) return;
 
-  preview.hidden = true;
+  result.hidden = true;
   setBusy(true);
-  setStatus(referer || cookies ? "Resolving (with referer/cookies)…" : "Resolving stream URLs…");
+  setStatus("Finding your video...");
 
   try {
-    const info = await extract(url, referer || null, cookies || null);
-    preview.hidden = false;
-    setStatus("");
+    const info = await extract(url, sharedReferer || null, sharedCookies || null);
 
     thumb.src = info.thumbnail ?? "";
     thumb.style.display = info.thumbnail ? "" : "none";
     titleEl.textContent = info.title ?? url;
 
-    const bits = [];
-    if (info.label)    bits.push(info.label);
-    if (info.duration) bits.push(fmtDuration(info.duration));
-    if (info.kind)     bits.push(info.kind);
-    metaEl.textContent = bits.join(" · ");
+    const details = [];
+    if (info.label) details.push(info.label);
+    if (info.duration) details.push(fmtDuration(info.duration));
+    if (info.kind) details.push(info.kind);
+    metaEl.textContent = details.join(" - ");
 
-    downloadLink.href = buildDownloadUrl(url, referer || null, cookies || null);
-  } catch (err) {
-    setStatus(`Could not extract: ${err.message}`, true);
+    downloadLink.href = buildDownloadUrl(url, sharedReferer || null, sharedCookies || null);
+    result.hidden = false;
+    setStatus("");
+  } catch (error) {
+    setStatus("We could not fetch this video. Check the link and try again.", true);
   } finally {
     setBusy(false);
   }
 });
 
-// ── Settings dialog ─────────────────────────────────────────────────────────
-
-settingsBtn.addEventListener("click", () => {
-  themeSelect.value = settings.theme || "system";
-  settingsDlg.showModal();
+reset.addEventListener("click", () => {
+  result.hidden = true;
+  setStatus("");
+  urlIn.value = "";
+  sharedReferer = "";
+  sharedCookies = "";
+  urlIn.focus();
 });
-
-settingsDlg.addEventListener("close", () => {
-  if (settingsDlg.returnValue !== "save") return;
-  settings.theme = themeSelect.value;
-  saveSettings();
-  applyTheme(settings.theme);
-});
-
-// ── Initial autofill from bookmarklet payload (?url=&ref=&cookies= or hash) ─
 
 function getParam(name) {
   const search = new URLSearchParams(location.search).get(name);
   if (search) return search;
+
   const hash = new URLSearchParams(location.hash.replace(/^#/, "")).get(name);
-  return hash;
+  return hash || "";
 }
 
-const initUrl     = getParam("url");
-const initRef     = getParam("ref") || getParam("referer");
-const initCookies = getParam("cookies");
+const initUrl = getParam("url");
+sharedReferer = getParam("ref") || getParam("referer");
+sharedCookies = getParam("cookies");
 
-if (initRef && refIn)     { refIn.value = initRef;     if (advanced) advanced.open = true; }
-if (initCookies && cookIn){ cookIn.value = initCookies; if (advanced) advanced.open = true; }
 if (initUrl) {
   urlIn.value = initUrl;
   form.requestSubmit();
