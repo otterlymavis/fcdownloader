@@ -155,39 +155,68 @@ function backendDownloadUrl(backend, pageUrl, referer, cookies) {
 // ── Download orchestration ────────────────────────────────────────────────
 
 async function downloadItem(tabId, item) {
-  const tab = await chrome.tabs.get(tabId);
-  // Prefer the item's own page+referer (from popup-resolved Vimeo embeds);
-  // fall back to the tab's URL for content-script-detected items.
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
   const downloadPageUrl = item.pageUrl || tab?.url || "";
   const referer = item.referer || tab?.url || null;
-  // Read cookies for whichever site we're downloading from — usually the
-  // embedding site, since that's where the user signed in.
   const cookieSourceUrl = referer || downloadPageUrl;
   const cookies = await cookieHeaderFor(cookieSourceUrl);
+  const { backend } = await getSettings();
 
-  // For HLS / DASH / known-server-only sites, always route through the
-  // backend so ffmpeg can mux / convert to a single mp4.
-  const needsMux = item.kind === "hls" || item.kind === "dash" ||
-                   /youtube\.com|youtu\.be|googlevideo\.com|vimeo\.com|player\.vimeo\.com/.test(item.url || downloadPageUrl);
+  console.log("[fcdl] download", {
+    item_url: (item.url || "").slice(0, 80),
+    page: (downloadPageUrl || "").slice(0, 80),
+    referer: (referer || "").slice(0, 80),
+    cookies_chars: cookies.length,
+    backendRouted: !!item.backendRouted,
+    kind: item.kind,
+  });
 
-  if (needsMux) {
-    const { backend } = await getSettings();
+  // Items resolved by /extract (popup "Find videos") always re-route through
+  // the backend's /download with the ORIGINAL page/player URL — not the
+  // resolved CDN URL. Signed CDN URLs (Vimeo, googlevideo) need a specific
+  // Referer header that chrome.downloads can't attach, so a direct
+  // chrome.downloads.download() on them silently 403s.
+  if (item.backendRouted) {
     const dlUrl = backendDownloadUrl(backend, downloadPageUrl, referer, cookies);
-    return chromeDownload(dlUrl, suggestedFilename(item, pageUrl));
+    console.log("[fcdl] → backend (backendRouted)", dlUrl.slice(0, 120));
+    return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl));
   }
 
-  // Direct browser download for plain mp4/webm URLs. chrome.downloads.download
-  // doesn't need CORS but does need the URL reachable; we let the CDN reject
-  // if it can't serve to the browser. Falls back to backend on failure.
+  // HLS / DASH / paired adaptive / known-server-only sites also need backend
+  // muxing. The previous regex missed vimeocdn.com (the actual signed video
+  // host) and the "paired" kind, which is why backend-resolved Vimeo items
+  // were silently failing via direct download.
+  const needsMux =
+    item.kind === "hls" || item.kind === "dash" || item.kind === "paired" || item.kind === "embed" ||
+    /youtube\.com|youtu\.be|googlevideo\.com|(?:player\.)?vimeo\.com|vimeocdn\.com/.test(item.url || downloadPageUrl);
+
+  if (needsMux) {
+    const dlUrl = backendDownloadUrl(backend, downloadPageUrl, referer, cookies);
+    console.log("[fcdl] → backend (needsMux)", dlUrl.slice(0, 120));
+    return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl));
+  }
+
+  // Plain mp4/webm CDN URLs that don't require auth — direct download.
+  console.log("[fcdl] → direct CDN");
   try {
     return await chromeDownload(item.url, suggestedFilename(item, downloadPageUrl));
   } catch (e) {
-    console.warn("[fcdl] direct download failed, falling back to backend:", e);
-    const { backend } = await getSettings();
+    console.warn("[fcdl] direct failed, falling back to backend:", e);
     const dlUrl = backendDownloadUrl(backend, item.url, referer, cookies);
     return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl));
   }
 }
+
+// Surface download failures (the chrome.downloads.download callback gives us
+// a downloadId immediately but the actual file fetch can fail later). Log
+// any interrupted downloads so we can see them in the service-worker console.
+chrome.downloads.onChanged.addListener((delta) => {
+  if (delta.state?.current === "interrupted") {
+    console.warn("[fcdl] download interrupted:", delta);
+  } else if (delta.state?.current === "complete") {
+    console.log("[fcdl] download complete:", delta.id);
+  }
+});
 
 function chromeDownload(url, filename) {
   return new Promise((resolve, reject) => {
@@ -226,8 +255,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     if (msg.type === "fcdl:detected") {
       // From content script: items it found in the DOM
-      const tabId = sender.tab?.id;
-      const pageUrl = sender.tab?.url;
+      const tabId = msg.tabId ?? sender.tab?.id;
+      const pageUrl = msg.pageUrl ?? sender.tab?.url;
       if (tabId != null && pageUrl && Array.isArray(msg.items)) {
         for (const it of msg.items) addItem(tabId, pageUrl, { ...it, source: it.source || "dom" });
       }
@@ -238,7 +267,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // Popup-initiated: hit backend /extract with pageUrl + cookies
       const t0 = Date.now();
       try {
-        const cookies = await cookieHeaderFor(msg.pageUrl);
+        const cookies = await cookieHeaderFor(msg.referer || msg.pageUrl);
         console.log("[fcdl] extract →", msg.pageUrl, "cookies:", cookies.length, "chars");
         const info = await callExtract(msg.pageUrl, msg.referer || null, cookies || null);
         console.log("[fcdl] extract ←", Date.now() - t0, "ms, kind=", info?.kind);

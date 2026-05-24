@@ -12,6 +12,29 @@ const settingsBtn = $("settings-btn");
 let currentTabId = null;
 let currentPageUrl = "";
 
+function sendMessage(message, timeoutMs = 30000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({ ok: false, error: "Timed out waiting for the extension. Reload the page and try again." });
+    }, timeoutMs);
+
+    chrome.runtime.sendMessage(message, (response) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+
+      if (chrome.runtime.lastError) {
+        resolve({ ok: false, error: chrome.runtime.lastError.message });
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
 function setStatus(text, isError = false) {
   if (!text) { status.hidden = true; status.textContent = ""; status.classList.remove("error"); return; }
   status.hidden = false;
@@ -81,6 +104,46 @@ function refresh() {
   });
 }
 
+async function scanVisibleFrames() {
+  if (currentTabId == null || !chrome.scripting?.executeScript) return [];
+
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: currentTabId, allFrames: true },
+    func: () => {
+      const found = [];
+      const embedRe = /https?:\/\/(?:player\.vimeo\.com\/video\/\d+|www\.youtube\.com\/embed\/[\w-]+|youtube\.com\/embed\/[\w-]+|player\.twitch\.tv\/[^\s"']+|(?:www\.)?dailymotion\.com\/embed\/[\w-]+|fast\.wistia\.net\/embed\/[^\s"']+)/;
+      document.querySelectorAll("iframe").forEach((el) => {
+        const src = el.src || el.getAttribute("data-src") || el.getAttribute("data-lazy-src") || "";
+        const match = src.match(embedRe);
+        if (match) found.push({ url: match[0], kind: "embed", source: "iframe" });
+      });
+      document.querySelectorAll("video[src], video source[src]").forEach((el) => {
+        const src = el.currentSrc || el.src || el.getAttribute("src") || "";
+        if (src && !src.startsWith("blob:") && !src.startsWith("data:")) {
+          found.push({
+            url: src,
+            kind: src.includes(".m3u8") ? "hls" : src.includes(".mpd") ? "dash" : "direct",
+            source: "video-tag",
+          });
+        }
+      });
+      const html = document.documentElement?.outerHTML || "";
+      const match = html.match(embedRe);
+      if (match) found.push({ url: match[0], kind: "embed", source: "page-html" });
+      return found;
+    },
+  }).catch(() => []);
+
+  const seen = new Set();
+  return results
+    .flatMap((r) => r.result || [])
+    .filter((item) => {
+      if (!item?.url || seen.has(item.url)) return false;
+      seen.add(item.url);
+      return true;
+    });
+}
+
 (async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) {
@@ -100,28 +163,63 @@ function refresh() {
 
 extractBtn.addEventListener("click", async () => {
   extractBtn.disabled = true;
+  extractBtn.textContent = "Finding videos...";
 
   // Prefer an already-detected embed iframe URL over the parent page URL.
   // yt-dlp can extract https://player.vimeo.com/... directly with the parent
   // as Referer, but it can't handle https://amuseplus.jp/... (no extractor).
   // This is the AmusePlus / Patreon / paywalled-fanclub flow.
-  const currentItems = await new Promise((res) =>
-    chrome.runtime.sendMessage({ type: "fcdl:list", tabId: currentTabId }, (r) => res(r?.items || []))
-  );
+  setStatus("Scanning this page...");
+
+  const scannedItems = await scanVisibleFrames();
+  if (scannedItems.length) {
+    await sendMessage({
+      type: "fcdl:detected",
+      tabId: currentTabId,
+      pageUrl: currentPageUrl,
+      items: scannedItems,
+    }, 5000);
+  }
+
+  const listResponse = await sendMessage({ type: "fcdl:list", tabId: currentTabId }, 5000);
+  const currentItems = [...(listResponse?.items || []), ...scannedItems];
   const knownEmbed = currentItems.find((it) =>
     /(?:player\.vimeo\.com\/video\/|youtube\.com\/embed\/|player\.twitch\.tv|dailymotion\.com\/embed)/.test(it.url)
   );
   const targetUrl = knownEmbed ? knownEmbed.url : currentPageUrl;
   const referer   = knownEmbed ? currentPageUrl : null;
 
+  if (knownEmbed) {
+    const item = {
+      url: knownEmbed.url,
+      title: "Detected embedded video",
+      label: hostname(knownEmbed.url) || "embedded video",
+      kind: knownEmbed.kind || "embed",
+      source: knownEmbed.source || "page",
+      backendRouted: true,
+      pageUrl: targetUrl,
+      referer,
+    };
+    await sendMessage({
+      type: "fcdl:detected",
+      tabId: currentTabId,
+      pageUrl: currentPageUrl,
+      items: [item],
+    }, 5000);
+    const updated = await sendMessage({ type: "fcdl:list", tabId: currentTabId }, 5000);
+    render(updated?.items || [item]);
+    setStatus("Video found. Click Download to save it.");
+    extractBtn.disabled = false;
+    extractBtn.textContent = "Find videos on this page";
+    return;
+  }
+
   setStatus(knownEmbed
     ? `Resolving ${hostname(knownEmbed.url)} (referer: ${hostname(currentPageUrl)})…`
     : "Resolving stream URLs via backend…"
   );
   try {
-    const resp = await new Promise((resolve) =>
-      chrome.runtime.sendMessage({ type: "fcdl:extract", pageUrl: targetUrl, referer }, resolve)
-    );
+    const resp = await sendMessage({ type: "fcdl:extract", pageUrl: targetUrl, referer }, 35000);
     if (!resp?.ok) {
       setStatus(resp?.error || "Backend returned an error.", true);
       return;
@@ -142,36 +240,39 @@ extractBtn.addEventListener("click", async () => {
       pageUrl: targetUrl,      // ← the URL we sent (could be a player.vimeo URL)
       referer:  referer,       // ← the page that embeds it (Vimeo's domain check)
     };
-    chrome.runtime.sendMessage(
-      { type: "fcdl:detected", items: [item] },
-      () => {
-        // Re-fetch the canonical list from the SW.
-        chrome.runtime.sendMessage({ type: "fcdl:list", tabId: currentTabId }, (r) => {
-          if (r) render(r.items || []);
-        });
-      }
-    );
+    await sendMessage({
+      type: "fcdl:detected",
+      tabId: currentTabId,
+      pageUrl: currentPageUrl,
+      items: [item],
+    }, 5000);
+    const updated = await sendMessage({ type: "fcdl:list", tabId: currentTabId }, 5000);
+    render(updated?.items || [item]);
   } catch (e) {
     setStatus(String(e), true);
   } finally {
     extractBtn.disabled = false;
+    extractBtn.textContent = "Find videos on this page";
   }
 });
 
 // ── Per-item Download ──────────────────────────────────────────────────
 
-function downloadItem(item) {
-  setStatus(`Starting download…`);
-  chrome.runtime.sendMessage(
-    { type: "fcdl:download", tabId: currentTabId, item: { ...item, pageUrl: currentPageUrl } },
-    (resp) => {
-      if (!resp?.ok) {
-        setStatus(resp?.error || "Download failed.", true);
-        return;
-      }
-      setStatus(`Download started (#${resp.downloadId}). Check your browser's downloads.`);
-    }
+async function downloadItem(item) {
+  // Don't overwrite item.pageUrl — popup-resolved Vimeo items have it set to
+  // the player URL (with referer = embedding page). Falling back to
+  // currentPageUrl only when the item doesn't already carry one.
+  const itemWithDefaults = { pageUrl: currentPageUrl, ...item };
+  setStatus("Starting download…");
+  const resp = await sendMessage(
+    { type: "fcdl:download", tabId: currentTabId, item: itemWithDefaults },
+    20000,
   );
+  if (!resp?.ok) {
+    setStatus(resp?.error || "Download failed. Check the service-worker console for details.", true);
+    return;
+  }
+  setStatus(`Download started. Check your browser's downloads.`);
 }
 
 // ── Settings ──────────────────────────────────────────────────────────
