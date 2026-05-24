@@ -304,8 +304,20 @@ def _run_ydl(
     if cookies:
         http_headers["Cookie"] = cookies
 
+    # YouTube client selection (order matters — first match wins):
+    #   - tv:          newer TV client, returns non-SABR formats up to 1080p
+    #                  and is the current recommended primary client.
+    #   - web_safari:  desktop client that doesn't require po_token.
+    #   - mweb:        mobile web, lower quality but reliable last-resort.
+    # `android_vr` / `tv_simply` started returning sabr.malformed_config in
+    # early 2026 when YouTube tightened SABR config validation; removed.
+    # `player_skip=configs` tells yt-dlp not to negotiate the SABR config
+    # endpoint that's been changing format under us.
     extractor_args: dict[str, Any] = {
-        "youtube": {"player_client": ["android_vr", "tv_simply", "mweb"]},
+        "youtube": {
+            "player_client": ["tv", "web_safari", "mweb"],
+            "player_skip": ["configs"],
+        },
     }
     # Vimeo's embed-only check reads its `referer` extractor_arg first, then
     # falls back to `ydl_opts['referer']`. Set BOTH to be robust across
@@ -481,8 +493,9 @@ def download(
     request: Request,
     url: str = Query(..., description="Video page or player URL"),
     referer: str | None = Query(None, description="Optional Referer for domain-restricted embeds (e.g. AmusePlus → Vimeo)"),
+    cookies: str | None = Query(None, description="Optional Cookie header for logged-in embeds"),
 ) -> StreamingResponse:
-    info = _run_ydl(url, referer=referer)
+    info = _run_ydl(url, referer=referer, cookies=cookies)
     response = _to_response(info)
     video_id = info.get("id") or _cache_key(url)
     filename = _safe_filename(info.get("title"), video_id)
@@ -498,14 +511,15 @@ def download(
     }
 
     kind = response["kind"]
+    request_headers = _download_headers(referer, cookies)
     if kind == "paired":
         return StreamingResponse(
-            _ffmpeg_stream(response["videoUrl"], response["audioUrl"], None),
+            _ffmpeg_stream(response["videoUrl"], response["audioUrl"], None, request_headers),
             media_type="video/mp4", headers=headers,
         )
     if kind == "hls":
         return StreamingResponse(
-            _ffmpeg_stream("", None, response["url"]),
+            _ffmpeg_stream("", None, response["url"], request_headers),
             media_type="video/mp4", headers=headers,
         )
     # kind == "direct" → already a single mp4, redirect the browser straight to
