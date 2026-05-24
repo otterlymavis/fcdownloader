@@ -1,4 +1,12 @@
-const DEFAULT_BACKEND = "https://fcdownloader-extractor.fly.dev";
+// The backend URL is supplied at runtime — pick the first source that has a
+// value. NEVER hardcode a personal Fly.io / Cloudflare URL here; forks of the
+// project should bring their own backend.
+//
+// In priority order:
+//  1. `?api=https://...` query param (manual override / debugging)
+//  2. `window.EXTRACTOR_URL` global (set by an `index.html` <script> block)
+//  3. `<meta name="extractor-url" content="https://...">` tag (set at deploy time)
+//  4. Empty → the form shows a "configure backend" message instead of submitting.
 
 const $ = (id) => document.getElementById(id);
 
@@ -26,7 +34,7 @@ function getBackend() {
   const meta = document.querySelector('meta[name="extractor-url"]');
   if (meta?.content) return clean(meta.content);
 
-  return DEFAULT_BACKEND;
+  return "";  // No backend configured — caller must handle this gracefully.
 }
 
 function clean(url) {
@@ -39,7 +47,12 @@ function buildBookmarklet() {
     `(function(){` +
     `var u=location.href;` +
     `var v=null;` +
+    `var host=location.hostname||"";` +
     `var re=/https?:\\/\\/(?:player\\.vimeo\\.com\\/video\\/\\d+|www\\.youtube\\.com\\/embed\\/[\\w-]+|youtube\\.com\\/embed\\/[\\w-]+|player\\.twitch\\.tv\\/[^\\s"']+|(?:www\\.)?dailymotion\\.com\\/embed\\/[\\w-]+|fast\\.wistia\\.net\\/embed\\/[^\\s"']+)/;` +
+    `var pageRe=/(?:^|\\.)(?:instagram\\.com|bilibili\\.com|bilibili\\.tv|b23\\.tv)$/i;` +
+    `if(pageRe.test(host))v=u;` +
+    `function dec(s){return String(s||"").replace(/\\\\u0026/g,"&").replace(/\\\\u003d/g,"=").replace(/\\\\\\//g,"/").replace(/&amp;/g,"&");}` +
+    `function scanText(txt){if(v||!txt)return;var pats=[/"video_url"\\s*:\\s*"(https?:\\\\?\\/\\\\?\\/[^"]+)"/,/"playable_url(?:_quality_hd)?"\\s*:\\s*"(https?:\\\\?\\/\\\\?\\/[^"]+)"/,/"browser_native_(?:hd|sd)_url"\\s*:\\s*"(https?:\\\\?\\/\\\\?\\/[^"]+)"/,/(https?:\\\\?\\/\\\\?\\/[^"'\\\\<>\\s]*(?:cdninstagram\\.com|fbcdn\\.net|threadscdn\\.com|bilivideo\\.com)[^"'\\\\<>\\s]*(?:\\.mp4|\\.m3u8)[^"'\\\\<>\\s]*)/];for(var p=0;p<pats.length&&!v;p++){var m=txt.match(pats[p]);if(m)v=dec(m[1]||m[0]);}}` +
     `var ifs=document.querySelectorAll("iframe");` +
     `var seen=[];` +
     `for(var i=0;i<ifs.length;i++){` +
@@ -51,8 +64,12 @@ function buildBookmarklet() {
       `var vs=document.querySelectorAll("video[src],video source[src]");` +
       `for(var k=0;k<vs.length&&!v;k++)v=vs[k].currentSrc||vs[k].src;` +
     `}` +
+    `if(!v){try{if(window.__playinfo__)scanText(JSON.stringify(window.__playinfo__));}catch(e){}}` +
+    `if(!v){try{["__additionalDataLoaded","instagram_data","_sharedData","__initialData","__bbox","__relay_store__"].forEach(function(k){try{if(window[k])scanText(JSON.stringify(window[k]));}catch(e){}});}catch(e){}}` +
+    `if(!v){try{scanText(document.documentElement.outerHTML.slice(0,1500000));}catch(e){}}` +
+    `if(!v){var meta=document.querySelector('meta[property="og:video"],meta[property="og:video:url"],meta[property="og:video:secure_url"],meta[name="twitter:player:stream"]');if(meta&&meta.content)v=meta.content;}` +
     `if(!v){var m=document.documentElement.outerHTML.match(re);if(m)v=m[0];}` +
-    `if(!v){alert("FCDownload: no recognised embed/video found on this page.\\n\\nIframes seen:\\n"+(seen.length?seen.join("\\n"):"(none)"));return;}` +
+    `if(!v){alert("FCDownload: no recognised media found on this page.\\n\\nIframes seen:\\n"+(seen.length?seen.join("\\n"):"(none)"));return;}` +
     `var c=document.cookie||"";` +
     `var t="${frontend}#url="+encodeURIComponent(v)` +
       `+"&ref="+encodeURIComponent(u)` +
@@ -114,7 +131,7 @@ function setStatus(text, isError = false) {
 
 function setBusy(busy) {
   submit.disabled = busy;
-  submit.textContent = busy ? "Fetching..." : "Fetch Video";
+  submit.textContent = busy ? "Fetching..." : "Fetch Media";
 }
 
 function fmtDuration(seconds) {
@@ -130,11 +147,17 @@ function fmtDuration(seconds) {
 }
 
 async function extract(pageUrl, referer, cookies) {
+  const backend = getBackend();
+  if (!backend) {
+    throw new Error(
+      "No backend configured. Set EXTRACTOR_URL via the deploy meta tag, window.EXTRACTOR_URL, or the ?api= query param."
+    );
+  }
   const body = { pageUrl };
   if (referer) body.referer = referer;
   if (cookies) body.cookies = cookies;
 
-  const response = await fetch(`${getBackend()}/extract`, {
+  const response = await fetch(`${backend}/extract`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -163,7 +186,7 @@ form.addEventListener("submit", async (event) => {
 
   result.hidden = true;
   setBusy(true);
-  setStatus("Finding your video...");
+  setStatus("Finding your media...");
 
   try {
     const info = await extract(url, sharedReferer || null, sharedCookies || null);
@@ -182,7 +205,7 @@ form.addEventListener("submit", async (event) => {
     result.hidden = false;
     setStatus("");
   } catch (error) {
-    setStatus("We could not fetch this video. Check the link and try again.", true);
+    setStatus("We could not fetch this media. Check the link and try again.", true);
   } finally {
     setBusy(false);
   }

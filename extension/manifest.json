@@ -49,7 +49,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "fcdownloader@mavisssz97.example",
+      "id": "fcdownloader@example.com",
       "strict_min_version": "115.0"
     }
   }

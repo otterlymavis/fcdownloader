@@ -13,15 +13,16 @@ precedence (highest first):
 1. `?api=https://your-backend` query string  — handy for testing
 2. `window.EXTRACTOR_URL = "..."` inline `<script>` before `script.js`
 3. `<meta name="extractor-url" content="...">` in `index.html`
-4. Hard-coded `DEFAULT_BACKEND` in `script.js` (`fcdownloader-extractor.fly.dev`)
+
+If none of these are set the page shows an error instead of attempting a
+fetch — there's intentionally no hardcoded fallback so forks of this project
+don't accidentally point at someone else's backend.
 
 For your own deploy, the cleanest path is option 3 — edit `index.html`:
 
 ```html
 <meta name="extractor-url" content="https://your-app.fly.dev">
 ```
-
-Or option 4 — edit `DEFAULT_BACKEND` at the top of `script.js`.
 
 ## Deploy to Vercel (1 minute)
 

@@ -14,7 +14,7 @@ Why use the extension instead of the web app or bookmarklet:
 | Download with chosen filename | ⚠ cross-origin filename ignored | ✅ `chrome.downloads.download` |
 | Skip server bandwidth for plain mp4 | ❌ always via backend | ✅ direct CDN download when possible |
 
-Same backend (`https://fcdownloader-extractor.fly.dev`) is used for cases
+Same backend (`https://your-instance.fly.dev`) is used for cases
 that genuinely need server-side muxing (HLS → mp4, paired YouTube HD).
 Configure a different backend in extension Settings.
 
@@ -82,7 +82,7 @@ telemetry.
 
 Click the ⚙ icon in the popup, or right-click the extension icon →
 **Options**. Set the backend URL to your own deployment if you don't want
-to share the default. Leave blank to use `https://fcdownloader-extractor.fly.dev`.
+to share the default. Leave blank to use `https://your-instance.fly.dev`.
 
 ## Building for the Chrome Web Store
 

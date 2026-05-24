@@ -11,7 +11,11 @@
  *    YouTube HD streams.
  */
 
-const DEFAULT_BACKEND = "https://fcdownloader-extractor.fly.dev";
+// The backend URL is configured per-install via the extension options page
+// (chrome.storage.sync key "backend"). No personal URL is hardcoded here —
+// forks of the project should set their own default in the options page or
+// via chrome.storage.managed (enterprise policy).
+const DEFAULT_BACKEND = "";
 
 // ── Detected videos per tab ───────────────────────────────────────────────
 
@@ -151,6 +155,11 @@ async function getSettings() {
 
 async function callExtract(pageUrl, referer, cookies) {
   const { backend } = await getSettings();
+  if (!backend) {
+    throw new Error(
+      "Backend URL is not configured. Open the extension options and set one (e.g. https://your-instance.fly.dev)."
+    );
+  }
   const body = { pageUrl };
   if (referer) body.referer = referer;
   if (cookies) body.cookies = cookies;

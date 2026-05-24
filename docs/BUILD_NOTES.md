@@ -420,11 +420,11 @@ npx vercel --prod                         # if hosting on Vercel manually
 ### Server smoke test from PowerShell
 
 ```powershell
-curl.exe https://fcdownloader-extractor.fly.dev/
+curl.exe https://your-instance.fly.dev/
 # {"ok":true,...}
 
 # Open in a browser (avoids PowerShell URL-encoding weirdness):
-# https://fcdownloader-extractor.fly.dev/download?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ
+# https://your-instance.fly.dev/download?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ
 ```
 
 ---
@@ -510,7 +510,7 @@ cookies**, exactly what the `backend-version` branch ships.
 - master branch (local-only): https://github.com/otterlymavis/fcdownloader/tree/master
 - backend-version branch (full): https://github.com/otterlymavis/fcdownloader/tree/backend-version
 - CI runs: https://github.com/otterlymavis/fcdownloader/actions
-- Fly app: https://fcdownloader-extractor.fly.dev (status check at `/`)
+- Fly app: https://your-instance.fly.dev (status check at `/`)
 
 ---
 

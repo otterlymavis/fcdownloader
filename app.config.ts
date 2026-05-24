@@ -83,7 +83,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ],
   extra: {
     eas: {
-      projectId: '47226a0f-42c7-47ba-8e7e-c52d907118fe',
+      // Personal EAS project ID — supply via env at build time. EAS CLI sets
+      // EXPO_PUBLIC_EAS_PROJECT_ID automatically when you run `eas init`, but
+      // it can also be exported manually (`export EAS_PROJECT_ID=...`). Forks
+      // of the project should run `eas init` to get their own.
+      projectId: process.env.EAS_PROJECT_ID
+                 ?? process.env.EXPO_PUBLIC_EAS_PROJECT_ID
+                 ?? '',
     },
     // Built-in HD extractor backend. Set in .env.local:
     //   EXPO_PUBLIC_EXTRACTOR_URL=https://your-app.fly.dev

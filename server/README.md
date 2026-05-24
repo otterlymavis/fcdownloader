@@ -74,10 +74,10 @@ fly secrets list                           # note the token value here
 
 fly deploy
 fly status                                 # confirm it's running
-curl https://fcdownloader-extractor.fly.dev/
+curl https://your-instance.fly.dev/
 ```
 
-The app's Backend URL becomes `https://fcdownloader-extractor.fly.dev`.
+The app's Backend URL becomes `https://your-instance.fly.dev`.
 Paste the token you set (from `fly secrets list` or whatever you copy/pasted)
 into the **Token** field in Settings.
 
