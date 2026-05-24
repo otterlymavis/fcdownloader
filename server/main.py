@@ -367,9 +367,18 @@ def _run_ydl(
     http_headers: dict[str, str] = {}
     if referer:
         http_headers["Referer"] = referer
-    elif "bilivideo.com" in page_url:
-        http_headers["Referer"] = "https://www.bilibili.com/"
-        http_headers["Origin"] = "https://www.bilibili.com"
+    elif "bilivideo.com" in page_url or "bilibili.com" in page_url:
+        # Bilibili's anti-bot wall on api.bilibili.com / webpage requests
+        # returns HTTP 412 to plain User-Agents. Set the desktop UA + Referer +
+        # Origin so the request looks like a normal browser session, and
+        # yt-dlp's WBI signing has the right context to work against.
+        http_headers["Referer"]    = "https://www.bilibili.com/"
+        http_headers["Origin"]     = "https://www.bilibili.com"
+        http_headers["User-Agent"] = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        )
     if cookies:
         http_headers["Cookie"] = cookies
 
