@@ -7,20 +7,42 @@
 </head>
 <body>
   <header>
-    <strong>FCDownloader</strong>
-    <button id="settings-btn" type="button" title="Settings" aria-label="Settings">⚙</button>
+    <div class="brand">FCDownloader</div>
+    <button id="settings-btn" type="button" aria-label="Settings" title="Settings">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 0 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 0 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>
+      </svg>
+    </button>
   </header>
 
-  <div id="page-info"></div>
+  <main>
+    <p id="page-info" class="page"></p>
 
-  <button id="extract-btn" class="primary" type="button">Find videos on this page</button>
+    <!-- Primary card — the single best detection -->
+    <section id="primary" hidden>
+      <h2 id="primary-title">Video</h2>
+      <p id="primary-meta" class="meta"></p>
+      <button id="primary-download" class="primary" type="button">Download</button>
+    </section>
 
-  <div id="status" hidden></div>
+    <!-- Empty / fallback state -->
+    <section id="empty">
+      <p class="empty-text">Looking for a video on this page…</p>
+      <button id="extract-btn" class="ghost" type="button">Find videos</button>
+    </section>
 
-  <ul id="items"></ul>
+    <div id="status" hidden></div>
+
+    <!-- "More videos" — collapsed by default, only shown when extras exist -->
+    <details id="more" hidden>
+      <summary>Show other videos</summary>
+      <ul id="more-list"></ul>
+    </details>
+  </main>
 
   <footer>
-    <a href="https://github.com/otterlymavis/fcdownloader" target="_blank" rel="noopener">Source</a>
+    <a href="https://github.com/otterlymavis/fcdownloader" target="_blank" rel="noopener">Help</a>
   </footer>
 
   <script src="popup.js"></script>
