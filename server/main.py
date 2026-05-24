@@ -951,9 +951,14 @@ def _download_headers(referer: str | None, cookies: str | None, page_url: str | 
 
 
 def _needs_headered_direct_stream(page_url: str, media_url: str, headers: dict[str, str]) -> bool:
+    combined = f"{page_url} {media_url}".lower()
+    # Weibo direct MP4 URLs are signed and browser-downloadable, while Fly's
+    # resolver intermittently fails on f.us.sinaimg.cn. Redirect these instead
+    # of proxying through the backend, otherwise users get empty files / 502s.
+    if any(host in combined for host in ("weibo.com", "weibo.cn", "sinaimg.cn", "weibocdn.com")):
+        return False
     if headers.get("Cookie"):
         return True
-    combined = f"{page_url} {media_url}".lower()
     return any(host in combined for host in (
         "bilibili.com",
         "bilivideo.com",
@@ -961,9 +966,6 @@ def _needs_headered_direct_stream(page_url: str, media_url: str, headers: dict[s
         "cdninstagram.com",
         "fbcdn.net",
         "threadscdn.com",
-        "weibo.com",
-        "weibo.cn",
-        "weibocdn.com",
         "xiaohongshu.com",
         "xhscdn.com",
     ))
