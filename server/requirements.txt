@@ -1,5 +1,9 @@
 fastapi>=0.115.4
 uvicorn[standard]>=0.32.0
-yt-dlp>=2026.05.01
+# Track yt-dlp master so we pick up YouTube extractor fixes (SABR config,
+# new player_client behaviour) before they hit a tagged release. The latest
+# tag at the time of writing (2025.11.12) is too old to handle the early-2026
+# SABR config rewrite and produces `sabr.malformed_config` errors.
+yt-dlp @ git+https://github.com/yt-dlp/yt-dlp@master
 pydantic>=2.10.0
 slowapi>=0.1.9
