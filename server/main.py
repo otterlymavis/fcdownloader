@@ -953,24 +953,29 @@ def _download_headers(referer: str | None, cookies: str | None, page_url: str | 
     return headers
 
 
+_HEADERED_DIRECT_HOSTS = (
+    "bilibili.com",
+    "bilivideo.com",
+    "instagram.com",
+    "cdninstagram.com",
+    "fbcdn.net",
+    "threadscdn.com",
+    "weibo.com",
+    "weibo.cn",
+    "sinaimg.cn",
+    "weibocdn.com",
+    "xiaohongshu.com",
+    "xhscdn.com",
+)
+
+_SINA_CDN_SUFFIXES = ("sinaimg.cn", "weibocdn.com")
+
+
 def _needs_headered_direct_stream(page_url: str, media_url: str, headers: dict[str, str]) -> bool:
     combined = f"{page_url} {media_url}".lower()
     if headers.get("Cookie"):
         return True
-    return any(host in combined for host in (
-        "bilibili.com",
-        "bilivideo.com",
-        "instagram.com",
-        "cdninstagram.com",
-        "fbcdn.net",
-        "threadscdn.com",
-        "weibo.com",
-        "weibo.cn",
-        "sinaimg.cn",
-        "weibocdn.com",
-        "xiaohongshu.com",
-        "xhscdn.com",
-    ))
+    return any(host in combined for host in _HEADERED_DIRECT_HOSTS)
 
 
 def _ffmpeg_stream(
@@ -1126,6 +1131,7 @@ def _open_https_via_ip(url: str, headers: dict[str, str]) -> http.client.HTTPRes
 
     last_error: Exception | None = None
     for ip in ips[:4]:
+        conn: http.client.HTTPSConnection | None = None
         try:
             sock = socket.create_connection((ip, parsed.port or 443), timeout=15)
             context = ssl.create_default_context()
@@ -1145,10 +1151,11 @@ def _open_https_via_ip(url: str, headers: dict[str, str]) -> http.client.HTTPRes
             return resp
         except Exception as e:  # noqa: BLE001
             last_error = e
-            try:
-                conn.close()  # type: ignore[has-type]
-            except Exception:
-                pass
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     raise urllib.error.URLError(str(last_error or f"could not connect to {host}"))
 
 
@@ -1158,7 +1165,7 @@ def _open_direct_media(url: str, headers: dict[str, str]) -> Any:
         return urllib.request.urlopen(req, timeout=30)
     except urllib.error.URLError as e:
         host = urllib.parse.urlparse(url).hostname or ""
-        if host.endswith("sinaimg.cn") or host.endswith("weibocdn.com"):
+        if host.endswith(_SINA_CDN_SUFFIXES):
             print(f"[direct] system resolver/open failed for {host}: {str(e)[:160]}; trying DoH/IP")
             return _open_https_via_ip(url, headers)
         raise
