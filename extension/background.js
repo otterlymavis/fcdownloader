@@ -46,33 +46,41 @@ function updateBadge(tabId, count) {
 }
 
 // ── webRequest interception — catches segment URLs the DOM doesn't show ───
-
+//
 // MV3 forbids blocking webRequest in production, but onCompleted (non-blocking
-// observation) is allowed and gives us exactly what we need.
-chrome.webRequest.onCompleted.addListener(
-  (details) => {
-    if (!details.tabId || details.tabId < 0) return;
-    const u = details.url;
-    if (!u || u.length < 12) return;
+// observation) is allowed and gives us exactly what we need. Guarded by a
+// try/catch + null check because the API may be missing if the webRequest
+// permission isn't granted (or the user is on a fork that strips it).
+try {
+  if (chrome.webRequest?.onCompleted) {
+    chrome.webRequest.onCompleted.addListener(
+      (details) => {
+        if (!details.tabId || details.tabId < 0) return;
+        const u = details.url;
+        if (!u || u.length < 12) return;
+        if (!isLikelyMedia(u)) return;
 
-    // Filter to known video patterns. Captures HLS / DASH / mp4 from common
-    // CDNs without spamming the list with every CSS / JS / image request.
-    if (!isLikelyMedia(u)) return;
-
-    chrome.tabs.get(details.tabId).then((tab) => {
-      if (!tab?.url) return;
-      addItem(details.tabId, tab.url, {
-        url: u,
-        kind: u.includes(".m3u8") ? "hls" :
-              u.includes(".mpd")  ? "dash" : "direct",
-        source: "network",
-        mime: details.responseHeaders?.find((h) => /content-type/i.test(h.name))?.value || "",
-      });
-    }).catch(() => {});
-  },
-  { urls: ["<all_urls>"] },
-  ["responseHeaders"],
-);
+        chrome.tabs.get(details.tabId).then((tab) => {
+          if (!tab?.url) return;
+          addItem(details.tabId, tab.url, {
+            url: u,
+            kind: u.includes(".m3u8") ? "hls" :
+                  u.includes(".mpd")  ? "dash" : "direct",
+            source: "network",
+            mime: details.responseHeaders?.find((h) => /content-type/i.test(h.name))?.value || "",
+          });
+        }).catch(() => {});
+      },
+      { urls: ["<all_urls>"] },
+      ["responseHeaders"],
+    );
+    console.log("[fcdl] webRequest listener registered");
+  } else {
+    console.warn("[fcdl] chrome.webRequest unavailable — install permission missing?");
+  }
+} catch (e) {
+  console.warn("[fcdl] webRequest setup failed:", e);
+}
 
 function isLikelyMedia(url) {
   const u = url.toLowerCase().split("?")[0];

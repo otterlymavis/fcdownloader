@@ -9,7 +9,8 @@
     "activeTab",
     "tabs",
     "cookies",
-    "scripting"
+    "scripting",
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"
