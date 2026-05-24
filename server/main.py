@@ -501,9 +501,26 @@ def extract(
 
     if response.get("kind") == "paired":
         rf = info.get("requested_formats", [{}, {}])
-        print(f"[extract] paired: video={rf[0].get('format_id')} audio={rf[1].get('format_id')} {response.get('label')}")
+        print(f"[extract] paired: video={rf[0].get('format_id')} ({rf[0].get('height')}p {rf[0].get('vcodec')}) audio={rf[1].get('format_id')} {response.get('label')} extractor={info.get('extractor')}")
     else:
-        print(f"[extract] {response.get('kind')}: itag={info.get('format_id')} {response.get('label')}")
+        print(f"[extract] {response.get('kind')}: itag={info.get('format_id')} height={info.get('height')} vcodec={info.get('vcodec')} {response.get('label')} extractor={info.get('extractor')}")
+
+    # Bilibili-specific: yt-dlp needs a SESSDATA cookie for bilibili.com to
+    # return anything above 480p. If we picked <720p for a Bilibili URL, the
+    # cookies file is almost certainly the cause — log it so it shows up in
+    # `fly logs` next to the request.
+    if "bilibili" in (info.get("extractor") or "") or "bilibili.com" in req.pageUrl:
+        h = info.get("height") or (info.get("requested_formats") or [{}])[0].get("height") or 0
+        if h and h < 720:
+            has_bili_cookies = False
+            if COOKIES_FILE and os.path.exists(COOKIES_FILE):
+                try:
+                    with open(COOKIES_FILE, "r", encoding="utf-8", errors="ignore") as f:
+                        has_bili_cookies = any("bilibili" in line for line in f)
+                except Exception:
+                    pass
+            print(f"[extract] WARNING: Bilibili capped at {h}p. cookies_have_bilibili={has_bili_cookies}. "
+                  f"Upload a cookies.txt with bilibili.com SESSDATA to YT_COOKIES_BASE64.")
 
     _cache_put(cache_key, response)
     return response
@@ -688,6 +705,164 @@ def download_post(
         _ffmpeg_stream("", None, response["url"], request_headers),
         media_type="video/mp4", headers=headers,
     )
+
+
+# ── /debug — diagnostic endpoint, no caching, returns yt-dlp's raw format list
+#
+# Use this to figure out *why* a given URL came back at the quality it did.
+# Two interesting buckets:
+#  - max_height_seen < expected (e.g. 480 for Bilibili 1080p video) → yt-dlp
+#    itself can't see HD. Almost always means missing/expired cookies for the
+#    site, OR the wrong extractor client/player. Check `cookies_loaded` and the
+#    `formats` table.
+#  - max_height_seen ≥ expected but chosen format is lower → our FORMAT_SPEC
+#    rejected the HD formats. Inspect `chosen_format` + the format constraints.
+#
+# Endpoint is intentionally noisy and slow (re-runs yt-dlp every call); never
+# cache responses. Locked to clients passing the TRUSTED_TOKEN to keep random
+# strangers from using it as a free yt-dlp probe.
+
+@app.get("/debug")
+def debug_extract(
+    request: Request,
+    url: str = Query(...),
+    referer: str | None = Query(None),
+    cookies: str | None = Query(None),
+    authorization: str | None = Header(None),
+) -> dict[str, Any]:
+    # Trusted-token gate. Without a token configured, allow the call (handy in
+    # local dev / Fly logs). With a token configured, require it.
+    if TRUSTED_TOKEN:
+        bearer = (authorization or "").replace("Bearer ", "").strip()
+        if bearer != TRUSTED_TOKEN:
+            raise HTTPException(401, "debug requires TRUSTED_TOKEN")
+
+    out: dict[str, Any] = {
+        "url":              url,
+        "cookies_loaded":   bool(COOKIES_FILE and os.path.exists(COOKIES_FILE)),
+        "cookies_file":     COOKIES_FILE or None,
+        "format_spec":      FORMAT_SPEC,
+    }
+
+    # Probe which cookie domains are present, without leaking the values. This
+    # is the actionable bit for Bilibili HD: cookies need a SESSDATA entry on
+    # bilibili.com or yt-dlp can only see the 480p durl track.
+    if COOKIES_FILE and os.path.exists(COOKIES_FILE):
+        try:
+            with open(COOKIES_FILE, "r", encoding="utf-8", errors="ignore") as f:
+                domains: dict[str, list[str]] = {}
+                for line in f:
+                    if line.startswith("#") or "\t" not in line:
+                        continue
+                    parts = line.split("\t")
+                    if len(parts) < 7:
+                        continue
+                    domain, name = parts[0], parts[5]
+                    domains.setdefault(domain.lstrip("."), []).append(name)
+                out["cookie_domains"] = {d: sorted(set(names)) for d, names in domains.items()}
+        except Exception as e:  # noqa: BLE001
+            out["cookie_domains_error"] = str(e)[:200]
+
+    # Run yt-dlp with NO format filter so we get the full format list yt-dlp
+    # was able to see for this URL. This separates "yt-dlp couldn't see HD"
+    # from "we filtered HD out".
+    http_headers: dict[str, str] = {}
+    if referer: http_headers["Referer"] = referer
+    if cookies: http_headers["Cookie"] = cookies
+    probe_opts: dict[str, Any] = {
+        "quiet":          True,
+        "no_warnings":    True,
+        "skip_download":  True,
+        "extractor_args": {
+            "youtube": {"player_client": ["tv", "web_safari", "mweb"], "player_skip": ["configs"]},
+        },
+    }
+    if COOKIES_FILE and os.path.exists(COOKIES_FILE):
+        probe_opts["cookiefile"] = COOKIES_FILE
+    if http_headers:
+        probe_opts["http_headers"] = http_headers
+
+    try:
+        with YoutubeDL(probe_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"yt-dlp: {str(e)[:400]}"
+        return out
+
+    out["extractor"]  = info.get("extractor")
+    out["title"]      = info.get("title")
+    out["_type"]      = info.get("_type")
+
+    # If it's a playlist (e.g. an IG carousel), summarise the entries instead
+    # of dumping each one's formats.
+    if info.get("_type") == "playlist":
+        out["entry_count"] = len(info.get("entries") or [])
+        out["entry_summary"] = [
+            {
+                "id":     (e or {}).get("id"),
+                "ext":    (e or {}).get("ext"),
+                "height": (e or {}).get("height"),
+                "format": (e or {}).get("format_id"),
+            }
+            for e in (info.get("entries") or [])[:10]
+        ]
+        return out
+
+    formats = info.get("formats") or []
+    out["format_count"] = len(formats)
+    out["max_height_seen"] = max(
+        (f.get("height") or 0 for f in formats if f.get("vcodec") not in (None, "none")),
+        default=None,
+    )
+
+    # Run yt-dlp AGAIN with our real FORMAT_SPEC so we can compare which one it
+    # would have chosen for /extract. format_id / height tells us the
+    # final answer.
+    pick_opts = {**probe_opts, "format": FORMAT_SPEC}
+    try:
+        with YoutubeDL(pick_opts) as ydl2:
+            picked = ydl2.extract_info(url, download=False)
+        if picked.get("requested_formats"):
+            v, a = picked["requested_formats"]
+            out["chosen_format"] = {
+                "paired":         True,
+                "video_format_id": v.get("format_id"),
+                "video_height":   v.get("height"),
+                "video_vcodec":   v.get("vcodec"),
+                "video_ext":      v.get("ext"),
+                "audio_format_id": a.get("format_id"),
+                "audio_acodec":   a.get("acodec"),
+            }
+        else:
+            out["chosen_format"] = {
+                "paired":     False,
+                "format_id":  picked.get("format_id"),
+                "height":     picked.get("height"),
+                "vcodec":     picked.get("vcodec"),
+                "acodec":     picked.get("acodec"),
+                "ext":        picked.get("ext"),
+            }
+    except Exception as e:  # noqa: BLE001
+        out["chosen_format_error"] = f"yt-dlp: {str(e)[:400]}"
+
+    # Compact table of formats yt-dlp saw. Trim to fields that matter for
+    # diagnosing quality issues.
+    out["formats"] = [
+        {
+            "id":     f.get("format_id"),
+            "ext":    f.get("ext"),
+            "height": f.get("height"),
+            "width":  f.get("width"),
+            "fps":    f.get("fps"),
+            "vcodec": f.get("vcodec"),
+            "acodec": f.get("acodec"),
+            "tbr":    f.get("tbr"),
+            "proto":  f.get("protocol"),
+            "note":   f.get("format_note"),
+        }
+        for f in formats
+    ]
+    return out
 
 
 # ── /proxy — stream a media URL through the server with auth-shape headers ──
