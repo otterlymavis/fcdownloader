@@ -153,6 +153,19 @@ async function scanVisibleFrames() {
   currentTabId = tab.id;
   currentPageUrl = tab.url || "";
   pageInfo.textContent = hostname(currentPageUrl) || currentPageUrl;
+
+  // Ping the service worker — if it's broken, sendMessage callback never
+  // fires and the user sees a clear message instead of a silent timeout.
+  const pong = await sendMessage({ type: "fcdl:ping" }, 3000);
+  if (!pong?.ok) {
+    setStatus(
+      "Background service is not running. Go to chrome://extensions, " +
+      "click Reload on FCDownloader, and reopen this popup.",
+      true,
+    );
+    return;
+  }
+
   refresh();
   // Content script scans at 0s / 2s / 5s + reactively. Poll while the popup
   // is open so new detections appear without manual reload.

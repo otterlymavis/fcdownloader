@@ -162,6 +162,33 @@ function backendDownloadUrl(backend, pageUrl, referer, cookies) {
 
 // ── Download orchestration ────────────────────────────────────────────────
 
+// Preflight a backend /download URL: fetch the headers, abort the body. If
+// the server is going to respond with JSON (its error format), we return the
+// error text instead of saving garbage as a .mp4.
+async function preflightBackendUrl(url) {
+  const ac = new AbortController();
+  try {
+    const r = await fetch(url, { method: "GET", signal: ac.signal });
+    const ct = r.headers.get("content-type") || "";
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      ac.abort();
+      return { ok: false, error: `${r.status}: ${body.slice(0, 240)}` };
+    }
+    if (ct.startsWith("video/") || ct.startsWith("application/x-mpegURL") || ct.startsWith("application/octet-stream")) {
+      ac.abort();  // abort the body; chrome.downloads will fetch fresh
+      return { ok: true };
+    }
+    // It's some other content-type — almost certainly the error JSON FastAPI
+    // returns when yt-dlp fails. Read it so we can show the message.
+    const body = await r.text().catch(() => "");
+    return { ok: false, error: body.slice(0, 240) };
+  } catch (e) {
+    if (e.name === "AbortError") return { ok: true };  // we aborted on success
+    return { ok: false, error: String(e.message || e) };
+  }
+}
+
 async function downloadItem(tabId, item) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   const downloadPageUrl = item.pageUrl || tab?.url || "";
@@ -179,29 +206,34 @@ async function downloadItem(tabId, item) {
     kind: item.kind,
   });
 
+  async function viaBackend(pageForBackend) {
+    const dlUrl = backendDownloadUrl(backend, pageForBackend, referer, cookies);
+    console.log("[fcdl] → backend", dlUrl.slice(0, 120));
+    // Preflight to catch error JSON before chrome.downloads saves it as .mp4
+    const check = await preflightBackendUrl(dlUrl);
+    if (!check.ok) {
+      throw new Error(`Backend: ${check.error}`);
+    }
+    return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl));
+  }
+
   // Items resolved by /extract (popup "Find videos") always re-route through
   // the backend's /download with the ORIGINAL page/player URL — not the
   // resolved CDN URL. Signed CDN URLs (Vimeo, googlevideo) need a specific
   // Referer header that chrome.downloads can't attach, so a direct
   // chrome.downloads.download() on them silently 403s.
   if (item.backendRouted) {
-    const dlUrl = backendDownloadUrl(backend, downloadPageUrl, referer, cookies);
-    console.log("[fcdl] → backend (backendRouted)", dlUrl.slice(0, 120));
-    return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl));
+    return viaBackend(downloadPageUrl);
   }
 
   // HLS / DASH / paired adaptive / known-server-only sites also need backend
-  // muxing. The previous regex missed vimeocdn.com (the actual signed video
-  // host) and the "paired" kind, which is why backend-resolved Vimeo items
-  // were silently failing via direct download.
+  // muxing.
   const needsMux =
     item.kind === "hls" || item.kind === "dash" || item.kind === "paired" || item.kind === "embed" ||
     /youtube\.com|youtu\.be|googlevideo\.com|(?:player\.)?vimeo\.com|vimeocdn\.com/.test(item.url || downloadPageUrl);
 
   if (needsMux) {
-    const dlUrl = backendDownloadUrl(backend, downloadPageUrl, referer, cookies);
-    console.log("[fcdl] → backend (needsMux)", dlUrl.slice(0, 120));
-    return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl));
+    return viaBackend(downloadPageUrl);
   }
 
   // Plain mp4/webm CDN URLs that don't require auth — direct download.
@@ -254,6 +286,10 @@ function hostname(url) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
+    if (msg.type === "fcdl:ping") {
+      sendResponse({ ok: true, ts: Date.now() });
+      return;
+    }
     if (msg.type === "fcdl:list") {
       const tabId = msg.tabId ?? sender.tab?.id;
       const tab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : null;
