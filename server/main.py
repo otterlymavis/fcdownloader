@@ -511,23 +511,46 @@ def _weibo_id_from_url(page_url: str) -> str | None:
 
 def _weibo_best_format(media_info: dict[str, Any]) -> dict[str, Any] | None:
     candidates: list[dict[str, Any]] = []
+
+    def add_candidate(url: str, extra: dict[str, Any] | None = None) -> None:
+        clean = url.replace("\\u0026", "&").replace("\\/", "/")
+        lower = clean.lower()
+        candidates.append({
+            "url": clean,
+            "ext": "m3u8" if ".m3u8" in lower else "mp4",
+            "protocol": "m3u8_native" if ".m3u8" in lower else "https",
+            "http_headers": {"Referer": "https://weibo.com/", "User-Agent": _WEIBO_DESKTOP_UA},
+            **(extra or {}),
+        })
+
     playback = media_info.get("playback_list")
     if isinstance(playback, list):
         for item in playback:
             play = item.get("play_info") if isinstance(item, dict) else None
             if not isinstance(play, dict) or not play.get("url"):
                 continue
-            candidates.append({
-                "url": play["url"],
+            add_candidate(play["url"], {
                 "format_id": play.get("label"),
                 "format_note": play.get("quality_desc"),
-                "ext": "mp4",
                 "width": play.get("width"),
                 "height": play.get("height"),
                 "tbr": play.get("bitrate"),
                 "filesize": play.get("size"),
-                "http_headers": {"Referer": "https://weibo.com/", "User-Agent": _WEIBO_DESKTOP_UA},
             })
+
+    if not candidates:
+        urls = media_info.get("urls")
+        if isinstance(urls, dict):
+            for key in ("mp4_uhd_mp4", "mp4_hd_mp4", "mp4_ld_mp4", "mp4_hd", "mp4_ld"):
+                value = urls.get(key)
+                if isinstance(value, str) and value.startswith("http"):
+                    add_candidate(value, {"format_id": key, "format_note": key.replace("_", " ").upper()})
+
+    if not candidates:
+        for key in ("stream_url_hd", "stream_url"):
+            value = media_info.get(key)
+            if isinstance(value, str) and value.startswith("http"):
+                add_candidate(value, {"format_id": key, "format_note": "HD" if key.endswith("_hd") else None})
 
     if not candidates:
         seen: set[str] = set()
@@ -540,22 +563,23 @@ def _weibo_best_format(media_info: dict[str, Any]) -> dict[str, Any] | None:
             if url in seen:
                 continue
             seen.add(url)
-            candidates.append({
-                "url": url,
-                "ext": "m3u8" if ".m3u8" in url.lower() else "mp4",
-                "protocol": "m3u8_native" if ".m3u8" in url.lower() else "https",
-                "http_headers": {"Referer": "https://weibo.com/", "User-Agent": _WEIBO_DESKTOP_UA},
-            })
+            add_candidate(url)
 
     if not candidates:
         return None
 
     def score(fmt: dict[str, Any]) -> int:
+        url = (fmt.get("url") or "").lower()
         height = int(fmt.get("height") or 0)
         width = int(fmt.get("width") or 0)
         bitrate = int(fmt.get("tbr") or 0)
         size = int(fmt.get("filesize") or 0)
-        return height * width + bitrate + size // 1024
+        fmt_id = str(fmt.get("format_id") or "").lower()
+        mp4_bonus = 10_000_000 if ".mp4" in url else 0
+        hls_penalty = -1_000_000 if ".m3u8" in url else 0
+        hd_bonus = 500_000 if any(token in url or token in fmt_id for token in ("hd", "uhd")) else 0
+        low_penalty = -250_000 if any(token in url or token in fmt_id for token in ("ld", "sd")) else 0
+        return mp4_bonus + hd_bonus + low_penalty + hls_penalty + height * width + bitrate + size // 1024
 
     return sorted(candidates, key=score)[-1]
 

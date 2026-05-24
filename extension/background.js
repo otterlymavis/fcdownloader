@@ -64,6 +64,7 @@ function itemPriority(item) {
   if (item.kind === "hls" || item.kind === "dash") return 60;
   if (item.source === "yt-player-response") return 90;
   if (item.source === "bili-playinfo") return 90;
+  if (item.source === "weibo-page") return 95;
   if (item.source === "backend") return 95;
   if (item.source === "network") return 40;
   if (item.source === "meta-json") return 30;  // common on Meta feeds; usually noise
@@ -79,6 +80,9 @@ function itemPriority(item) {
 function addItem(tabId, pageUrl, item) {
   const s = ensureTab(tabId, pageUrl);
   if (!item || !item.url) return;
+  if (item.source === "weibo-page" || /(?:^|\.)weibo\.(?:com|cn)\//i.test(item.url)) {
+    s.items = s.items.filter((i) => !(i.kind === "image" || i.source === "network" || i.source === "image-tag"));
+  }
   // De-dupe by URL (strip range / rn so byte-segment requests collapse onto
   // their master URL).
   const baseUrl = item.url.replace(/[?&]range=[^&]*/g, "").replace(/[?&]rn=[^&]*/g, "");

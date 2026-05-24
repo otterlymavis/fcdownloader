@@ -178,6 +178,23 @@
     return found;
   }
 
+  // Weibo follower-only posts need the user's authenticated cookies, so route
+  // the page itself to the backend instead of surfacing page thumbnails/assets.
+  function scanWeibo() {
+    const found = [];
+    if (!/(?:^|\.)weibo\.(?:com|cn)$/i.test(location.hostname)) return found;
+    if (!/(?:\/(?:status|detail)\/[A-Za-z0-9]+|\/(?:\d+|0)\/[A-Za-z0-9]+|\/tv\/show\/|video\.weibo\.com\/show)/i.test(location.href)) return found;
+    found.push({
+      url: location.href,
+      pageUrl: location.href,
+      kind: "embed",
+      source: "weibo-page",
+      label: "Weibo",
+      backendRouted: true,
+    });
+    return found;
+  }
+
   // ── Run all scans ────────────────────────────────────────────────────────
 
   // Image scanning is only useful on hosts where photo downloads are the
@@ -185,7 +202,7 @@
   // X/Twitter image posts). On every OTHER site — especially YouTube,
   // Bilibili, news sites — running it pollutes the popup with thumbnails of
   // recommended videos, channel avatars, og:image cards, and ad creatives.
-  const IMAGE_HOSTS = /(?:^|\.)(instagram\.com|threads\.com|threads\.net|pinterest\.|reddit\.com|redd\.it|twitter\.com|x\.com|facebook\.com|tumblr\.com|weibo\.com|weibo\.cn|xiaohongshu\.com)$/i;
+  const IMAGE_HOSTS = /(?:^|\.)(instagram\.com|threads\.com|threads\.net|pinterest\.|reddit\.com|redd\.it|twitter\.com|x\.com|facebook\.com|tumblr\.com|xiaohongshu\.com)$/i;
   function shouldScanImages() {
     try { return IMAGE_HOSTS.test(location.hostname); } catch { return false; }
   }
@@ -198,6 +215,7 @@
     out.push(...scanMetaTags());
     out.push(...scanYouTube());
     out.push(...scanBilibili());
+    out.push(...scanWeibo());
 
     // Page-wide JSON-field scan is noisy: news pages with comments / feeds
     // (AmusePlus, Threads feed pages) contain dozens of "video_url" matches
