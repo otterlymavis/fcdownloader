@@ -114,15 +114,30 @@ jobs:
             --no-daemon \
             -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
 
-      - name: Show APK info
+      - name: Show APK info + capture version
+        id: apkinfo
         run: |
           ls -lh android/app/build/outputs/apk/release/
           file android/app/build/outputs/apk/release/app-release.apk || true
+          # Pull versionName from build.gradle so the artifact label matches
+          # the version baked into the APK rather than just the workflow run #.
+          VERSION=$(grep -oE 'versionName "[^"]+"' android/app/build.gradle | head -1 | sed 's/.*"\(.*\)"/\1/')
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "version=$VERSION"     >> $GITHUB_OUTPUT
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "Built FCDownloader v$VERSION ($SHORT_SHA, run #${{ github.run_number }})"
+
+      - name: Rename APK with version + sha
+        run: |
+          mv android/app/build/outputs/apk/release/app-release.apk \
+             android/app/build/outputs/apk/release/fcdownloader-v${{ steps.apkinfo.outputs.version }}-${{ steps.apkinfo.outputs.short_sha }}.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fcdownloader-${{ github.ref_name }}-${{ github.run_number }}
-          path: android/app/build/outputs/apk/release/app-release.apk
+          # Self-describing name: branch + version + short SHA + run #. Tells
+          # you at a glance which APK is newer when you have several downloaded.
+          name: fcdownloader-${{ github.ref_name }}-v${{ steps.apkinfo.outputs.version }}-${{ steps.apkinfo.outputs.short_sha }}-r${{ github.run_number }}
+          path: android/app/build/outputs/apk/release/fcdownloader-v${{ steps.apkinfo.outputs.version }}-${{ steps.apkinfo.outputs.short_sha }}.apk
           retention-days: 30
           if-no-files-found: error
