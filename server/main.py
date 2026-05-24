@@ -418,6 +418,246 @@ def _extract_meta_instagram(page_url: str, cookies: str | None) -> dict[str, Any
 
 
 # Shared yt-dlp invocation — used by both /extract and /download
+_WEIBO_DESKTOP_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/125.0.0.0 Safari/537.36"
+)
+
+
+def _json_get_path(obj: Any, *path: str) -> Any:
+    cur = obj
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+
+def _walk_json(obj: Any) -> Iterator[Any]:
+    yield obj
+    if isinstance(obj, dict):
+        for value in obj.values():
+            yield from _walk_json(value)
+    elif isinstance(obj, list):
+        for value in obj:
+            yield from _walk_json(value)
+
+
+def _weibo_headers(page_url: str, cookies: str | None = None) -> dict[str, str]:
+    headers = {
+        "User-Agent": _WEIBO_DESKTOP_UA,
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": page_url or "https://weibo.com/",
+        "Origin": "https://weibo.com",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    if cookies:
+        headers["Cookie"] = cookies
+    return headers
+
+
+def _download_weibo_json(
+    url: str,
+    page_url: str,
+    cookies: str | None,
+    query: dict[str, str] | None = None,
+    data: bytes | None = None,
+) -> dict[str, Any] | None:
+    if query:
+        url = f"{url}?{urllib.parse.urlencode(query)}"
+    try:
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers=_weibo_headers(page_url, cookies),
+            method="POST" if data is not None else "GET",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            ct = resp.headers.get("Content-Type", "")
+    except Exception as e:  # noqa: BLE001
+        print(f"[weibo] JSON fetch failed for {url}: {str(e)[:200]}")
+        return None
+
+    if "json" not in ct.lower() and not body.lstrip().startswith(("{", "[")):
+        print(f"[weibo] expected JSON, got {ct or 'unknown content-type'} from {url}")
+        return None
+    try:
+        data_obj = json.loads(body)
+        return data_obj if isinstance(data_obj, dict) else None
+    except Exception as e:  # noqa: BLE001
+        print(f"[weibo] JSON parse failed for {url}: {str(e)[:200]}")
+        return None
+
+
+def _weibo_id_from_url(page_url: str) -> str | None:
+    parsed = urllib.parse.urlparse(page_url)
+    host = parsed.netloc.lower()
+    path = parsed.path.strip("/")
+    qs = urllib.parse.parse_qs(parsed.query)
+    if "video.weibo.com" in host:
+        return (qs.get("fid") or [None])[-1]
+    if path.startswith("tv/show/"):
+        return path.split("/", 2)[-1] or None
+    parts = [p for p in path.split("/") if p]
+    if "m.weibo.cn" in host and len(parts) >= 2 and parts[0] in {"status", "detail"}:
+        return parts[1]
+    if "weibo.com" in host and len(parts) >= 2:
+        return parts[1]
+    return None
+
+
+def _weibo_best_format(media_info: dict[str, Any]) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any]] = []
+    playback = media_info.get("playback_list")
+    if isinstance(playback, list):
+        for item in playback:
+            play = item.get("play_info") if isinstance(item, dict) else None
+            if not isinstance(play, dict) or not play.get("url"):
+                continue
+            candidates.append({
+                "url": play["url"],
+                "format_id": play.get("label"),
+                "format_note": play.get("quality_desc"),
+                "ext": "mp4",
+                "width": play.get("width"),
+                "height": play.get("height"),
+                "tbr": play.get("bitrate"),
+                "filesize": play.get("size"),
+                "http_headers": {"Referer": "https://weibo.com/", "User-Agent": _WEIBO_DESKTOP_UA},
+            })
+
+    if not candidates:
+        seen: set[str] = set()
+        for value in _walk_json(media_info):
+            if not isinstance(value, str) or not re.search(r"https?://", value):
+                continue
+            url = value.replace("\\u0026", "&").replace("\\/", "/")
+            if not re.search(r"(?:weibocdn\.com|sinaimg\.cn).*\.(?:mp4|m3u8|mov)(?:[?#]|$)", url, re.I):
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            candidates.append({
+                "url": url,
+                "ext": "m3u8" if ".m3u8" in url.lower() else "mp4",
+                "protocol": "m3u8_native" if ".m3u8" in url.lower() else "https",
+                "http_headers": {"Referer": "https://weibo.com/", "User-Agent": _WEIBO_DESKTOP_UA},
+            })
+
+    if not candidates:
+        return None
+
+    def score(fmt: dict[str, Any]) -> int:
+        height = int(fmt.get("height") or 0)
+        width = int(fmt.get("width") or 0)
+        bitrate = int(fmt.get("tbr") or 0)
+        size = int(fmt.get("filesize") or 0)
+        return height * width + bitrate + size // 1024
+
+    return sorted(candidates, key=score)[-1]
+
+
+def _weibo_parse_post(meta: dict[str, Any], page_url: str) -> dict[str, Any] | None:
+    entries: list[dict[str, Any]] = []
+
+    def thumbnail_url() -> str | None:
+        pic = _json_get_path(meta, "page_info", "page_pic")
+        if isinstance(pic, dict):
+            return pic.get("url")
+        return pic if isinstance(pic, str) else None
+
+    def add_video_from_media_info(media_info: Any, fallback_id: str | None = None) -> None:
+        if not isinstance(media_info, dict):
+            return
+        best = _weibo_best_format(media_info)
+        if not best:
+            return
+        entries.append({
+            **best,
+            "id": fallback_id or str(meta.get("id") or meta.get("mid") or _cache_key(best["url"])),
+            "title": media_info.get("video_title") or media_info.get("kol_title") or media_info.get("name") or meta.get("text_raw"),
+            "thumbnail": thumbnail_url(),
+            "duration": media_info.get("duration"),
+        })
+
+    mix_items = _json_get_path(meta, "mix_media_info", "items")
+    if isinstance(mix_items, list):
+        for item in mix_items:
+            if not isinstance(item, dict) or item.get("type") == "pic":
+                continue
+            data = item.get("data") if isinstance(item.get("data"), dict) else {}
+            add_video_from_media_info(data.get("media_info"), str(data.get("object_id") or ""))
+
+    page_info = meta.get("page_info") if isinstance(meta.get("page_info"), dict) else {}
+    top_media_info = page_info.get("media_info")
+    if isinstance(top_media_info, dict) and isinstance(page_info.get("urls"), dict):
+        top_media_info = {**top_media_info, "urls": page_info["urls"]}
+    add_video_from_media_info(top_media_info)
+    if not entries:
+        return None
+
+    title = (
+        _json_get_path(meta, "page_info", "media_info", "video_title")
+        or _json_get_path(meta, "page_info", "media_info", "kol_title")
+        or _json_get_path(meta, "page_info", "media_info", "name")
+        or meta.get("text_raw")
+    )
+    thumb = thumbnail_url()
+    post_id = str(meta.get("id") or meta.get("id_str") or meta.get("mid") or _cache_key(page_url))
+
+    if len(entries) > 1:
+        return {"_type": "playlist", "entries": entries, "title": title, "thumbnail": thumb, "id": post_id}
+
+    single = entries[0]
+    single.setdefault("id", post_id)
+    single.setdefault("title", title)
+    single.setdefault("thumbnail", thumb)
+    single.setdefault("http_headers", {"Referer": "https://weibo.com/", "User-Agent": _WEIBO_DESKTOP_UA})
+    return single
+
+
+def _extract_weibo_page(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    video_id = _weibo_id_from_url(page_url)
+    if not video_id:
+        return None
+    if ":" in video_id:
+        body = f'data={{"Component_Play_Playinfo":{{"oid":"{video_id}"}}}}'.encode()
+        component = _download_weibo_json(
+            "https://weibo.com/tv/api/component",
+            page_url,
+            cookies,
+            query={"page": f"/tv/show/{video_id}"},
+            data=body,
+        )
+        mid = _json_get_path(component or {}, "data", "Component_Play_Playinfo", "mid")
+        if mid:
+            video_id = str(mid)
+
+    meta = _download_weibo_json(
+        "https://weibo.com/ajax/statuses/show",
+        page_url,
+        cookies,
+        query={"id": video_id},
+    )
+    if not meta:
+        meta = _download_weibo_json(
+            "https://m.weibo.cn/statuses/show",
+            page_url,
+            cookies,
+            query={"id": video_id},
+        )
+    if isinstance(meta, dict) and isinstance(meta.get("data"), dict):
+        meta = meta["data"]
+    parsed = _weibo_parse_post(meta, page_url) if meta else None
+    if parsed:
+        count = len(parsed.get("entries") or [parsed])
+        print(f"[weibo] extracted {count} media item(s) via ajax/statuses/show")
+    return parsed
+
+
 def _run_ydl(
     page_url: str,
     referer: str | None = None,
@@ -529,6 +769,14 @@ def _run_ydl(
         ydl_opts["referer"] = referer
     if http_headers:
         ydl_opts["http_headers"] = http_headers
+    if any(host in page_url for host in ("weibo.com", "weibo.cn", "video.weibo.com")):
+        weibo_info = _extract_weibo_page(page_url, cookies)
+        if weibo_info:
+            if user_cookie_file:
+                try: os.unlink(user_cookie_file)
+                except Exception: pass
+            return weibo_info
+        print(f"[weibo] ajax fallback found nothing; falling back to yt-dlp for {page_url}")
     # Threads (Meta) has no yt-dlp extractor — handle it here by mirroring the
     # mobile app's Instagram-style HTML regex extraction. Returns a
     # yt-dlp-shaped info dict so the rest of the pipeline is unchanged.
