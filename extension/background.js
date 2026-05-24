@@ -26,14 +26,35 @@ function ensureTab(tabId, pageUrl) {
   return s;
 }
 
+// Higher = more likely to be "the" video the user wants. Pages that scoop
+// up every video_url JSON field (Threads feeds, AmusePlus news pages with
+// comments) would otherwise drown the actual embed in noise.
+function itemPriority(item) {
+  if (item.source === "iframe" || item.kind === "embed") return 100;
+  if (item.source === "video-tag") return 80;
+  if (item.kind === "hls" || item.kind === "dash") return 60;
+  if (item.source === "yt-player-response") return 90;
+  if (item.source === "bili-playinfo") return 90;
+  if (item.source === "backend") return 95;
+  if (item.source === "network") return 40;
+  if (item.source === "meta-json") return 30;  // common on Meta feeds; usually noise
+  if (item.source === "og:video") return 70;
+  return 50;
+}
+
 function addItem(tabId, pageUrl, item) {
   const s = ensureTab(tabId, pageUrl);
   if (!item || !item.url) return;
-  // De-dupe by URL (strip query for HLS segments so the master m3u8 wins)
-  const baseUrl = item.url.replace(/[?&]range=[^&]*/g, "");
+  // De-dupe by URL (strip range / rn so byte-segment requests collapse onto
+  // their master URL).
+  const baseUrl = item.url.replace(/[?&]range=[^&]*/g, "").replace(/[?&]rn=[^&]*/g, "");
   if (s.items.find((i) => i.url === baseUrl || i.url === item.url)) return;
-  s.items.unshift({ ...item, url: baseUrl, capturedAt: Date.now() });
-  s.items = s.items.slice(0, 30);
+  const enriched = { ...item, url: baseUrl, capturedAt: Date.now(), priority: itemPriority(item) };
+  s.items.push(enriched);
+  // Sort by priority desc, then by recency desc. Cap so feed-noise sites
+  // don't fill the popup with dozens of low-relevance URLs.
+  s.items.sort((a, b) => (b.priority - a.priority) || (b.capturedAt - a.capturedAt));
+  s.items = s.items.slice(0, 10);
   s.updatedAt = Date.now();
   updateBadge(tabId, s.items.length);
 }
@@ -191,15 +212,28 @@ async function preflightBackendUrl(url) {
 
 async function downloadItem(tabId, item) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
-  const downloadPageUrl = item.pageUrl || tab?.url || "";
-  const referer = item.referer || tab?.url || null;
-  const cookieSourceUrl = referer || downloadPageUrl;
+  const tabPageUrl = tab?.url || "";
+
+  // For backendRouted items (popup-resolved /extract results), item.pageUrl
+  // is the actual URL we sent to /extract (e.g. https://player.vimeo.com/...),
+  // and we MUST send the same URL to /download for the cache to hit and for
+  // yt-dlp to take the same path.
+  //
+  // For content-script-detected items (iframe / video tag), the *video* URL
+  // is item.url — that's what yt-dlp can extract. The TAB url (e.g.
+  // https://amuseplus.jp/...) is just the embedding page; yt-dlp has no
+  // extractor for it. Sending the tab URL to backend was the bug.
+  const urlForBackend = item.backendRouted
+    ? item.pageUrl
+    : (item.url || item.pageUrl || tabPageUrl);
+  const referer = item.referer || item.pageUrl || tabPageUrl || null;
+  const cookieSourceUrl = referer || urlForBackend;
   const cookies = await cookieHeaderFor(cookieSourceUrl);
   const { backend } = await getSettings();
 
   console.log("[fcdl] download", {
     item_url: (item.url || "").slice(0, 80),
-    page: (downloadPageUrl || "").slice(0, 80),
+    sent_url: (urlForBackend || "").slice(0, 80),
     referer: (referer || "").slice(0, 80),
     cookies_chars: cookies.length,
     backendRouted: !!item.backendRouted,
@@ -209,31 +243,24 @@ async function downloadItem(tabId, item) {
   async function viaBackend(pageForBackend) {
     const dlUrl = backendDownloadUrl(backend, pageForBackend, referer, cookies);
     console.log("[fcdl] → backend", dlUrl.slice(0, 120));
-    // Preflight to catch error JSON before chrome.downloads saves it as .mp4
     const check = await preflightBackendUrl(dlUrl);
     if (!check.ok) {
       throw new Error(`Backend: ${check.error}`);
     }
-    return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl));
+    return chromeDownload(dlUrl, suggestedFilename(item, urlForBackend));
   }
 
-  // Items resolved by /extract (popup "Find videos") always re-route through
-  // the backend's /download with the ORIGINAL page/player URL — not the
-  // resolved CDN URL. Signed CDN URLs (Vimeo, googlevideo) need a specific
-  // Referer header that chrome.downloads can't attach, so a direct
-  // chrome.downloads.download() on them silently 403s.
   if (item.backendRouted) {
-    return viaBackend(downloadPageUrl);
+    return viaBackend(urlForBackend);
   }
 
-  // HLS / DASH / paired adaptive / known-server-only sites also need backend
-  // muxing.
+  // HLS / DASH / paired adaptive / known-server-only sites need backend muxing.
   const needsMux =
     item.kind === "hls" || item.kind === "dash" || item.kind === "paired" || item.kind === "embed" ||
-    /youtube\.com|youtu\.be|googlevideo\.com|(?:player\.)?vimeo\.com|vimeocdn\.com/.test(item.url || downloadPageUrl);
+    /youtube\.com|youtu\.be|googlevideo\.com|(?:player\.)?vimeo\.com|vimeocdn\.com/.test(item.url || urlForBackend);
 
   if (needsMux) {
-    return viaBackend(downloadPageUrl);
+    return viaBackend(urlForBackend);
   }
 
   // Plain mp4/webm CDN URLs that don't require auth — direct download.

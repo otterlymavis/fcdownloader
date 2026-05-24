@@ -158,30 +158,58 @@
     out.push(...scanMetaTags());
     out.push(...scanYouTube());
     out.push(...scanBilibili());
-    // Whole-page-HTML regex pass — cheap, catches lots of Meta JSON
-    try {
-      const html = document.documentElement.outerHTML;
-      // Cap to first 1 MB — bigger pages have nothing relevant past that
-      out.push(...scanMetaJson(html.length > 1_000_000 ? html.slice(0, 1_000_000) : html));
-    } catch {}
+
+    // Page-wide JSON-field scan is noisy: news pages with comments / feeds
+    // (AmusePlus, Threads feed pages) contain dozens of "video_url" matches
+    // that aren't THE video the user wants. Only run this pass if no
+    // higher-signal source already found something.
+    if (out.length === 0) {
+      try {
+        const html = document.documentElement.outerHTML;
+        out.push(...scanMetaJson(html.length > 1_000_000 ? html.slice(0, 1_000_000) : html));
+      } catch {}
+    }
     return out;
   }
 
-  // Initial scan + delayed re-scan (JS players hydrate after document_idle).
   function fullScan() {
     const items = scanAll();
     if (items.length) post(items);
   }
 
-  fullScan();
-  setTimeout(fullScan, 2000);
-  setTimeout(fullScan, 5000);
+  // Stop re-scanning once we've found embeds/video-tags — JS-loaded players
+  // may take 5-10s to hydrate, but after they're in the DOM further scans
+  // just produce duplicates (already de-duped in the SW, but wastes CPU).
+  let scanCount = 0;
+  let foundOnce = false;
+  function maybeScan() {
+    scanCount++;
+    const items = scanAll();
+    if (items.length) {
+      foundOnce = true;
+      post(items);
+    }
+    // Stop after 8 cycles (covers ~16s of page hydration) OR once we found
+    // anything embed-like.
+    return foundOnce || scanCount >= 8;
+  }
 
-  // Reactive scan when new <video>/<iframe> appears (SPA navigation, lazy-load).
+  maybeScan();
+  const earlyTimer = setInterval(() => {
+    if (maybeScan()) clearInterval(earlyTimer);
+  }, 2000);
+
+  // Reactive scan when new <video>/<iframe> appears (SPA navigation,
+  // lazy-load). Debounced + bounded so a chatty page doesn't spam events.
   let pending = null;
+  let mutationScans = 0;
   const obs = new MutationObserver(() => {
-    if (pending) return;
-    pending = setTimeout(() => { pending = null; fullScan(); }, 800);
+    if (pending || mutationScans >= 5) return;
+    pending = setTimeout(() => {
+      pending = null;
+      mutationScans++;
+      maybeScan();
+    }, 1200);
   });
   obs.observe(document.documentElement, { childList: true, subtree: true });
 })();
