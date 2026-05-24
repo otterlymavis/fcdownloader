@@ -1,5 +1,5 @@
-// Popup — show one prominent video, hide the rest behind a collapsed
-// "Show other videos" section. Matches the simpler "one obvious action"
+// Popup — show one prominent media item, hide the rest behind a collapsed
+// "Show other media" section. Matches the simpler "one obvious action"
 // UX of the web app.
 
 const $ = (id) => document.getElementById(id);
@@ -69,15 +69,17 @@ function escapeHtml(s) {
 function describeItem(item) {
   // Friendly human label: prefer a quality/format hint, else the host.
   if (item.label) return item.label;
+  if (item.kind === "image") return `Image${hostname(item.url) ? ` Â· ${hostname(item.url)}` : ""}`;
+  if (item.kind === "audio") return `Audio${hostname(item.url) ? ` Â· ${hostname(item.url)}` : ""}`;
   if (item.kind === "embed" || item.source === "iframe") return "Embedded video";
   const h = hostname(item.url);
   if (item.kind === "hls")  return `HLS stream${h ? ` · ${h}` : ""}`;
   if (item.kind === "dash") return `DASH stream${h ? ` · ${h}` : ""}`;
-  return h || "Video";
+  return h || "Media";
 }
 
 function titleOf(item, fallback) {
-  return item.title || fallback || describeItem(item) || "Video";
+  return item.title || fallback || describeItem(item) || "Media";
 }
 
 // ── Rendering ──────────────────────────────────────────────────────────
@@ -101,7 +103,7 @@ function render(items) {
   primaryEl.hidden = false;
   emptyEl.hidden   = true;
 
-  // Optional "more videos" section — only when there's >1, and only show
+  // Optional "more media" section — only when there's >1, and only show
   // up to 5 extras so it never feels like a developer list.
   if (rest.length === 0) {
     moreEl.hidden = true;
@@ -162,18 +164,18 @@ function refresh() {
   setInterval(refresh, 1500);
 })();
 
-// ── "Find videos" fallback — only shown in empty state ─────────────────
+// ── "Find media" fallback — only shown in empty state ─────────────────
 
 extractBtn.addEventListener("click", async () => {
   extractBtn.disabled = true;
-  setStatus("Looking for videos…");
+  setStatus("Looking for media...��");
   try {
     const resp = await sendMessage({
       type: "fcdl:extract",
       pageUrl: currentPageUrl,
     }, 35000);
     if (!resp?.ok) {
-      setStatus(resp?.error || "Couldn't find a video on this page.", "error");
+      setStatus(resp?.error || "Couldn't find media on this page.", "error");
       return;
     }
     setStatus("", "info");
@@ -215,7 +217,7 @@ extractBtn.addEventListener("click", async () => {
 // Carousels (Instagram, Reddit, Threads) come back from /extract as
 // { kind: "gallery", items: [{ url, kind: "image"|"direct"|..., ext, title }] }.
 // We show ONE prominent "Save all" card and tuck individual items into the
-// same <details> we already use for "other videos", so the popup stays
+// same <details> we already use for "other media", so the popup stays
 // single-action-focused.
 
 function describeGallery(items) {
@@ -278,6 +280,7 @@ function renderGallery(info) {
       const r = await sendMessage({
         type: "fcdl:download_gallery_item",
         tabId: currentTabId,
+        pageUrl: currentPageUrl,
         title: info.title,
         index: idx,
         item: it,

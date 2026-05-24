@@ -34,13 +34,20 @@ function makeItem(url: string, pageUrl: string, label?: string, provenance: Prov
     .replace(/\\\//g, '/')
     .replace(/\\/g, '')
     .trim();
+  const lower = clean.toLowerCase();
+  const mediaKind = /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(clean)
+    ? 'image'
+    : /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i.test(clean)
+      ? 'audio'
+      : 'video';
   return {
     id: genId(),
     url: clean,
     pageUrl,
     userAgent: '',
     timestamp: Date.now(),
-    mediaType: clean.toLowerCase().includes('.mpd') ? 'dash' : 'hls',
+    mediaType: lower.includes('.mpd') ? 'dash' : lower.includes('.m3u8') ? 'hls' : 'direct',
+    mediaKind,
     label,
     confidence,
     provenance,
@@ -113,7 +120,7 @@ async function extractTwitter(pageUrl: string): Promise<DetectedMedia[]> {
     // OG / Twitter card meta-tags as fallback
     extractUrls(
       html,
-      /<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream)["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
+      /<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream|og:image(?::secure_url)?|twitter:image)["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
     )
       .filter(u => u.startsWith('http'))
       .forEach(u => { if (!results.some(r => r.url === u)) results.push(makeItem(u, pageUrl)); });
@@ -125,18 +132,44 @@ async function extractTwitter(pageUrl: string): Promise<DetectedMedia[]> {
 // ── Instagram / Threads ───────────────────────────────────────────
 async function extractInstagram(pageUrl: string): Promise<DetectedMedia[]> {
   try {
+    const serverItems = await extractViaServer(pageUrl);
+    if (serverItems.length > 0) return serverItems;
+
     const html = await fetchHtml(pageUrl, MOBILE_UA);
     const results: DetectedMedia[] = [];
 
-    extractUrls(html, /"video_url"\s*:\s*"(https?:\/\/[^"]+)"/g).forEach(u =>
+    extractUrls(html, /"video_url"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g).forEach(u =>
       results.push(makeItem(u, pageUrl)),
     );
+
+    extractUrls(
+      html,
+      /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com)[^"'\\<>\s]*\.(?:mp4|m3u8)[^"'\\<>\s]*)/g,
+    ).forEach(u => {
+      const item = makeItem(u, pageUrl);
+      if (!results.some(r => r.url === item.url)) results.push(item);
+    });
+
+    extractUrls(
+      html,
+      /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com)[^"'\\<>\s]*\.(?:jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/g,
+    ).forEach(u => {
+      const item = makeItem(u, pageUrl);
+      if (!results.some(r => r.url === item.url)) results.push(item);
+    });
 
     if (results.length === 0) {
       extractUrls(
         html,
         /<meta\s+property\s*=\s*["']og:video["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
       ).forEach(u => results.push(makeItem(u, pageUrl)));
+    }
+
+    if (results.length === 0) {
+      extractUrls(
+        html,
+        /<meta\s+property\s*=\s*["']og:image(?::secure_url)?["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
+      ).forEach(u => results.push(makeItem(u, pageUrl, 'Image')));
     }
 
     return results;
@@ -278,7 +311,25 @@ async function extractPinterest(pageUrl: string): Promise<DetectedMedia[]> {
 
 // ── Bilibili ──────────────────────────────────────────────────
 async function extractBilibili(pageUrl: string): Promise<DetectedMedia[]> {
+  // Tier 1: server-assisted HD. Bilibili's public window.__playinfo__ for
+  // logged-out users only ships the 480p `durl` track — DASH HD tracks
+  // require login. The Fly backend's yt-dlp can use the server-side cookie
+  // to get the real HD DASH set + auto-mux via ffmpeg, so prefer it.
   try {
+    const items = await extractViaServer(pageUrl);
+    if (items.length > 0) return items;
+  } catch (e) {
+    console.warn('[extractBilibili] server extractor errored:', String(e).slice(0, 200));
+  }
+  // Tier 2: on-page __playinfo__. Falls back to 480p durl when DASH not given.
+  return extractBilibiliLocal(pageUrl);
+}
+
+async function extractBilibiliLocal(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const serverItems = await extractViaServer(pageUrl);
+    if (serverItems.length > 0) return serverItems;
+
     const html = await fetchHtml(pageUrl, DESKTOP_UA);
     const results: DetectedMedia[] = [];
 
@@ -338,14 +389,14 @@ async function extractOgVideo(pageUrl: string): Promise<DetectedMedia[]> {
 const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[]> }> = [
   { re: /tiktok\.com\/@[^/]+\/video\/\d+|tiktok\.com\/t\/[A-Za-z0-9]+/,          fn: extractTikTok      },
   { re: /(?:twitter|x)\.com\/[^/]+\/status\/\d+/,                                  fn: extractTwitter     },
-  { re: /instagram\.com\/(?:p|reel|tv)\/[A-Za-z0-9_-]+/,                           fn: extractInstagram   },
+  { re: /instagram\.com\/(?:(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+|share\/(?:p|reel)\/[A-Za-z0-9_-]+)/, fn: extractInstagram   },
   { re: /threads\.net\/@[^/]+\/post\/[A-Za-z0-9_-]+/,                              fn: extractInstagram   },
   { re: /dailymotion\.com\/video\/[A-Za-z0-9]+/,                                    fn: extractDailymotion },
   { re: /(?:youtube\.com\/(?:watch|shorts)|youtu\.be\/)[?/]?[A-Za-z0-9_-]{11}/,   fn: extractYouTube     },
   { re: /facebook\.com\/(?:watch|reel|video)|fb\.watch/,                            fn: extractFacebook    },
   { re: /pinterest\.(?:com|[a-z]{2,3})\/pin\/\d+/,                                 fn: extractPinterest   },
   { re: /tver\.jp\/episodes\/ep[A-Za-z0-9]+/,                                       fn: extractTVer        },
-  { re: /bilibili\.com\/video\/[ABab][Vv][A-Za-z0-9]+/,                             fn: extractBilibili    },
+  { re: /(?:bilibili\.com\/video\/[ABab][Vv][A-Za-z0-9]+|m\.bilibili\.com\/video\/[ABab][Vv][A-Za-z0-9]+|b23\.tv\/[A-Za-z0-9]+|bilibili\.tv\/(?:[a-z]{2}\/)?video\/\d+)/, fn: extractBilibili    },
 ];
 
 /** Returns true if the URL looks like a social-media post page (not a CDN media URL). */

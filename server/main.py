@@ -25,7 +25,9 @@ import shlex
 import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.request
+import urllib.parse
 from typing import Any, Iterator
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
@@ -206,8 +208,8 @@ _MOBILE_UA = (
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
 )
 
-def _extract_meta_threads(page_url: str, cookies: str | None) -> dict[str, Any] | None:
-    """Fetch the Threads page HTML and pull out a video_url, an og:video tag,
+def _extract_meta_page(page_url: str, cookies: str | None, label: str) -> dict[str, Any] | None:
+    """Fetch a Meta-family page and pull out a video_url, an og:video tag,
     or any direct mp4 / m3u8 URL. Returns the standard response shape or
     None when nothing usable was found (caller falls through to yt-dlp)."""
     try:
@@ -220,50 +222,72 @@ def _extract_meta_threads(page_url: str, cookies: str | None) -> dict[str, Any] 
         with urllib.request.urlopen(req, timeout=15) as resp:
             html = resp.read().decode("utf-8", errors="replace")
     except Exception as e:  # noqa: BLE001
-        print(f"[threads] fetch failed for {page_url}: {str(e)[:200]}")
+        print(f"[{label}] fetch failed for {page_url}: {str(e)[:200]}")
         return None
 
     # Meta JSON-encodes URLs with escaped slashes + unicode. Decode patterns.
     def _decode(u: str) -> str:
         return (u.replace("\\u0026", "&")
+                 .replace("\\u003d", "=")
                  .replace("\\/", "/")
                  .replace("\\\\", "\\"))
 
-    candidates: list[str] = []
+    # Collect (offset, url, kind) tuples in document order. The offset is what
+    # lets us pair carousel items together — Instagram carousel JSON appears
+    # contiguously in the HTML in carousel order, so sorting by offset gives
+    # us the user-visible item order.
+    found: list[tuple[int, str, str]] = []  # (offset, url, "image"|"video")
 
-    # 1. JSON-embedded "video_url" / "playable_url"
-    for pattern in (r'"video_url":"(https?:[^"]+)"',
-                    r'"playable_url(?:_quality_hd)?":"(https?:[^"]+)"',
-                    r'"browser_native_(?:hd|sd)_url":"(https?:[^"]+)"'):
+    # Videos: "video_url" / "playable_url" / "browser_native_*_url" / "video_versions[].url"
+    for pattern in (
+        r'"video_url"\s*:\s*"(https?:\\?/\\?/[^"]+)"',
+        r'"playable_url(?:_quality_hd)?"\s*:\s*"(https?:\\?/\\?/[^"]+)"',
+        r'"browser_native_(?:hd|sd)_url"\s*:\s*"(https?:\\?/\\?/[^"]+)"',
+        r'"video_versions"\s*:\s*\[\s*\{[^}]*"url"\s*:\s*"(https?:\\?/\\?/[^"]+)"',
+    ):
         for m in re.finditer(pattern, html):
-            candidates.append(_decode(m.group(1)))
+            found.append((m.start(), _decode(m.group(1)), "video"))
 
-    # 2. og:video meta tag (always-present fallback)
+    # Images: "display_url" (single-item posts), and image_versions2 candidates
+    # (carousel image entries; first candidate is the highest-resolution).
+    for pattern in (
+        r'"display_url"\s*:\s*"(https?:\\?/\\?/[^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"',
+        r'"image_versions2"\s*:\s*\{\s*"candidates"\s*:\s*\[\s*\{[^}]*"url"\s*:\s*"(https?:\\?/\\?/[^"]+)"',
+    ):
+        for m in re.finditer(pattern, html):
+            found.append((m.start(), _decode(m.group(1)), "image"))
+
+    # og:video / twitter:player:stream tags (always-present fallback)
     for m in re.finditer(
         r'<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["\'](?:og:video(?::url)?|twitter:player:stream)["\']'
         r'[^>]+content\s*=\s*["\']([^"\']+)["\']', html, re.IGNORECASE):
-        candidates.append(_decode(m.group(1)))
+        found.append((m.start(), _decode(m.group(1)), "video"))
 
-    # 3. raw fbcdn / threads-cdn URLs in the page
+    # Raw fbcdn / threads-cdn URLs in the page (last-resort)
     for m in re.finditer(
         r'https?:\\?/\\?/(?:[\w-]+\.)?(?:fbcdn|threadscdn|instagram)\.com/[^\s"\'<>\\]+\.(?:mp4|m3u8)(?:\?[^\s"\'<>\\]*)?',
         html):
-        candidates.append(_decode(m.group(0)))
+        found.append((m.start(), _decode(m.group(0)), "video"))
 
-    # De-dupe, preserve order, prefer mp4 then m3u8
+    # Sort by offset (document order), then de-dupe — first occurrence wins so
+    # the carousel order is preserved.
+    found.sort(key=lambda t: t[0])
     seen: set[str] = set()
-    uniq: list[str] = []
-    for u in candidates:
-        if u.startswith("http") and u not in seen:
-            seen.add(u)
-            uniq.append(u)
-    uniq.sort(key=lambda u: (0 if ".mp4" in u else 1, len(u)))
+    uniq: list[tuple[str, str]] = []  # (url, kind)
+    for _off, u, kind in found:
+        if not u.startswith("http"):
+            continue
+        # Strip query strings for the dedup key — Instagram's CDN signs the same
+        # asset with multiple oh/oe pairs across the page (avatar + post tile +
+        # carousel item), and we want a single dedup'd item per asset.
+        dedup_key = u.split("?")[0]
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        uniq.append((u, kind))
 
     if not uniq:
         return None
-
-    chosen = uniq[0]
-    is_hls = ".m3u8" in chosen
 
     title = None
     title_m = re.search(r'<meta\s+property\s*=\s*["\']og:title["\'][^>]+content\s*=\s*["\']([^"\']+)["\']', html, re.IGNORECASE)
@@ -274,22 +298,64 @@ def _extract_meta_threads(page_url: str, cookies: str | None) -> dict[str, Any] 
     if thumb_m:
         thumb = _decode(thumb_m.group(1))
 
-    print(f"[threads] extracted {len(uniq)} candidate(s); using {chosen[:100]}")
+    # Heuristic: avatars + page chrome thumbnails appear MANY times across the
+    # page HTML. Real carousel media occurs once. Filter obvious avatar/icon
+    # CDN paths so a single-image post doesn't get padded with profile pics.
+    def _is_likely_avatar(u: str) -> bool:
+        return bool(re.search(r"/profile_pic|/avatar|/s\d+x\d+/", u, re.I)) and "/post/" not in u
 
-    # Return a *yt-dlp-shaped info dict* so the rest of the pipeline (_to_response,
-    # /download → ffmpeg, /extract caching) treats it identically to a real yt-dlp
-    # extraction. We only fill the fields the downstream code looks at.
+    filtered = [(u, k) for u, k in uniq if not _is_likely_avatar(u)]
+    if filtered:
+        uniq = filtered
+
+    # Carousel: ≥2 unique media. Return as a playlist so the gallery pipeline
+    # picks it up. Single item → fall through to the existing single-info shape.
+    if len(uniq) >= 2:
+        entries = []
+        for u, kind in uniq:
+            is_hls = ".m3u8" in u
+            ext = _guess_ext_from_url(u) or ("m3u8" if is_hls else ("jpg" if kind == "image" else "mp4"))
+            entries.append({
+                "id":           _cache_key(u),
+                "url":          u,
+                "ext":          ext,
+                "protocol":     "m3u8_native" if is_hls else "https",
+                "http_headers": {"User-Agent": _MOBILE_UA, "Referer": page_url},
+                "title":        title,
+            })
+        print(f"[{label}] carousel: {len(entries)} item(s) ({sum(1 for u,k in uniq if k=='image')} photo, {sum(1 for u,k in uniq if k=='video')} video)")
+        return {
+            "_type":   "playlist",
+            "entries": entries,
+            "title":   title,
+            "thumbnail": thumb,
+            "id":      _cache_key(page_url),
+        }
+
+    chosen, kind = uniq[0]
+    is_hls = ".m3u8" in chosen
+
+    print(f"[{label}] single: {chosen[:100]}")
+
     return {
         "url": chosen,
         "http_headers": {"User-Agent": _MOBILE_UA, "Referer": page_url},
         "title": title,
         "thumbnail": thumb,
         "duration": None,
-        "ext": "m3u8" if is_hls else "mp4",
+        "ext": "m3u8" if is_hls else _guess_ext_from_url(chosen) or "mp4",
         "protocol": "m3u8_native" if is_hls else "https",
         "format_note": "HD" if ("hd_url" in chosen or "_hd_" in chosen) else None,
         "id": _cache_key(page_url),
     }
+
+
+def _extract_meta_threads(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    return _extract_meta_page(page_url, cookies, "threads")
+
+
+def _extract_meta_instagram(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    return _extract_meta_page(page_url, cookies, "instagram")
 
 
 # Shared yt-dlp invocation — used by both /extract and /download
@@ -301,8 +367,29 @@ def _run_ydl(
     http_headers: dict[str, str] = {}
     if referer:
         http_headers["Referer"] = referer
+    elif "bilivideo.com" in page_url:
+        http_headers["Referer"] = "https://www.bilibili.com/"
+        http_headers["Origin"] = "https://www.bilibili.com"
     if cookies:
         http_headers["Cookie"] = cookies
+
+    direct_media = re.search(
+        r"(?:\.(?:mp4|webm|mov|m4v|m3u8|mpd)(?:[?#]|$)|bilivideo\.com/|cdninstagram\.com/|scontent[-\w]*\.cdninstagram\.com/|fbcdn\.net/|threadscdn\.com/)",
+        page_url,
+        re.IGNORECASE,
+    )
+    if direct_media:
+        ext = _guess_ext_from_url(page_url) or ("m3u8" if ".m3u8" in page_url.lower() else "mp4")
+        return {
+            "url": page_url,
+            "http_headers": http_headers,
+            "title": None,
+            "thumbnail": None,
+            "duration": None,
+            "ext": ext,
+            "protocol": "m3u8_native" if ".m3u8" in page_url.lower() else "https",
+            "id": _cache_key(page_url),
+        }
 
     # YouTube client selection (order matters — first match wins):
     #   - tv:          newer TV client, returns non-SABR formats up to 1080p
@@ -348,6 +435,11 @@ def _run_ydl(
         if threads_info:
             return threads_info
         print(f"[threads] HTML scrape found nothing; falling back to yt-dlp for {page_url}")
+    if "instagram.com" in page_url:
+        instagram_info = _extract_meta_instagram(page_url, cookies)
+        if instagram_info:
+            return instagram_info
+        print(f"[instagram] HTML scrape found nothing; falling back to yt-dlp for {page_url}")
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -438,7 +530,7 @@ def _download_headers(referer: str | None, cookies: str | None, page_url: str | 
     headers: dict[str, str] = {}
     if referer:
         headers["Referer"] = referer
-    elif page_url and "bilibili.com" in page_url:
+    elif page_url and ("bilibili.com" in page_url or "bilivideo.com" in page_url):
         # Bilibili CDN (upos-*.bilivideo.com) returns 403 without Referer.
         # If the caller didn't pass one, derive it from the page URL host.
         headers["Referer"] = "https://www.bilibili.com/"
@@ -446,6 +538,20 @@ def _download_headers(referer: str | None, cookies: str | None, page_url: str | 
     if cookies:
         headers["Cookie"] = cookies
     return headers
+
+
+def _needs_headered_direct_stream(page_url: str, media_url: str, headers: dict[str, str]) -> bool:
+    if headers.get("Cookie"):
+        return True
+    combined = f"{page_url} {media_url}".lower()
+    return any(host in combined for host in (
+        "bilibili.com",
+        "bilivideo.com",
+        "instagram.com",
+        "cdninstagram.com",
+        "fbcdn.net",
+        "threadscdn.com",
+    ))
 
 
 def _ffmpeg_stream(
@@ -527,7 +633,7 @@ def download(
     }
 
     kind = response["kind"]
-    request_headers = _download_headers(referer, cookies, page_url=url)
+    request_headers = {**(response.get("headers") or {}), **_download_headers(referer, cookies, page_url=url)}
     if kind == "paired":
         return StreamingResponse(
             _ffmpeg_stream(response["videoUrl"], response["audioUrl"], None, request_headers),
@@ -540,6 +646,11 @@ def download(
         )
     # kind == "direct" → already a single mp4, redirect the browser straight to
     # googlevideo (saves server bandwidth — 100% of the bytes go phone↔CDN).
+    if _needs_headered_direct_stream(url, response["url"], request_headers):
+        return StreamingResponse(
+            _ffmpeg_stream("", None, response["url"], request_headers),
+            media_type="video/mp4", headers=headers,
+        )
     return RedirectResponse(response["url"], status_code=307, headers=headers)
 
 
@@ -560,7 +671,7 @@ def download_post(
         ),
         "Cache-Control": "no-store",
     }
-    request_headers = _download_headers(req.referer, req.cookies, page_url=req.pageUrl)
+    request_headers = {**(response.get("headers") or {}), **_download_headers(req.referer, req.cookies, page_url=req.pageUrl)}
 
     kind = response["kind"]
     if kind == "paired":
@@ -577,6 +688,95 @@ def download_post(
         _ffmpeg_stream("", None, response["url"], request_headers),
         media_type="video/mp4", headers=headers,
     )
+
+
+# ── /proxy — stream a media URL through the server with auth-shape headers ──
+#
+# Browser extensions can't set Referer / Origin / User-Agent on
+# chrome.downloads.download() calls. That's a blocker for Instagram /
+# Bilibili / Threads / Reddit CDN URLs that 403 or redirect to login when
+# those headers are missing. /proxy streams the bytes through us so we can
+# attach the headers the CDN expects.
+#
+# Used by the extension's gallery downloads (each photo + video in an IG
+# carousel goes through here). Not for yt-dlp-resolved video streams —
+# those still use /download because they may need ffmpeg muxing.
+
+
+def _default_proxy_headers(target_url: str, referer: str | None) -> dict[str, str]:
+    """Sane defaults so the CDN we're hitting will actually respond. The caller
+    may override any of these via explicit query params."""
+    host = ""
+    try:
+        host = urllib.parse.urlparse(target_url).hostname or ""
+    except Exception:
+        pass
+    h: dict[str, str] = {
+        "User-Agent":      _MOBILE_UA,
+        "Accept":          "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    if referer:
+        h["Referer"] = referer
+    elif "cdninstagram" in host or "fbcdn" in host:
+        h["Referer"] = "https://www.instagram.com/"
+    elif "threadscdn" in host:
+        h["Referer"] = "https://www.threads.com/"
+    elif "bilivideo" in host or "biliapi" in host or "bilibili" in host:
+        h["Referer"] = "https://www.bilibili.com/"
+        h["Origin"]  = "https://www.bilibili.com"
+    elif "redd.it" in host or "redditmedia" in host:
+        h["Referer"] = "https://www.reddit.com/"
+    return h
+
+
+@app.get("/proxy")
+@limiter.limit(RATE_LIMIT)
+def proxy(
+    request: Request,
+    url: str = Query(..., description="Media URL to proxy"),
+    referer: str | None = Query(None),
+    cookies: str | None = Query(None),
+    filename: str | None = Query(None, description="Suggested filename for Content-Disposition"),
+) -> StreamingResponse:
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "url must be absolute http(s)")
+    headers = _default_proxy_headers(url, referer)
+    if cookies:
+        headers["Cookie"] = cookies
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        upstream = urllib.request.urlopen(req, timeout=30)
+    except urllib.error.HTTPError as e:  # type: ignore[attr-defined]
+        body = ""
+        try: body = e.read().decode("utf-8", errors="replace")[:240]
+        except Exception: pass
+        raise HTTPException(e.code, f"upstream: {body or e.reason}")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"upstream: {str(e)[:240]}")
+
+    content_type = upstream.headers.get("Content-Type", "application/octet-stream")
+    out_headers: dict[str, str] = {"Cache-Control": "no-store"}
+    if filename:
+        safe = re.sub(r'[<>:"/\\|?*\x00-\x1F]+', "", filename).strip()[:160] or "download"
+        out_headers["Content-Disposition"] = f'attachment; filename="{safe}"; filename*=UTF-8\'\'{_url_quote(safe)}'
+    # Pass through Content-Length when known so the browser shows accurate progress.
+    if cl := upstream.headers.get("Content-Length"):
+        out_headers["Content-Length"] = cl
+
+    def stream() -> Iterator[bytes]:
+        try:
+            while True:
+                chunk = upstream.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try: upstream.close()
+            except Exception: pass
+
+    return StreamingResponse(stream(), media_type=content_type, headers=out_headers)
 
 
 def _url_quote(s: str) -> str:

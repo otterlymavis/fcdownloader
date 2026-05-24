@@ -86,7 +86,9 @@ try {
           addItem(details.tabId, tab.url, {
             url: u,
             kind: u.includes(".m3u8") ? "hls" :
-                  u.includes(".mpd")  ? "dash" : "direct",
+                  u.includes(".mpd")  ? "dash" :
+                  /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(u) ? "image" :
+                  /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i.test(u) ? "audio" : "direct",
             source: "network",
             mime: details.responseHeaders?.find((h) => /content-type/i.test(h.name))?.value || "",
           });
@@ -107,8 +109,9 @@ function isLikelyMedia(url) {
   const u = url.toLowerCase().split("?")[0];
   if (u.endsWith(".m3u8") || u.endsWith(".mpd")) return true;
   if (u.endsWith(".mp4") || u.endsWith(".webm") || u.endsWith(".mov")) return true;
+  if (/\.(jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)$/.test(u)) return true;
   // Known video CDNs (no extension)
-  if (/(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|fbcdn\.net|threadscdn\.com|v\.redd\.it|tiktokcdn\.com|v\d+-webapp\.tiktok\.com|bilivideo\.com|dmcdn\.net|pinimg\.com\/videos|vimeocdn\.com)/.test(url)) {
+  if (/(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|v\.redd\.it|tiktokcdn\.com|v\d+-webapp\.tiktok\.com|bilivideo\.com|dmcdn\.net|pinimg\.com\/(?:videos|originals|736x|1200x|564x)|vimeocdn\.com)/.test(url)) {
     // Skip byte-range YouTube segments (will dedupe to the parent URL)
     if (/googlevideo\.com\/videoplayback/.test(url) && /[?&]range=/.test(url)) return false;
     return true;
@@ -196,7 +199,7 @@ async function preflightBackendUrl(url) {
       ac.abort();
       return { ok: false, error: `${r.status}: ${body.slice(0, 240)}` };
     }
-    if (ct.startsWith("video/") || ct.startsWith("application/x-mpegURL") || ct.startsWith("application/octet-stream")) {
+    if (ct.startsWith("video/") || ct.startsWith("image/") || ct.startsWith("audio/") || ct.startsWith("application/x-mpegURL") || ct.startsWith("application/octet-stream")) {
       ac.abort();  // abort the body; chrome.downloads will fetch fresh
       return { ok: true };
     }
@@ -227,6 +230,7 @@ async function downloadItem(tabId, item) {
     ? item.pageUrl
     : (item.url || item.pageUrl || tabPageUrl);
   const referer = item.referer || item.pageUrl || tabPageUrl || null;
+  const downloadPageUrl = item.pageUrl || referer || urlForBackend || tabPageUrl;
   const cookieSourceUrl = referer || urlForBackend;
   const cookies = await cookieHeaderFor(cookieSourceUrl);
   const { backend } = await getSettings();
@@ -257,7 +261,7 @@ async function downloadItem(tabId, item) {
   // HLS / DASH / paired adaptive / known-server-only sites need backend muxing.
   const needsMux =
     item.kind === "hls" || item.kind === "dash" || item.kind === "paired" || item.kind === "embed" ||
-    /youtube\.com|youtu\.be|googlevideo\.com|(?:player\.)?vimeo\.com|vimeocdn\.com/.test(item.url || urlForBackend);
+    /youtube\.com|youtu\.be|googlevideo\.com|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.com|bilibili\.com/.test(item.url || urlForBackend);
 
   if (needsMux) {
     return viaBackend(urlForBackend);
@@ -299,9 +303,18 @@ function chromeDownload(url, filename) {
 }
 
 function suggestedFilename(item, pageUrl) {
-  const title = item.title || hostname(pageUrl) || "video";
+  const title = item.title || hostname(pageUrl) || "media";
   const safe = title.replace(/[<>:"/\\|?*\x00-\x1F]+/g, "").slice(0, 80);
-  return `${safe}.mp4`;
+  const ext = (item.ext || extFromUrl(item.url) || (item.kind === "image" ? "jpg" : item.kind === "audio" ? "mp3" : "mp4")).toLowerCase();
+  return `${safe}.${ext.replace(/[^a-z0-9]/g, "") || "bin"}`;
+}
+
+function extFromUrl(url) {
+  try {
+    return new URL(url).pathname.match(/\.([a-z0-9]{2,5})$/i)?.[1] || "";
+  } catch {
+    return String(url || "").split("?")[0].match(/\.([a-z0-9]{2,5})$/i)?.[1] || "";
+  }
 }
 
 // ── Gallery downloads — Instagram carousel, Reddit gallery, Threads ───────
@@ -319,30 +332,45 @@ function galleryFilename(title, index, item) {
   return `${base}/${base}-${n}.${ext}`;
 }
 
-async function downloadGalleryItem(title, index, item) {
-  // Images go straight to chrome.downloads (Instagram/Reddit CDN URLs are
-  // pre-signed, no Referer required). Videos in a carousel may need backend
-  // muxing (paired DASH), so they route through downloadItem like a normal
-  // backend-extracted item.
+// Route gallery items through the server's /proxy endpoint so it can attach
+// the Referer / Cookie / User-Agent that the CDN expects. chrome.downloads
+// itself can't set those headers, which is why direct downloads from
+// cdninstagram.com / fbcdn.net silently land as 0-byte or HTML files.
+async function buildProxiedUrl(item, ctx) {
+  const { backend } = await getSettings();
+  const params = new URLSearchParams({ url: item.url });
+  if (ctx?.referer) params.set("referer", ctx.referer);
+  if (ctx?.cookies) params.set("cookies", ctx.cookies);
+  // Pass an ext-aware suggested filename so the proxy can set
+  // Content-Disposition. The path-folder part of galleryFilename has to be
+  // dropped here because Content-Disposition can't contain a directory.
+  params.set("filename", (ctx?.filename || "").split("/").pop() || "");
+  return `${backend}/proxy?${params.toString()}`;
+}
+
+async function downloadGalleryItem(title, index, item, ctx) {
   const filename = galleryFilename(title, index, item);
-  if (item.kind === "image") {
-    return chromeDownload(item.url, filename);
-  }
-  if (item.kind === "paired") {
-    // Paired video inside a gallery — we can't easily mux on the client.
-    // For now, just download the video stream (no audio). If users hit this
-    // we'll route it through a /download endpoint variant.
-    return chromeDownload(item.videoUrl || item.url, filename);
-  }
-  return chromeDownload(item.url, filename);
+  const sourceUrl = item.kind === "paired" ? (item.videoUrl || item.url) : item.url;
+  if (!sourceUrl) throw new Error(`gallery item ${index} has no URL`);
+
+  const proxied = await buildProxiedUrl(
+    { ...item, url: sourceUrl },
+    { ...(ctx || {}), filename },
+  );
+  return chromeDownload(proxied, filename);
 }
 
 async function downloadGallery(tabId, pageUrl, title, items) {
+  // Build referer + cookies once for the whole batch; every item in a carousel
+  // shares the same auth context (same Instagram/Reddit/Threads post).
+  const cookies = await cookieHeaderFor(pageUrl || "");
+  const ctx = { referer: pageUrl || "", cookies };
+
   let started = 0;
   let failed  = 0;
   for (let i = 0; i < items.length; i++) {
     try {
-      await downloadGalleryItem(title, i, items[i]);
+      await downloadGalleryItem(title, i, items[i], ctx);
       started++;
     } catch (e) {
       failed++;
@@ -417,7 +445,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     if (msg.type === "fcdl:download_gallery_item") {
       try {
-        const id = await downloadGalleryItem(msg.title, msg.index, msg.item);
+        const tabId = msg.tabId ?? sender.tab?.id;
+        const tab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : null;
+        const pageUrl = msg.pageUrl || tab?.url || "";
+        const cookies = await cookieHeaderFor(pageUrl);
+        const id = await downloadGalleryItem(msg.title, msg.index, msg.item, { referer: pageUrl, cookies });
         sendResponse({ ok: true, downloadId: id });
       } catch (e) {
         sendResponse({ ok: false, error: String(e.message || e) });
