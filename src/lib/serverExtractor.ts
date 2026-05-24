@@ -33,6 +33,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { DetectedMedia } from '../types';
+import { extractSessionCookies } from './cookieManager';
 
 const STORAGE_KEY = '@fcdownloader/server_extractor_url';
 const TOKEN_STORAGE_KEY = '@fcdownloader/server_extractor_token';
@@ -123,12 +124,29 @@ export async function extractViaServer(pageUrl: string): Promise<DetectedMedia[]
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
+    // Forward the user's logged-in cookies from the in-app WebView. If they
+    // logged into the source site (Bilibili, Instagram, the platform with
+    // their paywall) in the Browse tab, those cookies travel here and become
+    // the auth context yt-dlp uses on the server. The server writes them to
+    // a per-request cookies.txt so the cookiejar — not just the Cookie
+    // header — gets populated, and every internal yt-dlp call inherits the
+    // session. Without this, Bilibili tops out at 480p, Instagram fails on
+    // most posts, etc.
+    let cookies = '';
+    try {
+      cookies = await extractSessionCookies(pageUrl);
+    } catch (e) {
+      console.warn('[serverExtractor] cookie read failed:', String(e).slice(0, 120));
+    }
+    const body: Record<string, unknown> = { pageUrl };
+    if (cookies) body.cookies = cookies;
+
     const fullUrl = `${base}/extract`;
-    console.log('[serverExtractor] POST', fullUrl, 'token?', !!token);
+    console.log('[serverExtractor] POST', fullUrl, 'token?', !!token, 'cookies?', cookies.length, 'chars');
     const res = await fetch(fullUrl, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ pageUrl }),
+      body: JSON.stringify(body),
       signal: ac.signal,
     });
     if (!res.ok) {
@@ -159,6 +177,7 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
       timestamp: Date.now(),
       mimeType: r.mimeType ?? 'application/x-mpegURL',
       mediaType: 'hls',
+      mediaKind: 'video',
       confidence: 0.97,
       provenance: 'social-extractor',
       label: r.label ?? 'HLS',
@@ -178,6 +197,7 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
       mimeType: r.mimeType ?? 'video/mp4',
       // audioTrackUrl set → dashDownloader Case 1 (download both, native mux)
       mediaType: 'dash',
+      mediaKind: 'video',
       confidence: 0.97,
       provenance: 'social-extractor',
       hasAudio: true,
@@ -195,7 +215,8 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
       httpHeaders: headers,
       timestamp: Date.now(),
       mimeType: r.mimeType ?? 'video/mp4',
-      mediaType: 'hls',
+      mediaType: 'direct',
+      mediaKind: (r.mimeType || '').startsWith('image/') ? 'image' : (r.mimeType || '').startsWith('audio/') ? 'audio' : 'video',
       confidence: 0.97,
       provenance: 'social-extractor',
       hasAudio: true,
