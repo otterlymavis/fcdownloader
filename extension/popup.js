@@ -160,6 +160,28 @@ function refresh() {
     return;
   }
 
+  // First-run gate — until a backend is configured the popup can't do
+  // anything useful. Show a one-click "Configure backend" CTA in the empty
+  // state instead of silently letting the user hit a cryptic error later.
+  try {
+    const stored = await chrome.storage.sync.get({ backend: "" });
+    if (!stored.backend?.trim()) {
+      primaryEl.hidden = true;
+      moreEl.hidden = true;
+      emptyEl.hidden = false;
+      const text = emptyEl.querySelector(".empty-text");
+      if (text) text.textContent = "Backend URL isn't set yet.";
+      if (extractBtn) {
+        extractBtn.textContent = "Open settings";
+        extractBtn.onclick = (e) => {
+          e.preventDefault();
+          if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
+        };
+      }
+      return;  // skip the refresh loop — nothing to fetch
+    }
+  } catch {}
+
   refresh();
   setInterval(refresh, 1500);
 })();

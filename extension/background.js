@@ -17,6 +17,21 @@
 // via chrome.storage.managed (enterprise policy).
 const DEFAULT_BACKEND = "";
 
+// On first install (or after an update from a build that didn't require a
+// backend), pop the options page so users don't bounce off a cryptic
+// "Backend URL is not configured" the first time they click the icon.
+chrome.runtime.onInstalled.addListener(async (details) => {
+  if (details.reason !== "install" && details.reason !== "update") return;
+  try {
+    const stored = await chrome.storage.sync.get({ backend: "" });
+    if (!stored.backend?.trim()) {
+      chrome.runtime.openOptionsPage();
+    }
+  } catch (e) {
+    console.warn("[fcdl] onInstalled options-page check failed:", e);
+  }
+});
+
 // ── Detected videos per tab ───────────────────────────────────────────────
 
 const tabState = new Map(); // tabId -> { url, pageUrl, items: [{url, kind, source, ...}] }
