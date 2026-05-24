@@ -1,16 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  Dimensions,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
-  useColorScheme,
   View,
 } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
@@ -31,273 +27,51 @@ import { useBookmarks } from './src/hooks/useBookmarks';
 import { useSettings } from './src/hooks/useSettings';
 import { DetectedMedia, DownloadTask } from './src/types';
 import { extractFromSocialUrl, isSocialPageUrl } from './src/lib/platformExtractors';
+import {
+  BOTTOM_PAD,
+  IS_ANDROID,
+  IS_IOS,
+  R,
+  RIPPLE,
+  RIPPLE_BL,
+  S,
+  subtleShadow,
+  TOP_PAD,
+  useTheme,
+} from './src/theme/appTheme';
+import {
+  formatBytes,
+  getInitial,
+  getMediaFormat,
+  getMediaKind,
+  getMimeFromPath,
+  getPageTitle,
+  getQuality,
+  getSourceName,
+  guessMediaType,
+  isDirectMediaUrl,
+  isUseful,
+  smartDedup,
+} from './src/lib/mediaHelpers';
 
 // ── Layout constants ──────────────────────────────────────────
-const TOP_PAD    = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 0;
-const BOTTOM_PAD = Platform.OS === 'android' ? 16 : 0;
-const IS_IOS     = Platform.OS === 'ios';
-const IS_ANDROID = Platform.OS === 'android';
-const SCREEN_W   = Dimensions.get('window').width;
-
 // ── Ripple ────────────────────────────────────────────────────
-const RIPPLE    = IS_ANDROID ? { color: 'rgba(0,0,0,0.06)', borderless: false } : undefined;
-const RIPPLE_BL = IS_ANDROID ? { color: 'rgba(0,0,0,0.06)', borderless: true  } : undefined;
-
 // ── Spacing / radius ──────────────────────────────────────────
-const S = { xs: 4, sm: 8, md: 16, lg: 24, xl: 32 } as const;
-const R = { sm: 8, md: 12, lg: 16, xl: 20 } as const;
-
 // ── Color tokens ──────────────────────────────────────────────
-// Light
-const L = {
-  bg:     '#FFFFFF',
-  card:   '#F5F5F5',
-  card2:  '#EBEBEB',
-  sep:    '#E8E8E8',
-  ink:    '#1A1A1A',
-  ink2:   '#8A8A8A',
-  ink3:   '#C0C0C0',
-  btn:    '#1A1A1A',   // primary button fill
-  btnTxt: '#FFFFFF',
-  red:    '#C0392B',
-  redBg:  '#FDF2F2',
-} as const;
-
-// Dark
-const D = {
-  bg:     '#0D0D0D',
-  card:   '#1A1A1A',
-  card2:  '#252525',
-  sep:    '#2A2A2A',
-  ink:    '#F2F2F2',
-  ink2:   '#888888',
-  ink3:   '#404040',
-  btn:    '#F2F2F2',
-  btnTxt: '#0D0D0D',
-  red:    '#E05A5A',
-  redBg:  '#2A1515',
-} as const;
-
-function useTheme(darkOverride?: boolean) {
-  const systemDark = useColorScheme() === 'dark';
-  const dark = darkOverride ?? systemDark;
-  const c = dark ? D : L;
-  return { ...c, dark,
-    ripple: dark ? { color: 'rgba(255,255,255,0.06)', borderless: false } : RIPPLE,
-  };
-}
-
 // ── Helpers ───────────────────────────────────────────────────
-
-const SOURCE_NAMES: Array<[RegExp, string]> = [
-  [/video\.twimg\.com|twimg\.com/i, 'Twitter'],
-  [/cdninstagram\.com|instagram\.com/i, 'Instagram'],
-  [/threads\.net/i, 'Threads'],
-  [/vimeocdn\.com|vimeo\.com/i, 'Vimeo'],
-  [/tiktokcdn\.com|tiktokcdn-us\.com|v\d+-webapp\.tiktok\.com|tiktok\.com/i, 'TikTok'],
-  [/v\.redd\.it|reddit\.com/i, 'Reddit'],
-  [/googlevideo\.com|youtube\.com/i, 'YouTube'],
-  [/dailymotion\.com|dmcdn\.net/i, 'Dailymotion'],
-  [/facebook\.com|fbcdn\.net/i, 'Facebook'],
-  [/twitch\.tv|usher\.twitch\.tv/i, 'Twitch'],
-  [/pinimg\.com|pinterest\.com/i, 'Pinterest'],
-  [/bilivideo\.com|bilibili\.com|bilibili\.tv|b23\.tv/i, 'Bilibili'],
-  [/weibo\.com|weibo\.cn|weibocdn\.com|sinaimg\.cn/i, 'Weibo'],
-  [/xiaohongshu\.com|xhslink\.com|xhscdn\.com/i, 'Xiaohongshu'],
-];
-
-function getSourceName(url: string): string {
-  for (const [pattern, name] of SOURCE_NAMES) {
-    if (pattern.test(url)) return name;
-  }
-  try {
-    const host = new URL(url).hostname.replace(/^www\./, '');
-    const name = host.split('.').slice(-2, -1)[0] ?? 'Video';
-    return name.charAt(0).toUpperCase() + name.slice(1);
-  } catch { return 'Video'; }
-}
-
-function getMediaKind(item: Pick<DetectedMedia, 'url' | 'mimeType' | 'mediaKind'>): NonNullable<DetectedMedia['mediaKind']> {
-  if (item.mediaKind) return item.mediaKind;
-  const u = item.url.toLowerCase().split('?')[0];
-  const mt = String(item.mimeType || '').toLowerCase();
-  if (mt.startsWith('image/') || /\.(jpe?g|png|webp|gif|avif|heic)$/.test(u)) return 'image';
-  if (mt.startsWith('audio/') || /\.(mp3|m4a|aac|wav|ogg|opus|flac)$/.test(u)) return 'audio';
-  return 'video';
-}
-
-function getQuality(url: string, label?: string): string | null {
-  if (label) return label;
-  const ytH = url.match(/[?&]height=(\d+)/i);
-  if (ytH) {
-    const h = parseInt(ytH[1], 10);
-    if (h >= 2160) return '4K';
-    if (h >= 1080) return '1080p';
-    if (h >= 720)  return '720p';
-    if (h >= 480)  return '480p';
-    if (h >= 360)  return '360p';
-  }
-  if (/4k|2160/i.test(url)) return '4K';
-  if (/1080/i.test(url))    return '1080p';
-  if (/720/i.test(url))     return '720p';
-  if (/480/i.test(url))     return '480p';
-  if (/360/i.test(url))     return '360p';
-  if (/\bhd\b/i.test(url))  return 'HD';
-  return null;
-}
-
-function getMediaFormat(item: DetectedMedia): string {
-  const kind = getMediaKind(item);
-  const u = item.url.toLowerCase();
-  if (item.mediaType === 'hls' || u.includes('.m3u8')) return 'HLS Stream';
-  if (item.mediaType === 'dash' || u.includes('.mpd')) return 'DASH Stream';
-  const ext = u.split('?')[0].match(/\.([a-z0-9]{2,5})$/)?.[1];
-  if (ext) return ext.toUpperCase();
-  if (item.mimeType) return item.mimeType;
-  return kind === 'image' ? 'Image' : kind === 'audio' ? 'Audio' : 'Video';
-}
-
-const MIME_BY_EXT: Record<string, string> = {
-  mp4: 'video/mp4',
-  webm: 'video/webm',
-  mov: 'video/quicktime',
-  ts: 'video/mp2t',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  png: 'image/png',
-  webp: 'image/webp',
-  gif: 'image/gif',
-  avif: 'image/avif',
-  mp3: 'audio/mpeg',
-  m4a: 'audio/mp4',
-  wav: 'audio/wav',
-  ogg: 'audio/ogg',
-};
-
-function getMimeFromPath(path: string): string {
-  const p = path.toLowerCase();
-  const ext = p.match(/\.([a-z0-9]+)$/)?.[1] ?? '';
-  return MIME_BY_EXT[ext] ?? 'application/octet-stream';
-}
-
-function getPageTitle(url: string): string {
-  try { return new URL(url).hostname.replace(/^www\./, ''); }
-  catch { return url.slice(0, 40); }
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes > 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
-  if (bytes > 1e6) return `${(bytes / 1e6).toFixed(0)} MB`;
-  return `${Math.round(bytes / 1e3)} KB`;
-}
-
-function getInitial(name: string): string {
-  return (name[0] ?? '?').toUpperCase();
-}
 
 // ── URL classification ────────────────────────────────────────
 
-const SEGMENT_RE     = /\.(ts|m4s|aac|m4a|cmfv|cmfa)(\?|#|$)/i;
-const VIMEO_RANGE_RE = /vimeocdn\.com\/.*\/v2\/range\/.*\/avf\//i;
-const USEFUL_EXT_RE  = /\.(m3u8|mpd|mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)(\?|#|$)/i;
-const VIMEO_JSON_RE  = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i;
-const VIDEO_CDN_RE   = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|threadscdn\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|fbcdn\.net\/videos|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/|weibocdn\.com\/|xhscdn\.com\/)/i;
-const YT_RANGE_RE    = /googlevideo\.com\/videoplayback[^#]*[?&](?:range=|sq=)\d/i;
-
-function isUseful(url: string): boolean {
-  const clean = url.split('#')[0];
-  if (SEGMENT_RE.test(clean))   return false;
-  if (VIMEO_RANGE_RE.test(url)) return false;
-  if (YT_RANGE_RE.test(url))   return false;
-  return USEFUL_EXT_RE.test(url) || VIMEO_JSON_RE.test(url) || VIDEO_CDN_RE.test(url);
-}
-
-function isDirectMediaUrl(url: string): boolean {
-  const clean = url.split('#')[0];
-  if (SEGMENT_RE.test(clean)) return false;
-  if (YT_RANGE_RE.test(url)) return false;
-  return USEFUL_EXT_RE.test(url) || VIMEO_JSON_RE.test(url) || VIDEO_CDN_RE.test(url);
-}
-
-function guessMediaType(url: string): DetectedMedia['mediaType'] {
-  const lower = url.toLowerCase();
-  if (lower.includes('.mpd')) return 'dash';
-  if (lower.includes('.m3u8')) return 'hls';
-  return 'direct';
-}
-
 // ── Dedup ─────────────────────────────────────────────────────
 
-const YT_CDN_RE   = /googlevideo\.com\/videoplayback/i;
-const TW_VIDEO_RE = /video\.twimg\.com\/(?:ext_tw_video|amplify_video)\/(\d+)\//i;
-
-const YT_ITAG_RANK: Record<number, number> = {
-  22: 100, 59: 90, 78: 85, 18: 70, 36: 40, 17: 20,
-};
-
-function getVideoGroupKey(url: string): string | null {
-  try {
-    if (YT_CDN_RE.test(url)) {
-      const id = new URL(url).searchParams.get('id');
-      return id ? `yt_${id}` : null;
-    }
-    const ytM = url.match(/manifest\.googlevideo\.com\/api\/manifest\/[^/]+\/.*?\/id\/([^/.]+)/);
-    if (ytM) return `ytm_${ytM[1]}`;
-    const tw = url.match(TW_VIDEO_RE);
-    if (tw) return `tw_${tw[1]}`;
-    return null;
-  } catch { return null; }
-}
-
-function getQualityScore(url: string): number {
-  if (YT_CDN_RE.test(url)) {
-    try {
-      const p = new URL(url).searchParams;
-      const itag = parseInt(p.get('itag') ?? '0', 10);
-      if ((p.get('mime') ?? '').startsWith('audio/')) return -1;
-      return YT_ITAG_RANK[itag] ?? 1;
-    } catch { return 1; }
-  }
-  const res = url.match(/\/(\d+)x(\d+)\//);
-  if (!res && /\.m3u8/i.test(url)) return 10_000_000;
-  if (res) return parseInt(res[1]) * parseInt(res[2]) + (/\.m3u8/i.test(url) ? 1 : 0);
-  const u = url.toLowerCase();
-  if (/\.mpd/.test(u))                return 3_000_000;
-  if (/\.(mp4|m4v|webm|mov)/.test(u)) return 100;
-  return 50;
-}
-
-function smartDedup(items: DetectedMedia[]): DetectedMedia[] {
-  const grouped  = new Map<string, { item: DetectedMedia; score: number }>();
-  const ungrouped: DetectedMedia[] = [];
-  for (const item of items) {
-    const urlScore = getQualityScore(item.url);
-    if (urlScore < 0) continue;
-    const score = urlScore * (1 + (item.confidence ?? 0.5) * 0.2);
-    const key   = getVideoGroupKey(item.url);
-    if (key) {
-      const ex = grouped.get(key);
-      if (!ex || score > ex.score) grouped.set(key, { item, score });
-    } else {
-      ungrouped.push(item);
-    }
-  }
-  return [...Array.from(grouped.values()).map((e) => e.item), ...ungrouped];
-}
-
 // ── Shadow ────────────────────────────────────────────────────
-const subtleShadow = IS_IOS
-  ? { shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } }
-  : { elevation: 1 };
-
 // ─────────────────────────────────────────────────────────────
 type Tab = 'home' | 'browser' | 'library' | 'bookmarks';
 
 export default function App() {
   const { theme, fontSize, fontScale, setTheme, setFontSize } = useSettings();
-  const systemDark = useColorScheme() === 'dark';
-  const isDark = theme === 'system' ? systemDark : theme === 'dark';
-  const t  = useTheme(isDark);
+  const t = useTheme(theme === 'system' ? undefined : theme === 'dark');
+  const isDark = t.dark;
   const fs = (base: number) => base * fontScale;
   const webviewRef = useRef<WebView>(null);
 

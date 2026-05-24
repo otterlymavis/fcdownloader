@@ -78,8 +78,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     './plugins/withMediaMuxer',
     // iOS Share Extension — appears in Safari's share sheet
     './plugins/withShareExtension',
-    // Uncomment after running `npx expo prebuild` and adding the Swift module:
-    // './plugins/withBackgroundAssetDownload',
   ],
   extra: {
     eas: {

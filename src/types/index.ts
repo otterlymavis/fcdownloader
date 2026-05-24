@@ -12,8 +12,6 @@ export type DownloadStatus =
 
 export type DownloadStrategy = 'hls-segments' | 'direct' | 'dash' | 'vimeo-json' | 'ffmpeg' | 'yt-dlp';
 
-export type ManifestType = 'hls' | 'dash' | 'direct' | 'mse' | 'vimeo-json';
-
 /** Where the URL was first observed. Ordered from highest to lowest signal strength. */
 export type Provenance =
   | 'yt-player-response'    // ytInitialPlayerResponse.streamingData (strongest signal)
@@ -29,33 +27,6 @@ export type Provenance =
   | 'social-extractor'      // server-side platformExtractors.ts fetch
   | 'manifest-parser'       // content-based: #EXTM3U or <MPD detected in response body
   | 'manual';               // user typed/pasted the URL
-
-/** Unified schema for all detected media streams. */
-export interface StreamVariant {
-  id: string;
-  url: string;
-  manifestType: ManifestType;
-  container?: string;       // mp4 | webm | ts | fmp4
-  codecs?: string;          // e.g. "avc1.640028,mp4a.40.2"
-  bitrate?: number;         // bits/sec
-  width?: number;
-  height?: number;
-  fps?: number;
-  hasAudio: boolean;
-  hasVideo: boolean;
-  duration?: number;        // seconds
-  provenance: Provenance;
-  confidence: number;       // 0–1
-  segmentStrategy?: DownloadStrategy;
-  audioTrackUrl?: string;   // separate audio track URL (Bilibili DASH, etc.)
-  audioTrackCodecs?: string;
-  label?: string;
-  platform?: string;
-  pageUrl?: string;
-  userAgent?: string;
-  mimeType?: string;
-  timestamp?: number;
-}
 
 export interface DetectedMedia {
   id: string;

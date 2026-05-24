@@ -27,8 +27,8 @@
  * choice. A minimal reference Cloudflare-Worker / Fly.io container should fit
  * in <100 lines and cost ~$0/mo at hobby traffic.
  *
- * Configuration: stored in AsyncStorage under @fcdownloader/server_extractor_url
- * (settable from the SettingsSheet). When unset, this module is a no-op.
+ * Configuration: bundled at build time, with legacy AsyncStorage values still
+ * honored as a development override. When unset, this module is a no-op.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
@@ -49,11 +49,6 @@ const _extra = (Constants.expoConfig?.extra ?? {}) as {
 const BUNDLED_URL   = (_extra.bundledExtractorUrl   ?? '').trim();
 const BUNDLED_TOKEN = (_extra.bundledExtractorToken ?? '').trim();
 const SERVER_CONFIDENCE = 0.97;
-
-/** Whether this build is server-backed (HD via backend) or local-only (360p + opportunistic HLS HD). */
-export function isServerBacked(): boolean {
-  return BUNDLED_URL.length > 0;
-}
 
 function normaliseUrl(raw: string): string {
   let s = raw.trim().replace(/\/+$/, '');
@@ -89,11 +84,6 @@ export async function getServerExtractorUrl(): Promise<string | null> {
   return null;
 }
 
-export async function setServerExtractorUrl(url: string | null): Promise<void> {
-  if (!url) { await AsyncStorage.removeItem(STORAGE_KEY); return; }
-  await AsyncStorage.setItem(STORAGE_KEY, normaliseUrl(url));
-}
-
 export async function getServerExtractorToken(): Promise<string | null> {
   // Same precedence as the URL — bundled wins.
   if (BUNDLED_TOKEN) return BUNDLED_TOKEN;
@@ -102,11 +92,6 @@ export async function getServerExtractorToken(): Promise<string | null> {
     if (v && v.trim()) return v.trim();
   } catch {}
   return null;
-}
-
-export async function setServerExtractorToken(token: string | null): Promise<void> {
-  if (!token) { await AsyncStorage.removeItem(TOKEN_STORAGE_KEY); return; }
-  await AsyncStorage.setItem(TOKEN_STORAGE_KEY, token.trim());
 }
 
 /**
