@@ -160,12 +160,13 @@ function refresh() {
     return;
   }
 
-  // First-run gate — until a backend is configured the popup can't do
-  // anything useful. Show a one-click "Configure backend" CTA in the empty
-  // state instead of silently letting the user hit a cryptic error later.
+  // First-run gate — only triggers when neither storage NOR the build-time
+  // default has a backend URL (i.e. someone built from source without
+  // setting EXTENSION_DEFAULT_BACKEND). Public-distribution builds bake in
+  // the URL and never hit this branch.
   try {
-    const stored = await chrome.storage.sync.get({ backend: "" });
-    if (!stored.backend?.trim()) {
+    const { settings } = (await sendMessage({ type: "fcdl:list", tabId: currentTabId }, 3000)) || {};
+    if (!settings?.backend?.trim()) {
       primaryEl.hidden = true;
       moreEl.hidden = true;
       emptyEl.hidden = false;

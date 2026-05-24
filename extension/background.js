@@ -11,24 +11,34 @@
  *    YouTube HD streams.
  */
 
-// The backend URL is configured per-install via the extension options page
-// (chrome.storage.sync key "backend"). No personal URL is hardcoded here —
-// forks of the project should set their own default in the options page or
-// via chrome.storage.managed (enterprise policy).
-const DEFAULT_BACKEND = "";
+// Default backend URL baked into THIS build at packaging time. The OSS
+// source has FCDL_DEFAULT_BACKEND = "" in config.js so forks don't inherit
+// anyone's infrastructure; a distribution build replaces that value at
+// packaging time so end users never have to enter the URL manually.
+import { FCDL_DEFAULT_BACKEND } from "./config.js";
+const DEFAULT_BACKEND = (FCDL_DEFAULT_BACKEND || "").trim().replace(/\/+$/, "");
 
-// On first install (or after an update from a build that didn't require a
-// backend), pop the options page so users don't bounce off a cryptic
-// "Backend URL is not configured" the first time they click the icon.
+// On install: seed the storage.sync backend from DEFAULT_BACKEND so the
+// user never sees the "configure backend" screen on a public-distribution
+// build. Existing user overrides are preserved.
+//
+// On update or fresh install with NO default baked in (i.e. someone built
+// from source without setting the env var), open the options page so the
+// configuration step is at least obvious.
 chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason !== "install" && details.reason !== "update") return;
   try {
     const stored = await chrome.storage.sync.get({ backend: "" });
     if (!stored.backend?.trim()) {
-      chrome.runtime.openOptionsPage();
+      if (DEFAULT_BACKEND) {
+        await chrome.storage.sync.set({ backend: DEFAULT_BACKEND });
+        console.log("[fcdl] seeded backend from build default:", DEFAULT_BACKEND);
+      } else {
+        chrome.runtime.openOptionsPage();
+      }
     }
   } catch (e) {
-    console.warn("[fcdl] onInstalled options-page check failed:", e);
+    console.warn("[fcdl] onInstalled setup failed:", e);
   }
 });
 
