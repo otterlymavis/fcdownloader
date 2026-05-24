@@ -20,6 +20,9 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
   const url  = media.url;
   const mime = media.mimeType ?? '';
 
+  if (media.mediaKind === 'image' || media.mediaKind === 'audio') return 'direct';
+  if (/^(image|audio)\//i.test(mime)) return 'direct';
+
   // YouTube: on Android use yt-dlp binary; on iOS re-extract fresh signed URLs.
   // Both paths avoid the 403 caused by missing nsig transform on browse-tab-detected URLs.
   if (YT_PAGE_RE.test(media.pageUrl)) return 'yt-dlp';
@@ -47,6 +50,12 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
 
   // Bilibili CDN (single-file track without paired audio)
   if (/bilivideo\.com\//i.test(url)) return 'direct';
+
+  // Meta/TikTok/Twitter direct CDN URLs are usually signed MP4/WebM responses
+  // even when the URL path does not expose a file extension.
+  if (/(?:cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|video\.twimg\.com|tiktokcdn\.com|tiktokcdn-us\.com|v\d+-webapp\.tiktok\.com|weibocdn\.com|xhscdn\.com)/i.test(url)) {
+    return 'direct';
+  }
 
   // Default: treat as HLS (handles m3u8 and unknown manifests)
   return 'hls-segments';

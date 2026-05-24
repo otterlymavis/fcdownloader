@@ -111,7 +111,8 @@
       [/"hd_src"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, "direct"],
       [/"sd_src"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, "direct"],
       [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com)[^"'\\<>\s]*\.(?:mp4|m3u8)[^"'\\<>\s]*)/g, "direct"],
-      [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|pinimg\.com)[^"'\\<>\s]*\.(?:jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/g, "image"],
+      [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|pinimg\.com|weibocdn\.com|sinaimg\.cn|xhscdn\.com)[^"'\\<>\s]*\.(?:jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/g, "image"],
+      [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:weibocdn\.com|xhscdn\.com)[^"'\\<>\s]*\.(?:mp4|m3u8|mov)[^"'\\<>\s]*)/g, "direct"],
     ];
     for (const [re, kind] of patterns) {
       let m;
@@ -184,7 +185,7 @@
   // X/Twitter image posts). On every OTHER site — especially YouTube,
   // Bilibili, news sites — running it pollutes the popup with thumbnails of
   // recommended videos, channel avatars, og:image cards, and ad creatives.
-  const IMAGE_HOSTS = /(?:^|\.)(instagram\.com|threads\.com|threads\.net|pinterest\.|reddit\.com|redd\.it|twitter\.com|x\.com|facebook\.com|tumblr\.com)$/i;
+  const IMAGE_HOSTS = /(?:^|\.)(instagram\.com|threads\.com|threads\.net|pinterest\.|reddit\.com|redd\.it|twitter\.com|x\.com|facebook\.com|tumblr\.com|weibo\.com|weibo\.cn|xiaohongshu\.com)$/i;
   function shouldScanImages() {
     try { return IMAGE_HOSTS.test(location.hostname); } catch { return false; }
   }

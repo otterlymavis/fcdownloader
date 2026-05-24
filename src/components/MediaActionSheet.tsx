@@ -42,7 +42,7 @@ export default function MediaActionSheet({
       <View style={[styles.sheet, c.sheet]}>
         <View style={[styles.handle, c.handle]} />
 
-        <Text style={[styles.title, c.text]}>Detected Streams</Text>
+        <Text style={[styles.title, c.text]}>Detected Media</Text>
 
         {mseActive && items.length === 0 && (
           <View style={[styles.mseBanner, c.mseBanner]}>
@@ -64,7 +64,7 @@ export default function MediaActionSheet({
                       item.mediaType === 'hls' ? styles.hlsBadge : styles.dashBadge,
                     ]}
                   >
-                    {item.mediaType.toUpperCase()}
+                    {(item.mediaKind ?? item.mediaType).toUpperCase()}
                   </Text>
                   {item.label ? (
                     <Text style={[styles.label, c.text]}>{item.label}</Text>
@@ -103,7 +103,7 @@ export default function MediaActionSheet({
 
           {items.length === 0 && !mseActive && (
             <Text style={[styles.empty, c.subtext]}>
-              Browse to a page with a video stream. Streams are detected
+              Browse to a page with media. Items are detected
               automatically when the page requests them.
             </Text>
           )}

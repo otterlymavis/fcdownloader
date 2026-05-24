@@ -3,101 +3,87 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="color-scheme" content="light dark" />
-  <meta name="description" content="Paste a video URL, get an MP4. YouTube, Vimeo, TikTok, and 1800+ more." />
+  <meta name="color-scheme" content="light" />
+  <meta name="description" content="Download videos, photos, audio, and galleries from public pages or signed-in sessions." />
   <title>FCDownloader</title>
-  <link rel="icon" href="./favicon.ico" sizes="any" />
-  <link rel="icon" href="./favicon-32.png" type="image/png" sizes="32x32" />
-  <link rel="apple-touch-icon" href="./icon-192.png" />
+  <link rel="icon" href="./favicon.ico?v=2" sizes="any" />
+  <link rel="icon" href="./favicon-32.png?v=2" type="image/png" sizes="32x32" />
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png?v=2" sizes="180x180" />
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
   <main>
-    <header>
-      <h1>FCDownloader</h1>
-      <p class="tagline">Paste a video URL, get an MP4. YouTube, Vimeo, TikTok, and 1800+ more.</p>
-      <button id="settings-btn" type="button" aria-label="Settings" title="Settings">⚙</button>
+    <header class="intro">
+      <div class="intro-copy">
+        <h1>Save media from the web</h1>
+        <p class="subtitle">Download videos, photos, audio, and galleries from public pages or signed-in sessions with the app, extension, or bookmarklet.</p>
+      </div>
+      <img class="mascot" src="./mascot.png" alt="" aria-hidden="true" />
     </header>
 
-    <form id="form" autocomplete="off">
-      <input
-        id="url"
-        type="url"
-        inputmode="url"
-        autocapitalize="none"
-        autocomplete="off"
-        spellcheck="false"
-        placeholder="https://www.youtube.com/watch?v=...  or  https://amuseplus.jp/..."
-        required
-      />
-      <button type="submit" id="submit">Fetch</button>
+    <section class="cards" id="cards" aria-label="Download options">
+      <article class="card">
+        <header class="card-head">
+          <div class="card-eyebrow">Public media</div>
+          <h2>General Websites</h2>
+          <p>For public media links from YouTube, Vimeo, TikTok, Instagram, Bilibili, and more.</p>
+        </header>
 
-      <details id="advanced">
-        <summary>Restricted / paywalled site? <span class="muted">(cookies + referer)</span></summary>
-        <input
-          id="referer"
-          type="url"
-          inputmode="url"
-          autocapitalize="none"
-          autocomplete="off"
-          spellcheck="false"
-          placeholder="Embedding page URL (sent as Referer — usually the same as the main URL)"
-        />
-        <textarea
-          id="cookies"
-          rows="2"
-          spellcheck="false"
-          placeholder="Optional Cookie header: name=value; other=value"
-        ></textarea>
-        <p class="hint hint-desktop">
-          Drag <a id="bookmarklet" href="#" draggable="true">📎 FCDownload</a> to your bookmarks bar.
-          Click it on any video page to auto-fill these fields with your session cookies.
-        </p>
-        <p class="hint hint-mobile">
-          On mobile, paste the embed URL and (if needed) the original page URL and cookies above by hand.
-          For paywalled sites where you stay signed in, the
-          <a href="https://github.com/otterlymavis/fcdownloader/actions" target="_blank" rel="noopener">FCDownloader mobile app</a>
-          is the easier path.
-        </p>
-      </details>
-    </form>
+        <form id="general-form" autocomplete="off">
+          <label for="url" class="sr-only">Media URL</label>
+          <input
+            id="url"
+            type="url"
+            inputmode="url"
+            autocapitalize="none"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Paste a media link"
+            required
+          />
+          <button type="submit" id="submit" class="primary">Fetch Media</button>
+        </form>
+      </article>
 
-    <section id="status" hidden></section>
+      <article class="card">
+        <header class="card-head">
+          <div class="card-eyebrow">Private media</div>
+          <h2>Restricted Websites</h2>
+          <p>For private, paywalled, or authenticated pages where your browser session unlocks the media.</p>
+        </header>
 
-    <section id="preview" hidden>
-      <img id="thumb" alt="" />
-      <div class="body">
-        <h2 id="title"></h2>
-        <p id="meta"></p>
-        <a id="download" class="primary" download>Download</a>
-      </div>
+        <ol class="steps">
+          <li><span class="step-num">1</span> Drag the FCDownload button to your bookmarks bar.</li>
+          <li><span class="step-num">2</span> Open the media page and sign in.</li>
+          <li><span class="step-num">3</span> Click FCDownload to capture the page context.</li>
+        </ol>
+
+        <div class="bookmark-card">
+          <a id="bookmarklet" class="bookmark-button" href="#" draggable="true">
+            <strong>FCDownload</strong>
+          </a>
+        </div>
+      </article>
     </section>
 
-    <footer>
-      <p>
-        Self-hosted <a href="https://github.com/yt-dlp/yt-dlp" target="_blank" rel="noopener">yt-dlp</a> backend.
-        <a id="repo-link" href="https://github.com/otterlymavis/fcdownloader" target="_blank" rel="noopener">Source</a>.
-      </p>
-    </footer>
+    <section id="result" hidden>
+      <div class="result-card">
+        <img id="thumb" alt="" />
+        <div class="result-body">
+          <h3 id="title"></h3>
+          <p id="meta"></p>
+          <a id="download" class="primary" download>Download Media</a>
+        </div>
+      </div>
+      <button id="reset" class="ghost" type="button">Start over</button>
+    </section>
+
+    <section id="status" hidden aria-live="polite"></section>
   </main>
 
-  <dialog id="settings">
-    <form method="dialog">
-      <h2>Settings</h2>
-      <label>
-        Theme
-        <select id="theme-select">
-          <option value="system">System</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
-      </label>
-      <div class="row">
-        <button value="cancel" type="submit">Cancel</button>
-        <button value="save" type="submit" class="primary">Save</button>
-      </div>
-    </form>
-  </dialog>
+  <footer>
+    <p>We don't store any data. Your links and cookies are never saved.</p>
+  </footer>
 
   <script src="./script.js"></script>
 </body>

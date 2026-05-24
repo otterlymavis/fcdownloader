@@ -1,4 +1,5 @@
 export type MediaType = 'hls' | 'dash' | 'direct' | 'mse';
+export type MediaKind = 'video' | 'image' | 'audio';
 
 export type DownloadStatus =
   | 'pending'
@@ -64,6 +65,7 @@ export interface DetectedMedia {
   timestamp: number;
   mimeType?: string;
   mediaType: MediaType;
+  mediaKind?: MediaKind;
   label?: string;
   confidence?: number;         // 0–1
   provenance?: Provenance;

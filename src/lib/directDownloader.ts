@@ -5,15 +5,35 @@ import { DownloadOptions } from './hlsDownloader';
 
 function guessExt(url: string, mimeType?: string | null): string {
   const path = url.split('?')[0].toLowerCase();
-  const m = path.match(/\.([a-z0-9]{2,4})$/);
+  const m = path.match(/\.([a-z0-9]{2,5})$/);
   if (m) return m[1];
   if (mimeType) {
     const mt = mimeType.toLowerCase();
+    if (mt.includes('jpeg')) return 'jpg';
+    if (mt.includes('png')) return 'png';
+    if (mt.includes('webp')) return 'webp';
+    if (mt.includes('gif')) return 'gif';
+    if (mt.includes('avif')) return 'avif';
+    if (mt.includes('heic')) return 'heic';
+    if (mt.includes('mpeg')) return 'mp3';
+    if (mt.includes('audio/mp4') || mt.includes('m4a')) return 'm4a';
+    if (mt.includes('wav')) return 'wav';
+    if (mt.includes('ogg')) return 'ogg';
     if (mt.includes('mp4')) return 'mp4';
     if (mt.includes('webm')) return 'webm';
     if (mt.includes('mov') || mt.includes('quicktime')) return 'mov';
   }
+  if (mediaIsImage(url, mimeType)) return 'jpg';
+  if (mediaIsAudio(url, mimeType)) return 'mp3';
   return 'mp4';
+}
+
+function mediaIsImage(url: string, mimeType?: string | null): boolean {
+  return /^image\//i.test(mimeType || '') || /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(url);
+}
+
+function mediaIsAudio(url: string, mimeType?: string | null): boolean {
+  return /^audio\//i.test(mimeType || '') || /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i.test(url);
 }
 
 export async function downloadDirect(
@@ -32,6 +52,11 @@ export async function downloadDirect(
   let headers: Record<string, string>;
   if (media.httpHeaders) {
     headers = { ...media.httpHeaders };
+    const hasCookie = Object.keys(headers).some((k) => k.toLowerCase() === 'cookie');
+    if (!hasCookie && !/googlevideo\.com\//i.test(media.url)) {
+      const cookies = await extractSessionCookies(media.pageUrl);
+      if (cookies) headers['Cookie'] = cookies;
+    }
   } else {
     const needsCookies = !/googlevideo\.com\//i.test(media.url);
     const cookies = needsCookies ? await extractSessionCookies(media.pageUrl) : '';
@@ -41,7 +66,12 @@ export async function downloadDirect(
 
   const ext = guessExt(media.url, media.mimeType);
   const dir = `${FileSystem.documentDirectory}downloads/${taskId}/`;
-  const filePath = `${dir}video.${ext}`;
+  const baseName = media.mediaKind === 'image' || mediaIsImage(media.url, media.mimeType)
+    ? 'image'
+    : media.mediaKind === 'audio' || mediaIsAudio(media.url, media.mimeType)
+      ? 'audio'
+      : 'video';
+  const filePath = `${dir}${baseName}.${ext}`;
 
   await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
 

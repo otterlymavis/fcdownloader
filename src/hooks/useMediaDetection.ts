@@ -9,7 +9,15 @@ function guessType(url: string): MediaType {
   const u = url.toLowerCase();
   if (u.includes('.mpd')) return 'dash';
   if (u.includes('.m3u8')) return 'hls';
-  return 'hls';
+  return 'direct';
+}
+
+function guessKind(url: string, mimeType?: string | null): DetectedMedia['mediaKind'] {
+  const u = url.toLowerCase().split('?')[0];
+  const mt = String(mimeType || '').toLowerCase();
+  if (mt.startsWith('image/') || /\.(jpe?g|png|webp|gif|avif|heic)$/.test(u)) return 'image';
+  if (mt.startsWith('audio/') || /\.(mp3|m4a|aac|wav|ogg|opus|flac)$/.test(u)) return 'audio';
+  return 'video';
 }
 
 function isSegmentUrl(url: string): boolean {
@@ -71,6 +79,7 @@ export function useMediaDetection() {
           timestamp: (data.timestamp as number) ?? Date.now(),
           mimeType: data.mimeType ?? undefined,
           mediaType: (data.mediaType as MediaType) ?? guessType(url),
+          mediaKind: data.mediaKind ?? guessKind(url, data.mimeType),
           label: data.label ?? undefined,
           confidence: typeof data.confidence === 'number' ? data.confidence : 0.5,
           provenance: (data.provenance as Provenance) ?? 'perf-observer',
@@ -96,6 +105,7 @@ export function useMediaDetection() {
               provenance:    item.provenance,
               // Upgrade type/mime when a higher-confidence source corrects them
               mediaType:     item.mediaType    ?? prev[idx].mediaType,
+              mediaKind:     item.mediaKind    ?? prev[idx].mediaKind,
               mimeType:      item.mimeType     ?? prev[idx].mimeType,
               audioTrackUrl: item.audioTrackUrl ?? prev[idx].audioTrackUrl,
               width:         item.width         ?? prev[idx].width,
@@ -115,15 +125,16 @@ export function useMediaDetection() {
           if (prev.includes(url)) return prev;
           return [url, ...prev].slice(0, 500);
         });
-        // Auto-promote manifests, direct video files, and known video CDN URLs
+        // Auto-promote manifests, direct media files, and known media CDN URLs
         const u = url.toLowerCase();
         const isManifest  = /\.m3u8/i.test(url) || /\.mpd/i.test(url);
         const isVimeoJson = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i.test(url);
-        const isDirectMp4 = /\.(mp4|m4v|webm|mov)(\?|$)/i.test(url) &&
+        const isDirectMedia = /\.(mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)(\?|$)/i.test(url) &&
           !/vimeocdn\.com\/.*\/v2\/range\//i.test(url);
-        const isCdnVideo  = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/)/i.test(url);
-        if (isManifest || isVimeoJson || isDirectMp4 || isCdnVideo) {
-          const mediaType: MediaType = u.includes('.mpd') ? 'dash' : 'hls';
+        const isCdnVideo  = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/|weibocdn\.com\/|xhscdn\.com\/)/i.test(url);
+        const isImageCdn = /(?:cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|pinimg\.com\/(?:originals|736x|1200x|564x)\/|sinaimg\.cn\/|xhscdn\.com\/)/i.test(url);
+        if (isManifest || isVimeoJson || isDirectMedia || isCdnVideo || isImageCdn) {
+          const mediaType: MediaType = guessType(url);
           setDetected((prev) => {
             if (prev.some((m) => m.url === url)) return prev;
             return [{
@@ -132,6 +143,7 @@ export function useMediaDetection() {
               userAgent: '',
               timestamp: Date.now(),
               mediaType,
+              mediaKind: guessKind(url),
               confidence: 0.4,
               provenance: 'perf-observer' as const,
             }, ...prev];
@@ -189,6 +201,7 @@ export function useMediaDetection() {
         userAgent: '',
         timestamp: Date.now(),
         mediaType: guessType(url),
+        mediaKind: guessKind(url),
         confidence: 0.75,
         provenance: 'manual' as const,
       }, ...prev];

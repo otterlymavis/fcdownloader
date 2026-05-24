@@ -101,12 +101,23 @@ function getSourceName(url: string): string {
   if (/facebook\.com|fbcdn\.net/i.test(url))                                                return 'Facebook';
   if (/twitch\.tv|usher\.twitch\.tv/i.test(url))                                            return 'Twitch';
   if (/pinimg\.com|pinterest\.com/i.test(url))                                              return 'Pinterest';
-  if (/bilivideo\.com|bilibili\.com/i.test(url))                                            return 'Bilibili';
+  if (/bilivideo\.com|bilibili\.com|bilibili\.tv|b23\.tv/i.test(url))                       return 'Bilibili';
+  if (/weibo\.com|weibo\.cn|weibocdn\.com|sinaimg\.cn/i.test(url))                          return 'Weibo';
+  if (/xiaohongshu\.com|xhslink\.com|xhscdn\.com/i.test(url))                                return 'Xiaohongshu';
   try {
     const host = new URL(url).hostname.replace(/^www\./, '');
     const name = host.split('.').slice(-2, -1)[0] ?? 'Video';
     return name.charAt(0).toUpperCase() + name.slice(1);
   } catch { return 'Video'; }
+}
+
+function getMediaKind(item: Pick<DetectedMedia, 'url' | 'mimeType' | 'mediaKind'>): NonNullable<DetectedMedia['mediaKind']> {
+  if (item.mediaKind) return item.mediaKind;
+  const u = item.url.toLowerCase().split('?')[0];
+  const mt = String(item.mimeType || '').toLowerCase();
+  if (mt.startsWith('image/') || /\.(jpe?g|png|webp|gif|avif|heic)$/.test(u)) return 'image';
+  if (mt.startsWith('audio/') || /\.(mp3|m4a|aac|wav|ogg|opus|flac)$/.test(u)) return 'audio';
+  return 'video';
 }
 
 function getQuality(url: string, label?: string): string | null {
@@ -129,6 +140,35 @@ function getQuality(url: string, label?: string): string | null {
   return null;
 }
 
+function getMediaFormat(item: DetectedMedia): string {
+  const kind = getMediaKind(item);
+  const u = item.url.toLowerCase();
+  if (item.mediaType === 'hls' || u.includes('.m3u8')) return 'HLS Stream';
+  if (item.mediaType === 'dash' || u.includes('.mpd')) return 'DASH Stream';
+  const ext = u.split('?')[0].match(/\.([a-z0-9]{2,5})$/)?.[1];
+  if (ext) return ext.toUpperCase();
+  if (item.mimeType) return item.mimeType;
+  return kind === 'image' ? 'Image' : kind === 'audio' ? 'Audio' : 'Video';
+}
+
+function getMimeFromPath(path: string): string {
+  const p = path.toLowerCase();
+  if (p.endsWith('.mp4')) return 'video/mp4';
+  if (p.endsWith('.webm')) return 'video/webm';
+  if (p.endsWith('.mov')) return 'video/quicktime';
+  if (p.endsWith('.ts')) return 'video/mp2t';
+  if (p.endsWith('.jpg') || p.endsWith('.jpeg')) return 'image/jpeg';
+  if (p.endsWith('.png')) return 'image/png';
+  if (p.endsWith('.webp')) return 'image/webp';
+  if (p.endsWith('.gif')) return 'image/gif';
+  if (p.endsWith('.avif')) return 'image/avif';
+  if (p.endsWith('.mp3')) return 'audio/mpeg';
+  if (p.endsWith('.m4a')) return 'audio/mp4';
+  if (p.endsWith('.wav')) return 'audio/wav';
+  if (p.endsWith('.ogg')) return 'audio/ogg';
+  return 'application/octet-stream';
+}
+
 function getPageTitle(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ''); }
   catch { return url.slice(0, 40); }
@@ -148,9 +188,9 @@ function getInitial(name: string): string {
 
 const SEGMENT_RE     = /\.(ts|m4s|aac|m4a|cmfv|cmfa)(\?|#|$)/i;
 const VIMEO_RANGE_RE = /vimeocdn\.com\/.*\/v2\/range\/.*\/avf\//i;
-const USEFUL_EXT_RE  = /\.(m3u8|mpd|mp4|m4v|webm|mov)(\?|#|$)/i;
+const USEFUL_EXT_RE  = /\.(m3u8|mpd|mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)(\?|#|$)/i;
 const VIMEO_JSON_RE  = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i;
-const VIDEO_CDN_RE   = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|fbcdn\.net\/videos|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/)/i;
+const VIDEO_CDN_RE   = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|threadscdn\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|fbcdn\.net\/videos|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/|weibocdn\.com\/|xhscdn\.com\/)/i;
 const YT_RANGE_RE    = /googlevideo\.com\/videoplayback[^#]*[?&](?:range=|sq=)\d/i;
 
 function isUseful(url: string): boolean {
@@ -166,6 +206,13 @@ function isDirectMediaUrl(url: string): boolean {
   if (SEGMENT_RE.test(clean)) return false;
   if (YT_RANGE_RE.test(url)) return false;
   return USEFUL_EXT_RE.test(url) || VIMEO_JSON_RE.test(url) || VIDEO_CDN_RE.test(url);
+}
+
+function guessMediaType(url: string): DetectedMedia['mediaType'] {
+  const lower = url.toLowerCase();
+  if (lower.includes('.mpd')) return 'dash';
+  if (lower.includes('.m3u8')) return 'hls';
+  return 'direct';
 }
 
 // ── Dedup ─────────────────────────────────────────────────────
@@ -307,7 +354,8 @@ export default function App() {
       .map((url) => ({
         id: `net_${url}`, url, pageUrl: loadedUrl, userAgent: '',
         timestamp: Date.now(),
-        mediaType: url.toLowerCase().includes('.mpd') ? 'dash' as const : 'hls' as const,
+        mediaType: guessMediaType(url),
+        mediaKind: getMediaKind({ url }),
       }));
     return smartDedup([...detected, ...fromNet]);
   }, [detected, networkLog, loadedUrl]);
@@ -377,7 +425,7 @@ export default function App() {
         if (items.length > 0) {
           for (const item of items) await enqueue(item);
           setPasteUrl('');
-          showToast(`Downloading ${items.length} video${items.length !== 1 ? 's' : ''}`, 'success');
+          showToast(`Downloading ${items.length} media item${items.length !== 1 ? 's' : ''}`, 'success');
           setTab('library');
         } else {
           showToast('Opening in browser — tap the video button when it appears', 'info');
@@ -394,7 +442,8 @@ export default function App() {
       const item: DetectedMedia = {
         id: `home_${Date.now()}`, url, pageUrl: url, userAgent: '',
         timestamp: Date.now(),
-        mediaType: url.toLowerCase().includes('.mpd') ? 'dash' : 'hls',
+        mediaType: guessMediaType(url),
+        mediaKind: getMediaKind({ url }),
         confidence: 0.75, provenance: 'manual',
       };
       await enqueue(item);
@@ -423,8 +472,8 @@ export default function App() {
     try {
       if (!(await Sharing.isAvailableAsync())) { showToast('Sharing not available', 'error'); return; }
       const path = task.localPlaylistPath;
-      const mime = path.endsWith('.mp4') ? 'video/mp4' : path.endsWith('.ts') ? 'video/mp2t' : 'application/octet-stream';
-      await Sharing.shareAsync(path, { mimeType: mime, dialogTitle: 'Export video' });
+      const mime = getMimeFromPath(path);
+      await Sharing.shareAsync(path, { mimeType: mime, dialogTitle: 'Export media' });
     } catch (e) { showToast(`Export failed: ${(e as Error).message}`, 'error'); }
   }, [showToast]);
 
@@ -478,6 +527,7 @@ export default function App() {
   }, [libSelected, remove]);
 
   const videoCount  = allVideos.length;
+  const mediaCount  = allVideos.length;
   const activeCount = active.length;
 
   // ─────────────────────────────────────────────────────────
@@ -557,11 +607,11 @@ export default function App() {
               </Pressable>
               <Pressable onPress={() => setTab('browser')} hitSlop={S.xs} style={s.browseLink}>
                 <Text style={[s.browseLinkLabel, { color: t.ink2, fontSize: fs(13) }]}>
-                  or browse for a video →
+                  or browse for media →
                 </Text>
               </Pressable>
               <Text style={[s.browseHint, { color: t.ink3, fontSize: fs(11) }]}>
-                Tip: signing in via Browse unlocks HD on more YouTube videos
+                Tip: signing in via Browse unlocks HD media on more sites
               </Text>
             </View>
 
@@ -664,7 +714,7 @@ export default function App() {
               <Pressable android_ripple={RIPPLE} style={[s.floatingBadge, { backgroundColor: t.btn }]}
                 onPress={() => setVideosOpen(true)}>
                 <Text style={[s.floatingBadgeLabel, { color: t.btnTxt }]}>
-                  {videoCount > 0 ? `${videoCount} video${videoCount !== 1 ? 's' : ''} found` : 'Stream detected'}
+                  {mediaCount > 0 ? `${mediaCount} media item${mediaCount !== 1 ? 's' : ''} found` : 'Stream detected'}
                 </Text>
               </Pressable>
             )}
@@ -815,7 +865,8 @@ export default function App() {
                 const size        = fileSizes[task.id];
                 const isDone      = task.status === 'completed';
                 const isFail      = task.status === 'failed';
-                const isVideo     = !!task.localPlaylistPath && /\.(mp4|ts|mov|webm|m4v)$/i.test(task.localPlaylistPath);
+                const isPlayable  = !!task.localPlaylistPath && getMediaKind(task.media) === 'video' && /\.(mp4|ts|mov|webm|m4v)$/i.test(task.localPlaylistPath);
+                const canSaveToLibrary = !!task.localPlaylistPath && getMediaKind(task.media) !== 'audio';
                 const isSelected  = libSelected.has(task.id);
 
                 const cardContent = (
@@ -859,17 +910,19 @@ export default function App() {
                         <View style={s.libraryActions}>
                           {isDone && task.localPlaylistPath && (
                             <>
-                              <Pressable android_ripple={RIPPLE_BL}
-                                style={[s.outlineBtn, { borderColor: t.sep }]}
-                                onPress={() => setPlayingPath(task.localPlaylistPath!)}>
-                                <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>Play</Text>
-                              </Pressable>
+                              {isPlayable && (
+                                <Pressable android_ripple={RIPPLE_BL}
+                                  style={[s.outlineBtn, { borderColor: t.sep }]}
+                                  onPress={() => setPlayingPath(task.localPlaylistPath!)}>
+                                  <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>Play</Text>
+                                </Pressable>
+                              )}
                               <Pressable android_ripple={RIPPLE_BL}
                                 style={[s.outlineBtn, { borderColor: t.sep }]}
                                 onPress={() => handleExport(task)}>
                                 <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>Share</Text>
                               </Pressable>
-                              {isVideo && (
+                              {canSaveToLibrary && (
                                 <Pressable android_ripple={RIPPLE_BL}
                                   style={[s.outlineBtn, { borderColor: t.sep }]}
                                   onPress={() => handleGallery(task)}>
@@ -989,7 +1042,7 @@ export default function App() {
         {(['home', 'browser', 'library', 'bookmarks'] as Tab[]).map((id, idx) => {
           const labels: Record<Tab, string> = {
             home:      activeCount > 0 ? `Home  ${activeCount}` : 'Home',
-            browser:   videoCount  > 0 ? `Browse  ${videoCount}` : 'Browse',
+            browser:   mediaCount  > 0 ? `Browse  ${mediaCount}` : 'Browse',
             library:   allTasks.length > 0 ? `Library  ${allTasks.length}` : 'Library',
             bookmarks: bookmarks.length > 0 ? `Saved  ${bookmarks.length}` : 'Saved',
           };
@@ -1065,10 +1118,7 @@ export default function App() {
                 <View style={[s.metaRow, { borderBottomColor: t.sep }]}>
                   <Text style={[s.metaKey, { color: t.ink2, fontSize: fs(13) }]}>Format</Text>
                   <Text style={[s.metaVal, { color: t.ink, fontSize: fs(13) }]}>
-                    {previewItem.url.includes('.m3u8') ? 'HLS Stream'
-                     : previewItem.url.includes('.mpd') ? 'DASH Stream'
-                     : previewItem.url.includes('.mp4') ? 'MP4'
-                     : 'Video'}
+                    {getMediaFormat(previewItem)}
                   </Text>
                 </View>
 
@@ -1087,7 +1137,7 @@ export default function App() {
             <>
               <View style={[s.sheetHead, { backgroundColor: t.bg }]}>
                 <Text style={[s.sheetTitle, { color: t.ink, fontSize: fs(20) }]}>
-                  {videoCount > 0 ? `${videoCount} Video${videoCount !== 1 ? 's' : ''} Found` : 'Videos'}
+                  {mediaCount > 0 ? `${mediaCount} Media Item${mediaCount !== 1 ? 's' : ''} Found` : 'Media'}
                 </Text>
                 <Pressable android_ripple={RIPPLE_BL}
                   style={[s.closeRound, { backgroundColor: t.card }]}
@@ -1103,13 +1153,13 @@ export default function App() {
                   <View style={s.center}>
                     <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14), textAlign: 'center',
                       paddingVertical: S.xl }]}>
-                      Browse to a page with a video — it will appear here.
+                      Browse to a page with media — it will appear here.
                     </Text>
                   </View>
                 )}
                 {allVideos.map((item) => {
                   const source  = getSourceName(item.url);
-                  const quality = getQuality(item.url, item.label);
+                  const quality = getQuality(item.url, item.label) || getMediaFormat(item);
                   return (
                     <Pressable key={item.id} android_ripple={RIPPLE}
                       style={[s.videoRow, { backgroundColor: t.card, borderBottomColor: t.sep }]}
@@ -1141,7 +1191,7 @@ export default function App() {
                   style={[s.sheetPasteInput, { backgroundColor: t.card, color: t.ink, fontSize: fs(14) }]}
                   value={pasteUrl}
                   onChangeText={setPasteUrl}
-                  placeholder="Paste a video or page URL…"
+                  placeholder="Paste a media or page URL…"
                   placeholderTextColor={t.ink3}
                   autoCapitalize="none" autoCorrect={false}
                   keyboardType="url" returnKeyType="done"

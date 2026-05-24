@@ -1,16 +1,15 @@
 import { DetectedMedia } from '../types';
 
 const VIDEO_PATTERNS = [
-  /["'`](https?:\/\/[^"'`\s]{8,}\.m3u8[^"'`\s]*)/gi,
-  /["'`](https?:\/\/[^"'`\s]{8,}\.mpd[^"'`\s]*)/gi,
-  /["'`](https?:\/\/[^"'`\s]{8,}\.mp4[^"'`\s]*)/gi,
-  /(https?:\\\/\\\/[^"'`\s]{8,}\.(?:m3u8|mpd|mp4)[^"'`\s]*)/gi,
-  /"(?:src|file|url|source|stream|hls|manifest|videoUrl|video_url|playbackUrl|streamUrl)"\s*:\s*"(https?:\/\/[^"]{8,})"/gi,
+  /["'`](https?:\/\/[^"'`\s]{8,}\.(?:m3u8|mpd|mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)[^"'`\s]*)/gi,
+  /(https?:\\\/\\\/[^"'`\s]{8,}\.(?:m3u8|mpd|mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)[^"'`\s]*)/gi,
+  /"(?:src|file|url|source|stream|hls|manifest|videoUrl|video_url|image|image_url|display_url|thumbnail|playbackUrl|streamUrl)"\s*:\s*"(https?:\/\/[^"]{8,})"/gi,
   /(?:source|src|url|file|hls|manifest)\s*[:=]\s*["'`](https?:\/\/[^"'`\s]{8,})/gi,
 ];
 
 // Reject URLs that are clearly static assets (images, fonts, scripts, etc.)
 const SKIP_STATIC = /\.(png|jpe?g|gif|svg|ico|webp|bmp|avif|woff2?|ttf|eot|otf|css|js|mjs|json|html?|pdf|zip|gz|map|xml|txt)(\?|#|$)/i;
+const ALLOW_IMAGE = /\.(png|jpe?g|gif|webp|avif|heic)(\?|#|$)/i;
 const SKIP_SEGMENT = /\.(ts|m4s|aac|m4a|cmfv|cmfa)(\?|#|$)/i;
 
 function isFragmentUrl(url: string): boolean {
@@ -19,10 +18,18 @@ function isFragmentUrl(url: string): boolean {
     (lower.includes('vimeocdn.com/') && lower.includes('/v2/range/') && lower.includes('/avf/'));
 }
 
-function guessType(url: string): 'hls' | 'dash' {
+function guessType(url: string): 'hls' | 'dash' | 'direct' {
   const u = url.toLowerCase();
   if (u.includes('.mpd')) return 'dash';
-  return 'hls';
+  if (u.includes('.m3u8')) return 'hls';
+  return 'direct';
+}
+
+function guessKind(url: string): 'video' | 'image' | 'audio' {
+  const u = url.toLowerCase().split('?')[0];
+  if (/\.(jpe?g|png|webp|gif|avif|heic)$/.test(u)) return 'image';
+  if (/\.(mp3|m4a|aac|wav|ogg|opus|flac)$/.test(u)) return 'audio';
+  return 'video';
 }
 
 function normalizeUrl(raw: string): string {
@@ -59,7 +66,7 @@ export async function scanPageSource(
     let m: RegExpExecArray | null;
     while ((m = pattern.exec(html)) !== null) {
       const url = normalizeUrl(m[1]);
-      if (SKIP_STATIC.test(url.split('?')[0])) continue;
+      if (SKIP_STATIC.test(url.split('?')[0]) && !ALLOW_IMAGE.test(url)) continue;
       if (isFragmentUrl(url)) continue;
       if (!seen.has(url)) {
         seen.add(url);
@@ -70,6 +77,7 @@ export async function scanPageSource(
           userAgent,
           timestamp: Date.now(),
           mediaType: guessType(url),
+          mediaKind: guessKind(url),
         });
       }
     }

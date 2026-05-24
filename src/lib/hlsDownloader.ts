@@ -217,13 +217,20 @@ export async function downloadHLS(
 
   // When the extractor stored headers (e.g. YouTube CDN context), use them verbatim.
   // Otherwise build from session cookies — skip cookies for googlevideo.com CDN URLs.
-  const resolvedHeaders: Record<string, string> = media.httpHeaders
-    ? media.httpHeaders
-    : makeHeaders(
-        /googlevideo\.com\//i.test(media.url) ? '' : await extractSessionCookies(media.pageUrl),
-        ua,
-        media.pageUrl,
-      );
+  const makeResolvedHeaders = async (url: string): Promise<Record<string, string>> => {
+    const skipCookies = /googlevideo\.com\//i.test(url);
+    if (media.httpHeaders) {
+      const headers = { ...media.httpHeaders };
+      const hasCookie = Object.keys(headers).some((k) => k.toLowerCase() === 'cookie');
+      if (!hasCookie && !skipCookies) {
+        const cookies = await extractSessionCookies(media.pageUrl);
+        if (cookies) headers['Cookie'] = cookies;
+      }
+      return headers;
+    }
+    return makeHeaders(skipCookies ? '' : await extractSessionCookies(media.pageUrl), ua, media.pageUrl);
+  };
+  const resolvedHeaders = await makeResolvedHeaders(media.url);
 
   let playlistUrl = media.url;
   let raw = await fetchText(playlistUrl, resolvedHeaders, signal);

@@ -377,7 +377,12 @@ def _write_user_cookies_file(cookies: str, page_url: str) -> str | None:
     # / m.bilibili.com / etc. that yt-dlp probes during extraction.
     parts = host.split(".")
     reg_domain = ".".join(parts[-2:]) if len(parts) > 2 and len(parts[-1]) >= 2 else host
-    domain_field = "." + reg_domain
+    domain_fields = ["." + reg_domain]
+    if reg_domain in {"weibo.com", "weibo.cn"}:
+        # Weibo jumps between weibo.com, m.weibo.cn, and passport.weibo.com.
+        # The client gives us a flat Cookie header, so mirror it to both
+        # registrable domains in the per-request yt-dlp cookie jar.
+        domain_fields = [".weibo.com", ".weibo.cn"]
     expiry = int(time.time()) + 86400  # 1 day is plenty; cookies short-lived anyway
 
     tmp = tempfile.NamedTemporaryFile(
@@ -396,7 +401,8 @@ def _write_user_cookies_file(cookies: str, page_url: str) -> str | None:
             if not name:
                 continue
             # Netscape format: domain  includeSubdomains  path  secure  expiry  name  value
-            tmp.write(f"{domain_field}\tTRUE\t/\tFALSE\t{expiry}\t{name}\t{value}\n")
+            for domain_field in domain_fields:
+                tmp.write(f"{domain_field}\tTRUE\t/\tFALSE\t{expiry}\t{name}\t{value}\n")
         tmp.flush()
     finally:
         tmp.close()
@@ -432,11 +438,23 @@ def _run_ydl(
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/125.0.0.0 Safari/537.36"
         )
+    elif any(host in page_url for host in ("weibo.com", "weibo.cn", "weibocdn.com")):
+        http_headers["Referer"]    = "https://weibo.com/"
+        http_headers["Origin"]     = "https://weibo.com"
+        http_headers["User-Agent"] = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        )
+    elif any(host in page_url for host in ("xiaohongshu.com", "xhslink.com", "xhscdn.com")):
+        http_headers["Referer"]    = "https://www.xiaohongshu.com/"
+        http_headers["Origin"]     = "https://www.xiaohongshu.com"
+        http_headers["User-Agent"] = _MOBILE_UA
     if cookies:
         http_headers["Cookie"] = cookies
 
     direct_media = re.search(
-        r"(?:\.(?:mp4|webm|mov|m4v|m3u8|mpd)(?:[?#]|$)|bilivideo\.com/|cdninstagram\.com/|scontent[-\w]*\.cdninstagram\.com/|fbcdn\.net/|threadscdn\.com/)",
+        r"(?:\.(?:mp4|webm|mov|m4v|m3u8|mpd)(?:[?#]|$)|bilivideo\.com/|weibocdn\.com/|xhscdn\.com/|cdninstagram\.com/|scontent[-\w]*\.cdninstagram\.com/|fbcdn\.net/|threadscdn\.com/)",
         page_url,
         re.IGNORECASE,
     )
@@ -649,6 +667,12 @@ def _download_headers(referer: str | None, cookies: str | None, page_url: str | 
         # If the caller didn't pass one, derive it from the page URL host.
         headers["Referer"] = "https://www.bilibili.com/"
         headers["Origin"]  = "https://www.bilibili.com"
+    elif page_url and ("weibo.com" in page_url or "weibo.cn" in page_url or "weibocdn.com" in page_url):
+        headers["Referer"] = "https://weibo.com/"
+        headers["Origin"]  = "https://weibo.com"
+    elif page_url and ("xiaohongshu.com" in page_url or "xhscdn.com" in page_url):
+        headers["Referer"] = "https://www.xiaohongshu.com/"
+        headers["Origin"]  = "https://www.xiaohongshu.com"
     if cookies:
         headers["Cookie"] = cookies
     return headers
@@ -665,6 +689,11 @@ def _needs_headered_direct_stream(page_url: str, media_url: str, headers: dict[s
         "cdninstagram.com",
         "fbcdn.net",
         "threadscdn.com",
+        "weibo.com",
+        "weibo.cn",
+        "weibocdn.com",
+        "xiaohongshu.com",
+        "xhscdn.com",
     ))
 
 
@@ -997,6 +1026,12 @@ def _default_proxy_headers(target_url: str, referer: str | None) -> dict[str, st
     elif "bilivideo" in host or "biliapi" in host or "bilibili" in host:
         h["Referer"] = "https://www.bilibili.com/"
         h["Origin"]  = "https://www.bilibili.com"
+    elif "weibocdn" in host or "weibo.com" in host or "weibo.cn" in host:
+        h["Referer"] = "https://weibo.com/"
+        h["Origin"]  = "https://weibo.com"
+    elif "xhscdn" in host or "xiaohongshu" in host:
+        h["Referer"] = "https://www.xiaohongshu.com/"
+        h["Origin"]  = "https://www.xiaohongshu.com"
     elif "redd.it" in host or "redditmedia" in host:
         h["Referer"] = "https://www.reddit.com/"
     return h

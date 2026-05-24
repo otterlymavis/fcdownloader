@@ -373,6 +373,56 @@ async function extractBilibiliLocal(pageUrl: string): Promise<DetectedMedia[]> {
 }
 
 // ── Generic OG / meta-tag fallback ────────────────────────────────
+async function extractWeibo(pageUrl: string): Promise<DetectedMedia[]> {
+  // Server-first because follower-only posts need the user's logged-in Weibo
+  // cookies, which extractViaServer forwards from the in-app WebView to yt-dlp.
+  try {
+    const items = await extractViaServer(pageUrl);
+    if (items.length > 0) {
+      return items.map(item => ({ ...item, label: item.label ?? 'Weibo' }));
+    }
+  } catch (e) {
+    console.warn('[extractWeibo] server extractor errored:', String(e).slice(0, 200));
+  }
+
+  try {
+    const html = await fetchHtml(pageUrl, DESKTOP_UA);
+    const results: DetectedMedia[] = [];
+    extractUrls(
+      html,
+      /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:weibocdn\.com|sinaimg\.cn)[^"'\\<>\s]*\.(?:mp4|m3u8|mov|jpe?g|png|webp|gif|heic)[^"'\\<>\s]*)/g,
+    ).forEach(u => {
+      const item = makeItem(u, pageUrl, 'Weibo', 'social-extractor', 0.70);
+      if (!results.some(r => r.url === item.url)) results.push(item);
+    });
+    return results;
+  } catch { return []; }
+}
+
+async function extractXiaohongshu(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const items = await extractViaServer(pageUrl);
+    if (items.length > 0) {
+      return items.map(item => ({ ...item, label: item.label ?? 'Xiaohongshu' }));
+    }
+  } catch (e) {
+    console.warn('[extractXiaohongshu] server extractor errored:', String(e).slice(0, 200));
+  }
+
+  try {
+    const html = await fetchHtml(pageUrl, MOBILE_UA);
+    const results: DetectedMedia[] = [];
+    extractUrls(
+      html,
+      /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:xhscdn\.com|xhslink\.com)[^"'\\<>\s]*\.(?:mp4|m3u8|mov|jpe?g|png|webp|gif|heic)[^"'\\<>\s]*)/g,
+    ).forEach(u => {
+      const item = makeItem(u, pageUrl, 'Xiaohongshu', 'social-extractor', 0.70);
+      if (!results.some(r => r.url === item.url)) results.push(item);
+    });
+    return results;
+  } catch { return []; }
+}
+
 async function extractOgVideo(pageUrl: string): Promise<DetectedMedia[]> {
   try {
     const html = await fetchHtml(pageUrl);
@@ -397,6 +447,8 @@ const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[
   { re: /pinterest\.(?:com|[a-z]{2,3})\/pin\/\d+/,                                 fn: extractPinterest   },
   { re: /tver\.jp\/episodes\/ep[A-Za-z0-9]+/,                                       fn: extractTVer        },
   { re: /(?:bilibili\.com\/video\/[ABab][Vv][A-Za-z0-9]+|m\.bilibili\.com\/video\/[ABab][Vv][A-Za-z0-9]+|b23\.tv\/[A-Za-z0-9]+|bilibili\.tv\/(?:[a-z]{2}\/)?video\/\d+)/, fn: extractBilibili    },
+  { re: /(?:weibo\.com\/(?:tv\/show\/|u\/\d+|(?:\d+|0)\/[A-Za-z0-9]+)|m\.weibo\.cn\/(?:status|detail)\/[A-Za-z0-9]+|video\.weibo\.com\/show\?)/, fn: extractWeibo },
+  { re: /(?:xiaohongshu\.com\/(?:explore|discovery\/item)\/[\da-f]+|xhslink\.com\/[A-Za-z0-9/?=&._-]+)/i, fn: extractXiaohongshu },
 ];
 
 /** Returns true if the URL looks like a social-media post page (not a CDN media URL). */

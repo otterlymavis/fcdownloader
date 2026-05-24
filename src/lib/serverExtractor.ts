@@ -64,10 +64,11 @@ let _seq = 0;
 const genId = () => `srv_${Date.now()}_${_seq++}`;
 
 export interface ServerExtractResponse {
-  kind: 'hls' | 'paired' | 'direct';
+  kind: 'hls' | 'paired' | 'direct' | 'image' | 'audio' | 'gallery';
   url?: string;
   videoUrl?: string;
   audioUrl?: string;
+  items?: ServerExtractResponse[];
   headers?: Record<string, string>;
   label?: string;
   expire?: number;
@@ -167,6 +168,10 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
   const headers = r.headers ?? {};
   const ua = headers['User-Agent'] ?? headers['user-agent'] ?? '';
 
+  if (r.kind === 'gallery' && Array.isArray(r.items)) {
+    return r.items.flatMap((item) => toDetectedMedia(item, pageUrl));
+  }
+
   if (r.kind === 'hls' && r.url) {
     return [{
       id: genId(),
@@ -206,7 +211,7 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
     }];
   }
 
-  if (r.kind === 'direct' && r.url) {
+  if ((r.kind === 'direct' || r.kind === 'image' || r.kind === 'audio') && r.url) {
     return [{
       id: genId(),
       url: r.url,
@@ -216,7 +221,7 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
       timestamp: Date.now(),
       mimeType: r.mimeType ?? 'video/mp4',
       mediaType: 'direct',
-      mediaKind: (r.mimeType || '').startsWith('image/') ? 'image' : (r.mimeType || '').startsWith('audio/') ? 'audio' : 'video',
+      mediaKind: r.kind === 'image' ? 'image' : r.kind === 'audio' ? 'audio' : (r.mimeType || '').startsWith('image/') ? 'image' : (r.mimeType || '').startsWith('audio/') ? 'audio' : 'video',
       confidence: 0.97,
       provenance: 'social-extractor',
       hasAudio: true,

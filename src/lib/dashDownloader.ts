@@ -325,12 +325,24 @@ export async function downloadDASH(
     const cookies = skipCookies ? '' : await extractSessionCookies(media.pageUrl);
     return makeHeaders(cookies, ua, media.pageUrl);
   };
+  const buildHeaders = async (url: string): Promise<Record<string, string>> => {
+    const skipCookies = /googlevideo\.com/i.test(url);
+    if (media.httpHeaders) {
+      const headers = { ...media.httpHeaders };
+      const hasCookie = Object.keys(headers).some((k) => k.toLowerCase() === 'cookie');
+      if (!hasCookie && !skipCookies) {
+        const cookies = await extractSessionCookies(media.pageUrl);
+        if (cookies) headers['Cookie'] = cookies;
+      }
+      return headers;
+    }
+    return buildFallback(skipCookies);
+  };
 
   // ── Case 1: Paired tracks — download both, mux with ffmpeg ─────
   // Progress: 0–45% video, 45–90% audio, 90–100% mux.
   if (media.audioTrackUrl) {
-    const skipCookies = /googlevideo\.com/i.test(media.url);
-    const headers = media.httpHeaders ?? await buildFallback(skipCookies);
+    const headers = await buildHeaders(media.url);
     const videoPath  = `${dir}video.track.mp4`;
     const audioPath  = `${dir}audio.track.m4a`;
     const outputPath = `${dir}video.mp4`;
@@ -372,8 +384,7 @@ export async function downloadDASH(
   // ── Case 2: DASH MPD manifest URL ────────────────────────────
   onStatus?.('fetching_manifest');
 
-  const isGooglevideo = /manifest\.googlevideo\.com/i.test(media.url);
-  const manifestHeaders = media.httpHeaders ?? await buildFallback(isGooglevideo);
+  const manifestHeaders = await buildHeaders(media.url);
   const mpdRes = await fetch(media.url, { signal, headers: manifestHeaders });
   if (!mpdRes.ok) throw new Error(`HTTP ${mpdRes.status} fetching MPD manifest`);
   const mpdXml = await mpdRes.text();
@@ -400,7 +411,7 @@ export async function downloadDASH(
     if (!trackUrl) throw new Error('No segment URL in SegmentBase track');
     onStatus?.('downloading');
     const outPath = `${dir}video.mp4`;
-    const sbHeaders = media.httpHeaders ?? await buildFallback(/googlevideo\.com/i.test(trackUrl));
+    const sbHeaders = await buildHeaders(trackUrl);
     await downloadLargeFile(trackUrl, outPath, sbHeaders,
       (w, t) => onProgress?.(w, t), signal);
     if (signal?.aborted) throw new Error('Cancelled');
@@ -418,7 +429,7 @@ export async function downloadDASH(
   const totalSegs = track.segmentUrls.length;
 
   const firstSeg = track.segmentUrls[0] ?? track.initUrl ?? '';
-  const segHeaders = media.httpHeaders ?? await buildFallback(/googlevideo\.com/i.test(firstSeg));
+  const segHeaders = await buildHeaders(firstSeg);
 
   const outPath = await downloadTrack(
     track.segmentUrls, track.initUrl, taskId, 'video_track',

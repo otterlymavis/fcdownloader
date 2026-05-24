@@ -145,7 +145,7 @@ function isLikelyMedia(url) {
   if (u.endsWith(".mp4") || u.endsWith(".webm") || u.endsWith(".mov")) return true;
   if (/\.(jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)$/.test(u)) return true;
   // Known video CDNs (no extension)
-  if (/(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|v\.redd\.it|tiktokcdn\.com|v\d+-webapp\.tiktok\.com|bilivideo\.com|dmcdn\.net|pinimg\.com\/(?:videos|originals|736x|1200x|564x)|vimeocdn\.com)/.test(url)) {
+  if (/(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|v\.redd\.it|tiktokcdn\.com|v\d+-webapp\.tiktok\.com|bilivideo\.com|weibocdn\.com|xhscdn\.com|dmcdn\.net|pinimg\.com\/(?:videos|originals|736x|1200x|564x)|vimeocdn\.com)/.test(url)) {
     // Skip byte-range YouTube segments (will dedupe to the parent URL)
     if (/googlevideo\.com\/videoplayback/.test(url) && /[?&]range=/.test(url)) return false;
     return true;
@@ -300,7 +300,7 @@ async function downloadItem(tabId, item) {
   // HLS / DASH / paired adaptive / known-server-only sites need backend muxing.
   const needsMux =
     item.kind === "hls" || item.kind === "dash" || item.kind === "paired" || item.kind === "embed" ||
-    /youtube\.com|youtu\.be|googlevideo\.com|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.com|bilibili\.com/.test(item.url || urlForBackend);
+    /youtube\.com|youtu\.be|googlevideo\.com|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.com|bilibili\.com|weibo\.com|weibo\.cn|weibocdn\.com|xiaohongshu\.com|xhslink\.com|xhscdn\.com/.test(item.url || urlForBackend);
 
   if (needsMux) {
     return viaBackend(urlForBackend);
