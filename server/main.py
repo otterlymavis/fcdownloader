@@ -1024,6 +1024,50 @@ def _ffmpeg_stream(
             except subprocess.TimeoutExpired: proc.kill()
 
 
+def _direct_media_stream(
+    media_url: str,
+    request_headers: dict[str, str],
+    response_headers: dict[str, str],
+) -> StreamingResponse:
+    headers = {
+        "User-Agent": _MOBILE_UA,
+        "Accept": "*/*",
+        **(request_headers or {}),
+    }
+    try:
+        req = urllib.request.Request(media_url, headers=headers)
+        upstream = urllib.request.urlopen(req, timeout=30)
+    except urllib.error.HTTPError as e:  # type: ignore[attr-defined]
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")[:240]
+        except Exception:
+            pass
+        raise HTTPException(e.code, f"upstream: {body or e.reason}")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"upstream: {str(e)[:240]}")
+
+    content_type = upstream.headers.get("Content-Type", "video/mp4")
+    out_headers = {**response_headers}
+    if cl := upstream.headers.get("Content-Length"):
+        out_headers["Content-Length"] = cl
+
+    def stream() -> Iterator[bytes]:
+        try:
+            while True:
+                chunk = upstream.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try:
+                upstream.close()
+            except Exception:
+                pass
+
+    return StreamingResponse(stream(), media_type=content_type, headers=out_headers)
+
+
 @app.get("/download")
 @limiter.limit(RATE_LIMIT)
 def download(
@@ -1062,10 +1106,7 @@ def download(
     # kind == "direct" → already a single mp4, redirect the browser straight to
     # googlevideo (saves server bandwidth — 100% of the bytes go phone↔CDN).
     if _needs_headered_direct_stream(url, response["url"], request_headers):
-        return StreamingResponse(
-            _ffmpeg_stream("", None, response["url"], request_headers),
-            media_type="video/mp4", headers=headers,
-        )
+        return _direct_media_stream(response["url"], request_headers, headers)
     return RedirectResponse(response["url"], status_code=307, headers=headers)
 
 
@@ -1099,10 +1140,7 @@ def download_post(
             _ffmpeg_stream("", None, response["url"], request_headers),
             media_type="video/mp4", headers=headers,
         )
-    return StreamingResponse(
-        _ffmpeg_stream("", None, response["url"], request_headers),
-        media_type="video/mp4", headers=headers,
-    )
+    return _direct_media_stream(response["url"], request_headers, headers)
 
 
 # ── /debug — diagnostic endpoint, no caching, returns yt-dlp's raw format list
