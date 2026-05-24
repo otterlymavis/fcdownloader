@@ -28,6 +28,10 @@ const APP_GROUP      = `group.${BUNDLE_ID}`;
 const APP_SCHEME     = 'fcdownloader';
 const DEPLOYMENT_TARGET = '14.0';
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
 // ── Swift source ──────────────────────────────────────────────────────────────
 
 const SHARE_VIEW_CONTROLLER = `\
@@ -277,8 +281,7 @@ const withShareExtensionPlugin: ConfigPlugin = (config) => {
   // Add App Group entitlement to the main app so it can share UserDefaults
   // with the extension (used as fallback when deep link fires on cold start).
   config = withEntitlementsPlist(config, (c) => {
-    const existing: string[] =
-      c.modResults['com.apple.security.application-groups'] ?? [];
+    const existing = stringArray(c.modResults['com.apple.security.application-groups']);
     if (!existing.includes(APP_GROUP)) {
       c.modResults['com.apple.security.application-groups'] = [
         ...existing,

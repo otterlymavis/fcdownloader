@@ -13,6 +13,10 @@ const EXT_BUNDLE_ID = `${BUNDLE_ID}.ShareExtension`;
 const APP_GROUP     = `group.${BUNDLE_ID}`;
 const APP_SCHEME    = 'fcdownloader';
 
+function stringArray(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [];
+}
+
 // ── Swift source ───────────────────────────────────────────────────────────────
 
 const SHARE_VIEW_CONTROLLER = `\
@@ -192,7 +196,7 @@ function withShareExtensionPlugin(config) {
   if (!config.ios) return config;
 
   config = withEntitlementsPlist(config, (c) => {
-    const groups = c.modResults['com.apple.security.application-groups'] ?? [];
+    const groups = stringArray(c.modResults['com.apple.security.application-groups']);
     if (!groups.includes(APP_GROUP)) {
       c.modResults['com.apple.security.application-groups'] = [...groups, APP_GROUP];
     }

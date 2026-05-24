@@ -89,21 +89,27 @@ function useTheme(darkOverride?: boolean) {
 
 // ── Helpers ───────────────────────────────────────────────────
 
+const SOURCE_NAMES: Array<[RegExp, string]> = [
+  [/video\.twimg\.com|twimg\.com/i, 'Twitter'],
+  [/cdninstagram\.com|instagram\.com/i, 'Instagram'],
+  [/threads\.net/i, 'Threads'],
+  [/vimeocdn\.com|vimeo\.com/i, 'Vimeo'],
+  [/tiktokcdn\.com|tiktokcdn-us\.com|v\d+-webapp\.tiktok\.com|tiktok\.com/i, 'TikTok'],
+  [/v\.redd\.it|reddit\.com/i, 'Reddit'],
+  [/googlevideo\.com|youtube\.com/i, 'YouTube'],
+  [/dailymotion\.com|dmcdn\.net/i, 'Dailymotion'],
+  [/facebook\.com|fbcdn\.net/i, 'Facebook'],
+  [/twitch\.tv|usher\.twitch\.tv/i, 'Twitch'],
+  [/pinimg\.com|pinterest\.com/i, 'Pinterest'],
+  [/bilivideo\.com|bilibili\.com|bilibili\.tv|b23\.tv/i, 'Bilibili'],
+  [/weibo\.com|weibo\.cn|weibocdn\.com|sinaimg\.cn/i, 'Weibo'],
+  [/xiaohongshu\.com|xhslink\.com|xhscdn\.com/i, 'Xiaohongshu'],
+];
+
 function getSourceName(url: string): string {
-  if (/video\.twimg\.com|twimg\.com/i.test(url))                                            return 'Twitter';
-  if (/cdninstagram\.com|instagram\.com/i.test(url))                                        return 'Instagram';
-  if (/threads\.net/i.test(url))                                                             return 'Threads';
-  if (/vimeocdn\.com|vimeo\.com/i.test(url))                                                return 'Vimeo';
-  if (/tiktokcdn\.com|tiktokcdn-us\.com|v\d+-webapp\.tiktok\.com|tiktok\.com/i.test(url))  return 'TikTok';
-  if (/v\.redd\.it|reddit\.com/i.test(url))                                                 return 'Reddit';
-  if (/googlevideo\.com|youtube\.com/i.test(url))                                           return 'YouTube';
-  if (/dailymotion\.com|dmcdn\.net/i.test(url))                                             return 'Dailymotion';
-  if (/facebook\.com|fbcdn\.net/i.test(url))                                                return 'Facebook';
-  if (/twitch\.tv|usher\.twitch\.tv/i.test(url))                                            return 'Twitch';
-  if (/pinimg\.com|pinterest\.com/i.test(url))                                              return 'Pinterest';
-  if (/bilivideo\.com|bilibili\.com|bilibili\.tv|b23\.tv/i.test(url))                       return 'Bilibili';
-  if (/weibo\.com|weibo\.cn|weibocdn\.com|sinaimg\.cn/i.test(url))                          return 'Weibo';
-  if (/xiaohongshu\.com|xhslink\.com|xhscdn\.com/i.test(url))                                return 'Xiaohongshu';
+  for (const [pattern, name] of SOURCE_NAMES) {
+    if (pattern.test(url)) return name;
+  }
   try {
     const host = new URL(url).hostname.replace(/^www\./, '');
     const name = host.split('.').slice(-2, -1)[0] ?? 'Video';
@@ -151,22 +157,27 @@ function getMediaFormat(item: DetectedMedia): string {
   return kind === 'image' ? 'Image' : kind === 'audio' ? 'Audio' : 'Video';
 }
 
+const MIME_BY_EXT: Record<string, string> = {
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  ts: 'video/mp2t',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  avif: 'image/avif',
+  mp3: 'audio/mpeg',
+  m4a: 'audio/mp4',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+};
+
 function getMimeFromPath(path: string): string {
   const p = path.toLowerCase();
-  if (p.endsWith('.mp4')) return 'video/mp4';
-  if (p.endsWith('.webm')) return 'video/webm';
-  if (p.endsWith('.mov')) return 'video/quicktime';
-  if (p.endsWith('.ts')) return 'video/mp2t';
-  if (p.endsWith('.jpg') || p.endsWith('.jpeg')) return 'image/jpeg';
-  if (p.endsWith('.png')) return 'image/png';
-  if (p.endsWith('.webp')) return 'image/webp';
-  if (p.endsWith('.gif')) return 'image/gif';
-  if (p.endsWith('.avif')) return 'image/avif';
-  if (p.endsWith('.mp3')) return 'audio/mpeg';
-  if (p.endsWith('.m4a')) return 'audio/mp4';
-  if (p.endsWith('.wav')) return 'audio/wav';
-  if (p.endsWith('.ogg')) return 'audio/ogg';
-  return 'application/octet-stream';
+  const ext = p.match(/\.([a-z0-9]+)$/)?.[1] ?? '';
+  return MIME_BY_EXT[ext] ?? 'application/octet-stream';
 }
 
 function getPageTitle(url: string): string {

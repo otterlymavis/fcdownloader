@@ -12,12 +12,12 @@ import { ThemePref, FontSizePref, FONT_SCALE } from '../hooks/useSettings';
 
 interface ThemeColors {
   dark: boolean;
-  pageBg: string;
-  surface: string;
-  surface2: string;
-  label: string;
-  label2: string;
-  label3: string;
+  bg: string;
+  card: string;
+  card2: string;
+  ink: string;
+  ink2: string;
+  ink3: string;
   sep: string;
 }
 
@@ -54,16 +54,16 @@ export default function SettingsSheet({
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose} />
-      <View style={[styles.sheet, { backgroundColor: t.pageBg }]}>
-        <View style={[styles.handle, { backgroundColor: t.label3 }]} />
-        <Text style={[styles.title, { color: t.label }]}>Settings</Text>
+      <View style={[styles.sheet, { backgroundColor: t.bg }]}>
+        <View style={[styles.handle, { backgroundColor: t.ink3 }]} />
+        <Text style={[styles.title, { color: t.ink }]}>Settings</Text>
 
         <ScrollView showsVerticalScrollIndicator={false}>
 
           {/* ── Appearance ── */}
-          <Text style={[styles.sectionLabel, { color: t.label2 }]}>APPEARANCE</Text>
-          <View style={[styles.card, { backgroundColor: t.surface }]}>
-            <Text style={[styles.rowLabel, { color: t.label }]}>Theme</Text>
+          <Text style={[styles.sectionLabel, { color: t.ink2 }]}>APPEARANCE</Text>
+          <View style={[styles.card, { backgroundColor: t.card }]}>
+            <Text style={[styles.rowLabel, { color: t.ink }]}>Theme</Text>
             <View style={styles.segmentRow}>
               {THEME_OPTIONS.map(({ value, label }) => {
                 const active = theme === value;
@@ -73,10 +73,10 @@ export default function SettingsSheet({
                     onPress={() => onThemeChange(value)}
                     style={[
                       styles.segment,
-                      { backgroundColor: active ? BLUE : t.surface2 },
+                      { backgroundColor: active ? BLUE : t.card2 },
                     ]}
                   >
-                    <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.label2 }]}>
+                    <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.ink2 }]}>
                       {label}
                     </Text>
                   </Pressable>
@@ -86,9 +86,9 @@ export default function SettingsSheet({
           </View>
 
           {/* ── Text Size ── */}
-          <Text style={[styles.sectionLabel, { color: t.label2 }]}>TEXT SIZE</Text>
-          <View style={[styles.card, { backgroundColor: t.surface }]}>
-            <Text style={[styles.rowLabel, { color: t.label }]}>Font Size</Text>
+          <Text style={[styles.sectionLabel, { color: t.ink2 }]}>TEXT SIZE</Text>
+          <View style={[styles.card, { backgroundColor: t.card }]}>
+            <Text style={[styles.rowLabel, { color: t.ink }]}>Font Size</Text>
             <View style={styles.segmentRow}>
               {FONT_OPTIONS.map(({ value, label, preview }) => {
                 const active = fontSize === value;
@@ -98,16 +98,16 @@ export default function SettingsSheet({
                     onPress={() => onFontSizeChange(value)}
                     style={[
                       styles.segment,
-                      { backgroundColor: active ? BLUE : t.surface2 },
+                      { backgroundColor: active ? BLUE : t.card2 },
                     ]}
                   >
                     <Text style={[
                       styles.fontPreview,
-                      { color: active ? '#fff' : t.label2, fontSize: 14 * FONT_SCALE[value] },
+                      { color: active ? '#fff' : t.ink2, fontSize: 14 * FONT_SCALE[value] },
                     ]}>
                       {preview}
                     </Text>
-                    <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.label2 }]}>
+                    <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.ink2 }]}>
                       {label}
                     </Text>
                   </Pressable>
@@ -123,7 +123,7 @@ export default function SettingsSheet({
         </ScrollView>
 
         <Pressable
-          style={[styles.doneButton, { backgroundColor: t.surface2 }]}
+          style={[styles.doneButton, { backgroundColor: t.card2 }]}
           onPress={onClose}
         >
           <Text style={[styles.doneLabel, { color: BLUE }]}>Done</Text>

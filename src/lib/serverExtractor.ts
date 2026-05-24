@@ -48,6 +48,7 @@ const _extra = (Constants.expoConfig?.extra ?? {}) as {
 };
 const BUNDLED_URL   = (_extra.bundledExtractorUrl   ?? '').trim();
 const BUNDLED_TOKEN = (_extra.bundledExtractorToken ?? '').trim();
+const SERVER_CONFIDENCE = 0.97;
 
 /** Whether this build is server-backed (HD via backend) or local-only (360p + opportunistic HLS HD). */
 export function isServerBacked(): boolean {
@@ -165,46 +166,43 @@ export async function extractViaServer(pageUrl: string): Promise<DetectedMedia[]
 }
 
 function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMedia[] {
-  const headers = r.headers ?? {};
-  const ua = headers['User-Agent'] ?? headers['user-agent'] ?? '';
-
   if (r.kind === 'gallery' && Array.isArray(r.items)) {
     return r.items.flatMap((item) => toDetectedMedia(item, pageUrl));
   }
 
+  const headers = r.headers ?? {};
+  const ua = headers['User-Agent'] ?? headers['user-agent'] ?? '';
+  const baseItem = {
+    id: genId(),
+    pageUrl,
+    userAgent: ua,
+    httpHeaders: headers,
+    timestamp: Date.now(),
+    confidence: SERVER_CONFIDENCE,
+    provenance: 'social-extractor' as const,
+  };
+
   if (r.kind === 'hls' && r.url) {
     return [{
-      id: genId(),
+      ...baseItem,
       url: r.url,
-      pageUrl,
-      userAgent: ua,
-      httpHeaders: headers,
-      timestamp: Date.now(),
       mimeType: r.mimeType ?? 'application/x-mpegURL',
       mediaType: 'hls',
       mediaKind: 'video',
-      confidence: 0.97,
-      provenance: 'social-extractor',
       label: r.label ?? 'HLS',
     }];
   }
 
   if (r.kind === 'paired' && r.videoUrl && r.audioUrl) {
     return [{
-      id: genId(),
+      ...baseItem,
       url: r.videoUrl,
       audioTrackUrl: r.audioUrl,
       audioTrackCodecs: r.audioMimeType,
-      pageUrl,
-      userAgent: ua,
-      httpHeaders: headers,
-      timestamp: Date.now(),
       mimeType: r.mimeType ?? 'video/mp4',
       // audioTrackUrl set → dashDownloader Case 1 (download both, native mux)
       mediaType: 'dash',
       mediaKind: 'video',
-      confidence: 0.97,
-      provenance: 'social-extractor',
       hasAudio: true,
       hasVideo: true,
       label: r.label ?? 'HD',
@@ -213,17 +211,11 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
 
   if ((r.kind === 'direct' || r.kind === 'image' || r.kind === 'audio') && r.url) {
     return [{
-      id: genId(),
+      ...baseItem,
       url: r.url,
-      pageUrl,
-      userAgent: ua,
-      httpHeaders: headers,
-      timestamp: Date.now(),
       mimeType: r.mimeType ?? 'video/mp4',
       mediaType: 'direct',
-      mediaKind: r.kind === 'image' ? 'image' : r.kind === 'audio' ? 'audio' : (r.mimeType || '').startsWith('image/') ? 'image' : (r.mimeType || '').startsWith('audio/') ? 'audio' : 'video',
-      confidence: 0.97,
-      provenance: 'social-extractor',
+      mediaKind: directMediaKind(r),
       hasAudio: true,
       hasVideo: true,
       label: r.label,
@@ -231,4 +223,11 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
   }
 
   return [];
+}
+
+function directMediaKind(r: ServerExtractResponse): NonNullable<DetectedMedia['mediaKind']> {
+  const mimeType = r.mimeType ?? '';
+  if (r.kind === 'image' || mimeType.startsWith('image/')) return 'image';
+  if (r.kind === 'audio' || mimeType.startsWith('audio/')) return 'audio';
+  return 'video';
 }

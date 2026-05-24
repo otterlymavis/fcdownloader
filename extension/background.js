@@ -17,6 +17,16 @@
 // packaging time so end users never have to enter the URL manually.
 import { FCDL_DEFAULT_BACKEND } from "./config.js";
 const DEFAULT_BACKEND = (FCDL_DEFAULT_BACKEND || "").trim().replace(/\/+$/, "");
+const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i;
+const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i;
+const SERVER_ONLY_RE = /youtube\.com|youtu\.be|googlevideo\.com|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.com|bilibili\.com|weibo\.com|weibo\.cn|weibocdn\.com|xiaohongshu\.com|xhslink\.com|xhscdn\.com/;
+const PREFLIGHT_MEDIA_TYPES = [
+  "video/",
+  "image/",
+  "audio/",
+  "application/x-mpegURL",
+  "application/octet-stream",
+];
 
 // On install: seed the storage.sync backend from DEFAULT_BACKEND so the
 // user never sees the "configure backend" screen on a public-distribution
@@ -77,6 +87,14 @@ function itemPriority(item) {
   return 50;
 }
 
+function mediaKindForUrl(url) {
+  if (url.includes(".m3u8")) return "hls";
+  if (url.includes(".mpd")) return "dash";
+  if (IMAGE_EXT_RE.test(url)) return "image";
+  if (AUDIO_EXT_RE.test(url)) return "audio";
+  return "direct";
+}
+
 function addItem(tabId, pageUrl, item) {
   const s = ensureTab(tabId, pageUrl);
   if (!item || !item.url) return;
@@ -123,10 +141,7 @@ try {
           if (!tab?.url) return;
           addItem(details.tabId, tab.url, {
             url: u,
-            kind: u.includes(".m3u8") ? "hls" :
-                  u.includes(".mpd")  ? "dash" :
-                  /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(u) ? "image" :
-                  /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i.test(u) ? "audio" : "direct",
+            kind: mediaKindForUrl(u),
             source: "network",
             mime: details.responseHeaders?.find((h) => /content-type/i.test(h.name))?.value || "",
           });
@@ -147,7 +162,7 @@ function isLikelyMedia(url) {
   const u = url.toLowerCase().split("?")[0];
   if (u.endsWith(".m3u8") || u.endsWith(".mpd")) return true;
   if (u.endsWith(".mp4") || u.endsWith(".webm") || u.endsWith(".mov")) return true;
-  if (/\.(jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)$/.test(u)) return true;
+  if (IMAGE_EXT_RE.test(u) || AUDIO_EXT_RE.test(u)) return true;
   // Known video CDNs (no extension)
   if (/(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|v\.redd\.it|tiktokcdn\.com|v\d+-webapp\.tiktok\.com|bilivideo\.com|weibocdn\.com|xhscdn\.com|dmcdn\.net|pinimg\.com\/(?:videos|originals|736x|1200x|564x)|vimeocdn\.com)/.test(url)) {
     // Skip byte-range YouTube segments (will dedupe to the parent URL)
@@ -242,7 +257,7 @@ async function preflightBackendUrl(url) {
       ac.abort();
       return { ok: false, error: `${r.status}: ${body.slice(0, 240)}` };
     }
-    if (ct.startsWith("video/") || ct.startsWith("image/") || ct.startsWith("audio/") || ct.startsWith("application/x-mpegURL") || ct.startsWith("application/octet-stream")) {
+    if (PREFLIGHT_MEDIA_TYPES.some((type) => ct.startsWith(type))) {
       ac.abort();  // abort the body; chrome.downloads will fetch fresh
       return { ok: true };
     }
@@ -304,7 +319,7 @@ async function downloadItem(tabId, item) {
   // HLS / DASH / paired adaptive / known-server-only sites need backend muxing.
   const needsMux =
     item.kind === "hls" || item.kind === "dash" || item.kind === "paired" || item.kind === "embed" ||
-    /youtube\.com|youtu\.be|googlevideo\.com|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.com|bilibili\.com|weibo\.com|weibo\.cn|weibocdn\.com|xiaohongshu\.com|xhslink\.com|xhscdn\.com/.test(item.url || urlForBackend);
+    SERVER_ONLY_RE.test(item.url || urlForBackend);
 
   if (needsMux) {
     return viaBackend(urlForBackend);

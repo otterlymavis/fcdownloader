@@ -28,6 +28,12 @@ async function fetchHtml(url: string, ua = DESKTOP_UA): Promise<string> {
   return res.text();
 }
 
+function mediaKindFromUrl(url: string): NonNullable<DetectedMedia['mediaKind']> {
+  if (/\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(url)) return 'image';
+  if (/\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i.test(url)) return 'audio';
+  return 'video';
+}
+
 function makeItem(url: string, pageUrl: string, label?: string, provenance: Provenance = 'social-extractor', confidence = 0.85): DetectedMedia {
   const clean = url
     .replace(/\\u0026/g, '&')
@@ -35,11 +41,6 @@ function makeItem(url: string, pageUrl: string, label?: string, provenance: Prov
     .replace(/\\/g, '')
     .trim();
   const lower = clean.toLowerCase();
-  const mediaKind = /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(clean)
-    ? 'image'
-    : /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i.test(clean)
-      ? 'audio'
-      : 'video';
   return {
     id: genId(),
     url: clean,
@@ -47,11 +48,15 @@ function makeItem(url: string, pageUrl: string, label?: string, provenance: Prov
     userAgent: '',
     timestamp: Date.now(),
     mediaType: lower.includes('.mpd') ? 'dash' : lower.includes('.m3u8') ? 'hls' : 'direct',
-    mediaKind,
+    mediaKind: mediaKindFromUrl(clean),
     label,
     confidence,
     provenance,
   };
+}
+
+function pushUnique(results: DetectedMedia[], item: DetectedMedia): void {
+  if (!results.some(r => r.url === item.url)) results.push(item);
 }
 
 function extractUrls(text: string, re: RegExp): string[] {
@@ -86,8 +91,7 @@ async function extractTikTok(pageUrl: string): Promise<DetectedMedia[]> {
           results.push(makeItem(u, pageUrl)),
         );
         extractUrls(json, /"downloadAddr"\s*:\s*"(https?:\/\/[^"]+)"/g).forEach(u => {
-          if (!results.some(r => r.url === makeItem(u, pageUrl).url))
-            results.push(makeItem(u, pageUrl));
+          pushUnique(results, makeItem(u, pageUrl));
         });
       } catch {}
     }
@@ -123,7 +127,7 @@ async function extractTwitter(pageUrl: string): Promise<DetectedMedia[]> {
       /<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream|og:image(?::secure_url)?|twitter:image)["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
     )
       .filter(u => u.startsWith('http'))
-      .forEach(u => { if (!results.some(r => r.url === u)) results.push(makeItem(u, pageUrl)); });
+      .forEach(u => pushUnique(results, makeItem(u, pageUrl)));
 
     return results;
   } catch { return []; }
@@ -146,16 +150,14 @@ async function extractInstagram(pageUrl: string): Promise<DetectedMedia[]> {
       html,
       /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com)[^"'\\<>\s]*\.(?:mp4|m3u8)[^"'\\<>\s]*)/g,
     ).forEach(u => {
-      const item = makeItem(u, pageUrl);
-      if (!results.some(r => r.url === item.url)) results.push(item);
+      pushUnique(results, makeItem(u, pageUrl));
     });
 
     extractUrls(
       html,
       /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com)[^"'\\<>\s]*\.(?:jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/g,
     ).forEach(u => {
-      const item = makeItem(u, pageUrl);
-      if (!results.some(r => r.url === item.url)) results.push(item);
+      pushUnique(results, makeItem(u, pageUrl));
     });
 
     if (results.length === 0) {
@@ -281,9 +283,7 @@ async function extractFacebook(pageUrl: string): Promise<DetectedMedia[]> {
       /"browser_native_hd_url"\s*:\s*"(https?:\/\/[^"]+)"/g,
       /"browser_native_sd_url"\s*:\s*"(https?:\/\/[^"]+)"/g,
     ]) {
-      extractUrls(html, re).forEach(u => {
-        if (!results.some(r => r.url === u)) results.push(makeItem(u, pageUrl));
-      });
+      extractUrls(html, re).forEach(u => pushUnique(results, makeItem(u, pageUrl)));
     }
 
     return results;
@@ -392,8 +392,7 @@ async function extractWeibo(pageUrl: string): Promise<DetectedMedia[]> {
       html,
       /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:weibocdn\.com|sinaimg\.cn)[^"'\\<>\s]*\.(?:mp4|m3u8|mov|jpe?g|png|webp|gif|heic)[^"'\\<>\s]*)/g,
     ).forEach(u => {
-      const item = makeItem(u, pageUrl, 'Weibo', 'social-extractor', 0.70);
-      if (!results.some(r => r.url === item.url)) results.push(item);
+      pushUnique(results, makeItem(u, pageUrl, 'Weibo', 'social-extractor', 0.70));
     });
     return results;
   } catch { return []; }
@@ -416,8 +415,7 @@ async function extractXiaohongshu(pageUrl: string): Promise<DetectedMedia[]> {
       html,
       /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:xhscdn\.com|xhslink\.com)[^"'\\<>\s]*\.(?:mp4|m3u8|mov|jpe?g|png|webp|gif|heic)[^"'\\<>\s]*)/g,
     ).forEach(u => {
-      const item = makeItem(u, pageUrl, 'Xiaohongshu', 'social-extractor', 0.70);
-      if (!results.some(r => r.url === item.url)) results.push(item);
+      pushUnique(results, makeItem(u, pageUrl, 'Xiaohongshu', 'social-extractor', 0.70));
     });
     return results;
   } catch { return []; }
