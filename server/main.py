@@ -389,6 +389,17 @@ def extract(
         return cached
 
     info = _run_ydl(req.pageUrl, referer=req.referer, cookies=req.cookies)
+
+    # Instagram carousels / Reddit galleries / Threads carousels come back as
+    # yt-dlp playlists. Return them as a gallery so the client can offer
+    # "Save all" rather than just the first item.
+    if info.get("_type") == "playlist" and info.get("entries"):
+        response = _to_gallery_response(info)
+        response["title"] = info.get("title")
+        _cache_put(cache_key, response)
+        print(f"[extract] gallery: {len(response['items'])} item(s)")
+        return response
+
     response = _to_response(info)
     # Title / thumbnail / duration are useful for web UIs that preview before
     # download. Extract once; cheap to include.
@@ -423,10 +434,15 @@ def _ffmpeg_header_arg(headers: dict[str, str] | None) -> str | None:
     return "".join(f"{k}: {v}\r\n" for k, v in headers.items() if v)
 
 
-def _download_headers(referer: str | None, cookies: str | None) -> dict[str, str]:
+def _download_headers(referer: str | None, cookies: str | None, page_url: str | None = None) -> dict[str, str]:
     headers: dict[str, str] = {}
     if referer:
         headers["Referer"] = referer
+    elif page_url and "bilibili.com" in page_url:
+        # Bilibili CDN (upos-*.bilivideo.com) returns 403 without Referer.
+        # If the caller didn't pass one, derive it from the page URL host.
+        headers["Referer"] = "https://www.bilibili.com/"
+        headers["Origin"]  = "https://www.bilibili.com"
     if cookies:
         headers["Cookie"] = cookies
     return headers
@@ -511,7 +527,7 @@ def download(
     }
 
     kind = response["kind"]
-    request_headers = _download_headers(referer, cookies)
+    request_headers = _download_headers(referer, cookies, page_url=url)
     if kind == "paired":
         return StreamingResponse(
             _ffmpeg_stream(response["videoUrl"], response["audioUrl"], None, request_headers),
@@ -544,7 +560,7 @@ def download_post(
         ),
         "Cache-Control": "no-store",
     }
-    request_headers = _download_headers(req.referer, req.cookies)
+    request_headers = _download_headers(req.referer, req.cookies, page_url=req.pageUrl)
 
     kind = response["kind"]
     if kind == "paired":
@@ -578,6 +594,65 @@ def _request_cache_key(page_url: str, referer: str | None, cookies: str | None) 
 
 
 # ── Response shaping ─────────────────────────────────────────────────────────
+
+
+_IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "heic"}
+
+
+def _guess_ext_from_url(url: str) -> str:
+    m = re.search(r"\.([a-z0-9]{2,5})(?:\?|$)", url.split("?")[0].lower())
+    return m.group(1) if m else ""
+
+
+def _to_gallery_response(info: dict[str, Any]) -> dict[str, Any]:
+    """Shape an Instagram carousel / Reddit gallery / Threads thread into a
+    list of media items. Each entry is either an image (.jpg/.webp) or a
+    video; the client downloads them one by one."""
+    items: list[dict[str, Any]] = []
+    for entry in info.get("entries") or []:
+        if not entry:
+            continue
+
+        # Video entries: yt-dlp picks `requested_formats` (paired) or surfaces
+        # the chosen format's URL directly. Images: just a `url`.
+        url: str | None = None
+        is_paired = False
+        if entry.get("requested_formats") and len(entry["requested_formats"]) == 2:
+            # Paired video — would need server muxing; surface both URLs.
+            video, audio = entry["requested_formats"]
+            if video.get("vcodec") == "none" and audio.get("vcodec") != "none":
+                video, audio = audio, video
+            items.append({
+                "kind":          "paired",
+                "videoUrl":      video["url"],
+                "audioUrl":      audio["url"],
+                "headers":       _headers_for(video),
+                "label":         _label_for(video),
+                "ext":           video.get("ext") or "mp4",
+                "title":         entry.get("title"),
+            })
+            continue
+
+        url = entry.get("url")
+        if not url and entry.get("formats"):
+            # Last format is usually best for IG/Reddit single-format entries
+            url = entry["formats"][-1].get("url")
+        if not url:
+            continue
+
+        ext = (entry.get("ext") or _guess_ext_from_url(url) or "").lower()
+        is_image = ext in _IMAGE_EXTS
+        items.append({
+            "kind":     "image" if is_image else ("hls" if _looks_like_hls(url, entry.get("protocol")) else "direct"),
+            "url":      url,
+            "headers":  _headers_for(entry),
+            "label":    _label_for(entry),
+            "ext":      ext or ("mp4" if not is_image else "jpg"),
+            "mimeType": _mime_for(entry) if not is_image else f"image/{ext or 'jpeg'}",
+            "title":    entry.get("title"),
+        })
+
+    return {"kind": "gallery", "items": items, "count": len(items)}
 
 
 def _to_response(info: dict[str, Any]) -> dict[str, Any]:

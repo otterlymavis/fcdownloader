@@ -282,6 +282,18 @@ async function extractBilibili(pageUrl: string): Promise<DetectedMedia[]> {
     const html = await fetchHtml(pageUrl, DESKTOP_UA);
     const results: DetectedMedia[] = [];
 
+    // Bilibili's CDN (upos-*.bilivideo.com / .biliapi.net) returns HTTP 403
+    // when the request is missing `Referer: https://www.bilibili.com/` AND a
+    // browser-class User-Agent. Pin both so directDownloader replays them
+    // verbatim regardless of the default mobile UA.
+    const bilibiliHeaders = {
+      'User-Agent': DESKTOP_UA,
+      'Referer':    'https://www.bilibili.com/',
+      'Origin':     'https://www.bilibili.com',
+      'Accept':     '*/*',
+    };
+    const withHeaders = (item: DetectedMedia): DetectedMedia => ({ ...item, httpHeaders: bilibiliHeaders });
+
     const piMatch = html.match(/window\.__playinfo__\s*=\s*(\{[\s\S]+?\})\s*<\/script>/);
     if (piMatch) {
       try {
@@ -290,7 +302,7 @@ async function extractBilibili(pageUrl: string): Promise<DetectedMedia[]> {
         // Prefer progressive MP4 (durl) — single file, no muxing required
         if (data?.durl?.length > 0) {
           const url = (data.durl[0].url || '').replace(/\\u0026/g, '&');
-          if (url) results.push(makeItem(url, pageUrl, 'Bilibili MP4', 'social-extractor', 0.80));
+          if (url) results.push(withHeaders(makeItem(url, pageUrl, 'Bilibili MP4', 'social-extractor', 0.80)));
         } else if (data?.dash) {
           // Fallback: best video-only DASH track
           const vids = (data.dash.video || []).sort((a: any, b: any) => (b.bandwidth ?? 0) - (a.bandwidth ?? 0));
@@ -298,7 +310,7 @@ async function extractBilibili(pageUrl: string): Promise<DetectedMedia[]> {
             const vUrl = (vids[0].baseUrl || vids[0].base_url || '').replace(/\\u0026/g, '&');
             if (vUrl) {
               const label = vids[0].height ? `${vids[0].height}p` : 'Bilibili';
-              results.push(makeItem(vUrl, pageUrl, label, 'social-extractor', 0.75));
+              results.push(withHeaders(makeItem(vUrl, pageUrl, label, 'social-extractor', 0.75)));
             }
           }
         }

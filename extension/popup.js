@@ -178,6 +178,15 @@ extractBtn.addEventListener("click", async () => {
     }
     setStatus("", "info");
     const info = resp.info;
+
+    // Gallery (Instagram carousel / Reddit gallery / Threads carousel): render
+    // a single "Save all (N)" card. Per-item rows live in the collapsed
+    // <details> below it.
+    if (info.kind === "gallery" && Array.isArray(info.items)) {
+      renderGallery(info);
+      return;
+    }
+
     const item = {
       url: info.kind === "paired" ? info.videoUrl : info.url,
       title: info.title,
@@ -200,6 +209,84 @@ extractBtn.addEventListener("click", async () => {
     extractBtn.disabled = false;
   }
 });
+
+// ── Gallery rendering ──────────────────────────────────────────────────
+//
+// Carousels (Instagram, Reddit, Threads) come back from /extract as
+// { kind: "gallery", items: [{ url, kind: "image"|"direct"|..., ext, title }] }.
+// We show ONE prominent "Save all" card and tuck individual items into the
+// same <details> we already use for "other videos", so the popup stays
+// single-action-focused.
+
+function describeGallery(items) {
+  let photos = 0, videos = 0;
+  for (const it of items) {
+    if (it.kind === "image") photos++; else videos++;
+  }
+  const parts = [];
+  if (photos) parts.push(`${photos} photo${photos === 1 ? "" : "s"}`);
+  if (videos) parts.push(`${videos} video${videos === 1 ? "" : "s"}`);
+  return parts.join(" · ") || `${items.length} items`;
+}
+
+function renderGallery(info) {
+  const items = info.items;
+  primaryTitle.textContent = info.title || `${items.length} items`;
+  primaryMeta.textContent  = describeGallery(items);
+  primaryBtn.textContent   = `Save all ${items.length}`;
+  primaryBtn.onclick = async () => {
+    primaryBtn.disabled = true;
+    setStatus(`Downloading 0 of ${items.length}…`);
+    const resp = await sendMessage({
+      type: "fcdl:download_gallery",
+      tabId: currentTabId,
+      pageUrl: currentPageUrl,
+      title: info.title,
+      items,
+    }, 120_000);
+    primaryBtn.disabled = false;
+    primaryBtn.textContent = `Save all ${items.length}`;
+    if (!resp?.ok) {
+      setStatus(resp?.error || "Some downloads failed.", "error");
+      return;
+    }
+    const { started = 0, failed = 0 } = resp;
+    if (failed === 0) {
+      setStatus(`Saved ${started} files. Check your browser's Downloads.`, "success");
+    } else {
+      setStatus(`Saved ${started}, ${failed} failed. Check the SW console for details.`, "error");
+    }
+  };
+  primaryEl.hidden = false;
+  emptyEl.hidden   = true;
+
+  // Per-item list — collapsed by default
+  moreEl.hidden = false;
+  moreEl.querySelector("summary").textContent = `Show individual items (${items.length})`;
+  moreList.innerHTML = "";
+  items.forEach((it, idx) => {
+    const li = document.createElement("li");
+    const label = it.kind === "image" ? "Photo" : "Video";
+    li.innerHTML = `
+      <div class="row-meta">
+        <div class="row-title">${escapeHtml(label)} ${idx + 1}</div>
+        <div class="row-sub">${escapeHtml((it.ext || "").toUpperCase() || it.kind)}</div>
+      </div>
+      <button type="button">Save</button>
+    `;
+    li.querySelector("button").addEventListener("click", async () => {
+      const r = await sendMessage({
+        type: "fcdl:download_gallery_item",
+        tabId: currentTabId,
+        title: info.title,
+        index: idx,
+        item: it,
+      }, 60_000);
+      if (!r?.ok) setStatus(r?.error || "Failed.", "error");
+    });
+    moreList.appendChild(li);
+  });
+}
 
 // ── Per-item Download ──────────────────────────────────────────────────
 

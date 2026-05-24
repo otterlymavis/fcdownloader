@@ -304,6 +304,57 @@ function suggestedFilename(item, pageUrl) {
   return `${safe}.mp4`;
 }
 
+// ── Gallery downloads — Instagram carousel, Reddit gallery, Threads ───────
+
+function sanitizeForFile(s) {
+  return String(s || "").replace(/[<>:"/\\|?*\x00-\x1F]+/g, "").trim().slice(0, 60);
+}
+
+function galleryFilename(title, index, item) {
+  const base = sanitizeForFile(title) || "gallery";
+  // 1-based index, zero-padded so files sort naturally in Downloads.
+  const n = String(index + 1).padStart(2, "0");
+  const ext = (item.ext || (item.kind === "image" ? "jpg" : "mp4"))
+    .toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";
+  return `${base}/${base}-${n}.${ext}`;
+}
+
+async function downloadGalleryItem(title, index, item) {
+  // Images go straight to chrome.downloads (Instagram/Reddit CDN URLs are
+  // pre-signed, no Referer required). Videos in a carousel may need backend
+  // muxing (paired DASH), so they route through downloadItem like a normal
+  // backend-extracted item.
+  const filename = galleryFilename(title, index, item);
+  if (item.kind === "image") {
+    return chromeDownload(item.url, filename);
+  }
+  if (item.kind === "paired") {
+    // Paired video inside a gallery — we can't easily mux on the client.
+    // For now, just download the video stream (no audio). If users hit this
+    // we'll route it through a /download endpoint variant.
+    return chromeDownload(item.videoUrl || item.url, filename);
+  }
+  return chromeDownload(item.url, filename);
+}
+
+async function downloadGallery(tabId, pageUrl, title, items) {
+  let started = 0;
+  let failed  = 0;
+  for (let i = 0; i < items.length; i++) {
+    try {
+      await downloadGalleryItem(title, i, items[i]);
+      started++;
+    } catch (e) {
+      failed++;
+      console.warn(`[fcdl] gallery item ${i} failed:`, e);
+    }
+    // Tiny gap so chrome.downloads doesn't queue them as one batch and so
+    // the user's Downloads UI doesn't look like a single concurrent storm.
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  return { started, failed };
+}
+
 function hostname(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); }
   catch { return ""; }
@@ -353,6 +404,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "fcdl:download") {
       try {
         const id = await downloadItem(msg.tabId, msg.item);
+        sendResponse({ ok: true, downloadId: id });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e.message || e) });
+      }
+      return;
+    }
+    if (msg.type === "fcdl:download_gallery") {
+      const r = await downloadGallery(msg.tabId, msg.pageUrl, msg.title, msg.items);
+      sendResponse({ ok: true, ...r });
+      return;
+    }
+    if (msg.type === "fcdl:download_gallery_item") {
+      try {
+        const id = await downloadGalleryItem(msg.title, msg.index, msg.item);
         sendResponse({ ok: true, downloadId: id });
       } catch (e) {
         sendResponse({ ok: false, error: String(e.message || e) });
