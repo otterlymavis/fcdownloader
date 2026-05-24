@@ -18,10 +18,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import json
 import os
 import re
 import shlex
+import socket
+import ssl
 import subprocess
 import tempfile
 import time
@@ -952,11 +955,6 @@ def _download_headers(referer: str | None, cookies: str | None, page_url: str | 
 
 def _needs_headered_direct_stream(page_url: str, media_url: str, headers: dict[str, str]) -> bool:
     combined = f"{page_url} {media_url}".lower()
-    # Weibo direct MP4 URLs are signed and browser-downloadable, while Fly's
-    # resolver intermittently fails on f.us.sinaimg.cn. Redirect these instead
-    # of proxying through the backend, otherwise users get empty files / 502s.
-    if any(host in combined for host in ("weibo.com", "weibo.cn", "sinaimg.cn", "weibocdn.com")):
-        return False
     if headers.get("Cookie"):
         return True
     return any(host in combined for host in (
@@ -966,6 +964,10 @@ def _needs_headered_direct_stream(page_url: str, media_url: str, headers: dict[s
         "cdninstagram.com",
         "fbcdn.net",
         "threadscdn.com",
+        "weibo.com",
+        "weibo.cn",
+        "sinaimg.cn",
+        "weibocdn.com",
         "xiaohongshu.com",
         "xhscdn.com",
     ))
@@ -1037,8 +1039,7 @@ def _direct_media_stream(
         **(request_headers or {}),
     }
     try:
-        req = urllib.request.Request(media_url, headers=headers)
-        upstream = urllib.request.urlopen(req, timeout=30)
+        upstream = _open_direct_media(media_url, headers)
     except urllib.error.HTTPError as e:  # type: ignore[attr-defined]
         body = ""
         try:
@@ -1049,9 +1050,9 @@ def _direct_media_stream(
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"upstream: {str(e)[:240]}")
 
-    content_type = upstream.headers.get("Content-Type", "video/mp4")
+    content_type = _response_header(upstream, "Content-Type", "video/mp4")
     out_headers = {**response_headers}
-    if cl := upstream.headers.get("Content-Length"):
+    if cl := _response_header(upstream, "Content-Length"):
         out_headers["Content-Length"] = cl
 
     def stream() -> Iterator[bytes]:
@@ -1068,6 +1069,99 @@ def _direct_media_stream(
                 pass
 
     return StreamingResponse(stream(), media_type=content_type, headers=out_headers)
+
+
+def _response_header(upstream: Any, name: str, default: str | None = None) -> str | None:
+    headers = getattr(upstream, "headers", None)
+    if headers is not None:
+        try:
+            return headers.get(name, default)
+        except Exception:
+            pass
+    getheader = getattr(upstream, "getheader", None)
+    if callable(getheader):
+        return getheader(name, default)
+    return default
+
+
+def _resolve_a_records(host: str) -> list[str]:
+    try:
+        return [info[4][0] for info in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)]
+    except socket.gaierror:
+        pass
+
+    for resolver in (
+        f"https://dns.google/resolve?name={urllib.parse.quote(host)}&type=A",
+        f"https://cloudflare-dns.com/dns-query?name={urllib.parse.quote(host)}&type=A",
+    ):
+        try:
+            req_headers = {"Accept": "application/dns-json"} if "cloudflare-dns" in resolver else {}
+            req = urllib.request.Request(resolver, headers=req_headers)
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            ips = [
+                ans.get("data")
+                for ans in data.get("Answer", [])
+                if ans.get("type") == 1 and isinstance(ans.get("data"), str)
+            ]
+            if ips:
+                return ips
+        except Exception as e:  # noqa: BLE001
+            print(f"[direct] DoH resolver failed for {host}: {str(e)[:120]}")
+    return []
+
+
+def _open_https_via_ip(url: str, headers: dict[str, str]) -> http.client.HTTPResponse:
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or ""
+    if not host:
+        raise urllib.error.URLError("missing host")
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+
+    ips = _resolve_a_records(host)
+    if not ips:
+        raise urllib.error.URLError(f"could not resolve {host}")
+
+    last_error: Exception | None = None
+    for ip in ips[:4]:
+        try:
+            sock = socket.create_connection((ip, parsed.port or 443), timeout=15)
+            context = ssl.create_default_context()
+            tls = context.wrap_socket(sock, server_hostname=host)
+            conn = http.client.HTTPSConnection(host, timeout=30)
+            conn.sock = tls
+            conn.request("GET", path, headers={**headers, "Host": host})
+            resp = conn.getresponse()
+            if 300 <= resp.status < 400 and resp.getheader("Location"):
+                location = urllib.parse.urljoin(url, resp.getheader("Location") or "")
+                conn.close()
+                return _open_direct_media(location, headers)
+            if resp.status >= 400:
+                body = resp.read(240).decode("utf-8", errors="replace")
+                conn.close()
+                raise urllib.error.HTTPError(url, resp.status, body or resp.reason, resp.headers, None)
+            return resp
+        except Exception as e:  # noqa: BLE001
+            last_error = e
+            try:
+                conn.close()  # type: ignore[has-type]
+            except Exception:
+                pass
+    raise urllib.error.URLError(str(last_error or f"could not connect to {host}"))
+
+
+def _open_direct_media(url: str, headers: dict[str, str]) -> Any:
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        return urllib.request.urlopen(req, timeout=30)
+    except urllib.error.URLError as e:
+        host = urllib.parse.urlparse(url).hostname or ""
+        if host.endswith("sinaimg.cn") or host.endswith("weibocdn.com"):
+            print(f"[direct] system resolver/open failed for {host}: {str(e)[:160]}; trying DoH/IP")
+            return _open_https_via_ip(url, headers)
+        raise
 
 
 @app.get("/download")
