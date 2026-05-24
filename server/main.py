@@ -460,12 +460,20 @@ def _run_ydl(
     #   - mweb:        mobile web, lower quality but reliable last-resort.
     # `android_vr` / `tv_simply` started returning sabr.malformed_config in
     # early 2026 when YouTube tightened SABR config validation; removed.
-    # `player_skip=configs` tells yt-dlp not to negotiate the SABR config
-    # endpoint that's been changing format under us.
+    #
+    # NOTE: do NOT set `player_skip: ["configs"]` here — that prevents
+    # yt-dlp from negotiating the player config that carries the actual
+    # format URLs + signatures, and yields "Requested format is not
+    # available" on EVERY video. We rely on yt-dlp master's own SABR
+    # handling instead.
+    # `web_creator` and `web_safari` are the two clients least likely to trip
+    # YouTube's "Sign in to confirm you're not a bot" wall on datacenter IPs
+    # (Fly.io). `tv` is the highest-quality non-SABR client but is the FIRST
+    # to get bot-walled — keep it but list it last so retries get a chance to
+    # succeed on the other clients before yt-dlp gives up.
     extractor_args: dict[str, Any] = {
         "youtube": {
-            "player_client": ["tv", "web_safari", "mweb"],
-            "player_skip": ["configs"],
+            "player_client": ["web_safari", "web_creator", "mweb", "tv"],
         },
     }
     # Vimeo's embed-only check reads its `referer` extractor_arg first, then

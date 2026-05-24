@@ -59,30 +59,45 @@
 
   function scanVideoTags() {
     const found = [];
-    document.querySelectorAll("video, video source").forEach((el) => {
+    document.querySelectorAll("video, audio, video source, audio source").forEach((el) => {
       const src = el.currentSrc || el.src || el.getAttribute("src") || "";
       if (!src || src.startsWith("blob:") || src.startsWith("data:")) return;
       found.push({
         url: src,
-        kind: src.includes(".m3u8") ? "hls" : src.includes(".mpd") ? "dash" : "direct",
+        kind: src.includes(".m3u8") ? "hls" : src.includes(".mpd") ? "dash" : el.tagName === "AUDIO" ? "audio" : "direct",
         source: "video-tag",
       });
     });
     return found;
   }
 
+  function scanImageTags() {
+    const found = [];
+    document.querySelectorAll("img, picture source").forEach((el) => {
+      if (el.tagName === "IMG" && Math.max(el.naturalWidth || 0, el.naturalHeight || 0) < 160) return;
+      const src = el.currentSrc || el.src || el.getAttribute("src") || el.getAttribute("srcset")?.split(/\s+/)[0] || "";
+      if (!src || src.startsWith("data:") || src.startsWith("blob:")) return;
+      if (!/^https?:\/\//i.test(src)) return;
+      if (/(?:favicon|apple-touch-icon|sprite|logo|placeholder|blank|pixel|tracking)/i.test(src)) return;
+      found.push({ url: src, kind: "image", source: "image-tag" });
+    });
+    return found;
+  }
+
   function scanMetaTags() {
     const found = [];
-    document
-      .querySelectorAll(
-        'meta[property="og:video"], meta[property="og:video:url"], meta[property="og:video:secure_url"], meta[name="twitter:player:stream"]'
-      )
-      .forEach((m) => {
-        const u = decode(m.getAttribute("content"));
-        if (u && u.startsWith("http")) {
-          found.push({ url: u, kind: "direct", source: "og:video" });
-        }
-      });
+    // Always look for og:video / twitter:player. Only look for og:image
+    // when we're on a known image-host page — otherwise every YouTube /
+    // Bilibili / news page would surface a thumbnail as a "media item".
+    const selector = shouldScanImages()
+      ? 'meta[property="og:video"], meta[property="og:video:url"], meta[property="og:video:secure_url"], meta[name="twitter:player:stream"], meta[property="og:image"], meta[property="og:image:secure_url"], meta[name="twitter:image"]'
+      : 'meta[property="og:video"], meta[property="og:video:url"], meta[property="og:video:secure_url"], meta[name="twitter:player:stream"]';
+    document.querySelectorAll(selector).forEach((m) => {
+      const u = decode(m.getAttribute("content"));
+      if (u && u.startsWith("http")) {
+        found.push({ url: u, kind: /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(u) ? "image" : "direct", source: "meta" });
+      }
+    });
     return found;
   }
 
@@ -90,11 +105,13 @@
   function scanMetaJson(html) {
     const found = [];
     const patterns = [
-      [/"video_url":"(https?:[^"]+)"/g, "direct"],
-      [/"playable_url(?:_quality_hd)?":"(https?:[^"]+)"/g, "direct"],
-      [/"browser_native_(?:hd|sd)_url":"(https?:[^"]+)"/g, "direct"],
-      [/"hd_src":"(https?:[^"]+)"/g, "direct"],
-      [/"sd_src":"(https?:[^"]+)"/g, "direct"],
+      [/"video_url"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, "direct"],
+      [/"playable_url(?:_quality_hd)?"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, "direct"],
+      [/"browser_native_(?:hd|sd)_url"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, "direct"],
+      [/"hd_src"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, "direct"],
+      [/"sd_src"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, "direct"],
+      [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com)[^"'\\<>\s]*\.(?:mp4|m3u8)[^"'\\<>\s]*)/g, "direct"],
+      [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|pinimg\.com)[^"'\\<>\s]*\.(?:jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/g, "image"],
     ];
     for (const [re, kind] of patterns) {
       let m;
@@ -139,11 +156,22 @@
     const found = [];
     if (!/bilibili\.com\//.test(location.href)) return found;
     try {
-      const pi = window.__playinfo__;
+      let pi = window.__playinfo__;
+      if (!pi) {
+        const html = document.documentElement.outerHTML;
+        const match = html.match(/window\.__playinfo__\s*=\s*(\{[\s\S]+?\})\s*<\/script>/);
+        if (match) pi = JSON.parse(match[1]);
+      }
       const data = pi?.data;
-      if (Array.isArray(data?.durl) && data.durl.length) {
-        const u = decode(data.durl[0].url || "");
-        if (u) found.push({ url: u, kind: "direct", source: "bili-playinfo", label: "Bilibili" });
+      if (Array.isArray(data?.durl) || data?.dash) {
+        found.push({
+          url: location.href,
+          pageUrl: location.href,
+          kind: "embed",
+          source: "bili-playinfo",
+          label: "Bilibili",
+          backendRouted: true,
+        });
       }
     } catch {}
     return found;
@@ -151,10 +179,21 @@
 
   // ── Run all scans ────────────────────────────────────────────────────────
 
+  // Image scanning is only useful on hosts where photo downloads are the
+  // user's likely intent (Meta carousels, Pinterest pins, Reddit galleries,
+  // X/Twitter image posts). On every OTHER site — especially YouTube,
+  // Bilibili, news sites — running it pollutes the popup with thumbnails of
+  // recommended videos, channel avatars, og:image cards, and ad creatives.
+  const IMAGE_HOSTS = /(?:^|\.)(instagram\.com|threads\.com|threads\.net|pinterest\.|reddit\.com|redd\.it|twitter\.com|x\.com|facebook\.com|tumblr\.com)$/i;
+  function shouldScanImages() {
+    try { return IMAGE_HOSTS.test(location.hostname); } catch { return false; }
+  }
+
   function scanAll() {
     const out = [];
     out.push(...scanIframes());
     out.push(...scanVideoTags());
+    if (shouldScanImages()) out.push(...scanImageTags());
     out.push(...scanMetaTags());
     out.push(...scanYouTube());
     out.push(...scanBilibili());

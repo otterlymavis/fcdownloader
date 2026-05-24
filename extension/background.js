@@ -39,6 +39,11 @@ function itemPriority(item) {
   if (item.source === "network") return 40;
   if (item.source === "meta-json") return 30;  // common on Meta feeds; usually noise
   if (item.source === "og:video") return 70;
+  // Images always rank below any video signal — defensive backstop in case
+  // the host-scoped image scanners in content.js still capture something
+  // unwanted. On image-host pages (IG/Pinterest/Reddit) the primary item
+  // is usually the iframe/video at priority 100; images sit below it.
+  if (item.kind === "image") return 25;
   return 50;
 }
 
