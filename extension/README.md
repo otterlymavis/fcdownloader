@@ -1,148 +1,121 @@
-# FCDownloader — Browser Extension
+# FCDownloader - Browser Extension
 
-Captures videos from the page you're on (YouTube, Vimeo, Twitter/X,
-Instagram, Threads, TikTok, AmusePlus, and ~1800 other sites yt-dlp knows
-about). Toolbar icon → click → see what's been detected → Download.
+Captures media from pages you choose so you can save videos, images, audio,
+and galleries that you own, control, or have permission to access. Toolbar
+icon -> click -> see what's been detected -> Download.
 
 Why use the extension instead of the web app or bookmarklet:
 
 | | Bookmarklet (web app) | Extension |
 |---|---|---|
 | One-click activation | Drag to bookmarks, click | Toolbar icon |
-| Read HttpOnly cookies | ❌ JS can't | ✅ `chrome.cookies` API |
-| Capture URLs at network layer | ❌ | ✅ `webRequest.onCompleted` |
-| Download with chosen filename | ⚠ cross-origin filename ignored | ✅ `chrome.downloads.download` |
-| Skip server bandwidth for plain mp4 | ❌ always via backend | ✅ direct CDN download when possible |
+| Read HttpOnly cookies | JS can't | `chrome.cookies` API |
+| Capture URLs at network layer | No | `webRequest.onCompleted` |
+| Download with chosen filename | Cross-origin filename often ignored | `chrome.downloads.download` |
+| Skip server bandwidth for plain mp4 | Always via backend | Direct CDN download when possible |
 
-Same backend (`https://your-instance.fly.dev`) is used for cases
-that genuinely need server-side muxing (HLS → mp4, paired YouTube HD).
-Configure a different backend in extension Settings.
+The same backend (`https://your-instance.fly.dev`) is used for cases that
+need server-side muxing, authenticated header replay, or extraction. Configure
+a different backend in extension Settings.
 
-## Load it for testing (no store install needed)
+## Load it for testing
 
 ### Chrome / Edge / Brave
 
 1. Open `chrome://extensions/` (or `edge://extensions/`, `brave://extensions/`)
-2. Toggle **Developer mode** on (top-right)
-3. **Load unpacked** → pick the `D:\fcdownloader\extension` folder
+2. Toggle **Developer mode** on.
+3. **Load unpacked** -> pick the `D:\fcdownloader\extension` folder.
 4. The FCDownloader icon appears in the toolbar. Click it on any video page.
 
-To update after code changes: hit **Reload** on the extension card (or use
-the keyboard shortcut Ctrl+R on the extensions page).
+To update after code changes, hit **Reload** on the extension card.
 
 ### Firefox
 
-1. `about:debugging#/runtime/this-firefox`
-2. **Load Temporary Add-on…** → pick `extension/manifest.json`
-3. The extension stays loaded until Firefox restarts. For permanent
-   install you'd need to sign the extension (free via AMO; required by
-   stable Firefox releases).
-
-### Firefox Android
-
-Firefox Android supports extensions via a custom collection — possible but
-fiddly. Not officially packaged here yet.
+1. Open `about:debugging#/runtime/this-firefox`
+2. **Load Temporary Add-on** -> pick `extension/manifest.json`
+3. For permanent install, sign the extension through AMO.
 
 ## How it works internally
 
 ```
-content.js          —  scans the rendered DOM on every page (iframes,
-                       <video>, og:video meta, Meta JSON, YouTube
-                       ytInitialPlayerResponse, Bilibili __playinfo__)
-
-background.js       —  service worker. Maintains per-tab item list,
-                       listens to webRequest.onCompleted for media URLs,
-                       reads cookies via chrome.cookies, routes downloads
-                       (direct browser fetch or backend /download).
-
-popup.html/.js/.css —  toolbar dropdown. Lists detected items; "Find
-                       videos on this page" hits backend /extract for
-                       title + thumbnail + label.
-
-options.html/.js    —  backend URL override, route-through-backend toggle.
+content.js          - scans the rendered DOM on every page.
+background.js       - service worker; stores per-tab items, observes
+                      webRequest completions, reads current-site cookies,
+                      and routes downloads.
+popup.html/.js/.css - toolbar dropdown.
+options.html/.js    - backend URL override and route-through-backend toggle.
 ```
 
-## Permissions explained (the things Chrome will warn about)
+## Privacy and permissions
+
+FCDownloader does not include analytics, advertising, or telemetry. The
+extension may process the current page URL, detected media URLs, media
+metadata, and cookies for the current site when authenticated access is
+needed. That data is sent only to the backend URL configured in the extension
+and to the media CDNs the browser downloads from.
+
+See the repository-level `PRIVACY.md` before publishing, and link that policy
+from the Chrome Web Store, Firefox Add-ons, and any public web page.
+
+## Permissions explained
 
 | Permission | Why |
 |---|---|
-| `<all_urls>` | Inject content script everywhere — needed because video sites are 1800+ and can't be enumerated |
-| `downloads` | Trigger file downloads to the user's Downloads folder |
-| `cookies` | Read HttpOnly session cookies for the current page domain to forward to the backend (so authenticated content works) |
-| `storage` | Save backend URL + preferences via `chrome.storage.sync` |
-| `tabs` | Read the active tab's URL when the popup opens |
+| `<all_urls>` | Inject content script on user-visited pages because supported media sites and embedded players use many domains |
+| `downloads` | Trigger user-requested downloads to the browser Downloads folder |
+| `cookies` | Read cookies for the current page domain to forward to the configured backend when authenticated access is needed |
+| `storage` | Save backend URL and preferences via `chrome.storage.sync` |
+| `tabs` | Read the active tab URL when the popup opens |
 | `activeTab` | Programmatic invocation on the current tab |
-| `webRequest` (host_permissions) | Observe network requests to catch HLS/DASH manifest URLs the DOM doesn't expose |
+| `webRequest` | Observe network requests to catch HLS/DASH manifest URLs the DOM does not expose |
 
-No data is sent anywhere except (a) the backend URL you configure and (b)
-the CDN URLs that the browser fetches for downloads. No analytics, no
-telemetry.
+No data is sold. No analytics or telemetry are built into the extension.
 
 ## Backend configuration
 
-Click the ⚙ icon in the popup, or right-click the extension icon →
-**Options**. Set the backend URL to your own deployment if you don't want
-to share the default. Leave blank to use `https://your-instance.fly.dev`.
+Click the settings icon in the popup, or right-click the extension icon ->
+**Options**. Set the backend URL to your own deployment if you do not want to
+share the default. Leave blank to use the backend baked into a public build.
 
 ## Building for the Chrome Web Store
 
+For public distribution, use the packaging script so the backend URL is baked
+into `dist/extension/config.js` without committing it to source:
+
 ```powershell
-cd D:\fcdownloader\extension
-# Zip everything excluding readme/docs:
-Compress-Archive -Path manifest.json,background.js,content.js,popup.html,popup.css,popup.js,options.html,options.js,icons -DestinationPath fcdownloader-extension.zip
+$env:EXTENSION_DEFAULT_BACKEND='https://your-instance.fly.dev'
+npm run pack:extension
 ```
 
-Then upload `fcdownloader-extension.zip` at
-https://chrome.google.com/webstore/devconsole. One-time $5 developer fee
-the first time. Review usually takes 2-7 days.
+Upload `dist/fcdownloader-extension-v<version>.zip` at
+https://chrome.google.com/webstore/devconsole.
 
-For Firefox: same zip, upload to https://addons.mozilla.org. Signing is
-free and automatic. Once signed, can be installed in stable Firefox
-without unpacking.
+For Firefox, upload the same source package to https://addons.mozilla.org for
+signing.
 
 ## Known limitations
 
-- **Service Workers (MV3) sleep** after ~30s idle. The extension wakes
-  automatically on user action; tab state may be cleared between sessions
-  by design.
-- **`chrome.cookies` reads only the domain of the current tab's URL** —
-  cross-domain auth (e.g. YouTube auth cookie when on a different site)
-  doesn't carry across. Not usually a problem.
-- **HD YouTube still needs the backend** — po_token enforcement applies to
-  the browser too. The extension's contribution is forwarding the user's
-  own cookies (incl. HttpOnly) to the backend, which gives the backend
-  access to age-gated / region-locked content the user has rights to.
-- **Direct chrome.downloads on cross-origin CDNs**: works for most mp4
-  CDNs without CORS restrictions (fbcdn, twimg, tiktokcdn, etc.).
-  Falls back to backend on failure.
-- **Firefox Android**: works via custom collection but not officially
-  packaged here. Chrome Android does not support extensions at all.
+- **Service Workers (MV3) sleep** after idle periods. The extension wakes on
+  user action, but tab state may be cleared between sessions.
+- **`chrome.cookies` reads only the current tab's site cookies**. Cross-domain
+  auth does not automatically carry across unrelated sites.
+- **HD YouTube still needs the backend**. The extension can forward the user's
+  current-site cookies to the configured backend when needed, giving the
+  backend access to content available to that session.
+- **Direct browser downloads from cross-origin CDNs** work for many mp4 CDNs.
+  Restricted CDNs may require backend proxying.
+- **Firefox Android** can use custom collections, but it is not officially
+  packaged here. Chrome Android does not support extensions.
 
 ## Releasing a public-distribution build
 
-The committed source has an empty `FCDL_DEFAULT_BACKEND` in `config.js`,
-so building the extension as-is requires the end user to enter the
-backend URL once. For a public-facing release you want the URL baked in.
-
-### One-off local build
+The committed source has an empty `FCDL_DEFAULT_BACKEND` in `config.js`, so
+building the extension as-is requires the user to enter a backend URL once.
+For a public-facing release, bake in the URL at packaging time:
 
 ```bash
 EXTENSION_DEFAULT_BACKEND=https://your-instance.fly.dev npm run pack:extension
-# produces dist/fcdownloader-extension-v<version>.zip
 ```
 
-### Automated via GitHub Actions
-
-1. Add the repo secret `EXTENSION_DEFAULT_BACKEND` (Settings → Secrets and
-   variables → Actions) set to your backend URL.
-2. Tag a version and push the tag:
-   ```bash
-   git tag v1.1.0 && git push origin v1.1.0
-   ```
-3. The `Release Extension` workflow runs, packs the extension with the
-   URL baked in, and attaches `fcdownloader-extension-v1.1.0.zip` to a
-   new GitHub Release named after the tag.
-
-The workflow can also be triggered manually from the Actions tab — that
-produces a workflow artifact only (no GitHub Release), useful for
-verifying a packed build before tagging.
+Automated releases should set the `EXTENSION_DEFAULT_BACKEND` repository
+secret and run the release workflow from a version tag.

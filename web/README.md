@@ -77,6 +77,14 @@ Comma-separate multiple origins:
    `GET /download?url=...`
 5. Backend runs yt-dlp + ffmpeg, streams the muxed mp4 back, browser saves it.
 
+## Privacy policy
+
+Publish `privacy.html` with the static site and link the same policy from app
+store and extension store listings. The page explains that FCDownloader does
+not add analytics or ads, and that URLs, media metadata, cookies, and backend
+request metadata may be processed only to find and download media the user is
+authorized to access.
+
 ## Cost notes
 
 Unlike the mobile app where the phone fetches CDN bytes directly, the web
