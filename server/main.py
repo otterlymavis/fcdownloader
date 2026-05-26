@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import http.client
 import json
 import os
@@ -209,6 +210,12 @@ def health() -> dict[str, Any]:
 _MOBILE_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+)
+
+DESKTOP_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/125.0.0.0 Safari/537.36"
 )
 
 def _extract_meta_page(page_url: str, cookies: str | None, label: str) -> dict[str, Any] | None:
@@ -420,11 +427,94 @@ def _extract_meta_instagram(page_url: str, cookies: str | None) -> dict[str, Any
     return _extract_meta_page(page_url, cookies, "instagram")
 
 
+def _extract_html_media_page(
+    page_url: str,
+    cookies: str | None,
+    label: str,
+    referer: str,
+    ua: str = DESKTOP_UA,
+) -> dict[str, Any] | None:
+    """Generic HTML media fallback for pages where yt-dlp's site extractor is
+    blocked but public meta tags/CDN URLs are still available."""
+    try:
+        req = urllib.request.Request(page_url, headers={
+            "User-Agent": ua,
+            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": referer,
+            **({"Cookie": cookies} if cookies else {}),
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except Exception as e:  # noqa: BLE001
+        print(f"[{label}] generic HTML fetch failed for {page_url}: {str(e)[:200]}")
+        return None
+
+    def _decode(u: str) -> str:
+        return html.unescape(
+            u.replace("\\u0026", "&")
+             .replace("\\u003d", "=")
+             .replace("\\/", "/")
+             .replace("\\\\", "\\")
+        )
+
+    found: list[tuple[int, str, str]] = []
+    meta_re = (
+        r'<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["\']'
+        r'(?:og:video(?::secure_url|:url)?|twitter:player:stream|og:image(?::secure_url)?|twitter:image)'
+        r'["\'][^>]+content\s*=\s*["\']([^"\']+)["\']'
+    )
+    for m in re.finditer(meta_re, body, re.IGNORECASE):
+        url = _decode(m.group(1))
+        kind = "image" if re.search(r"\.(?:jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)", url, re.I) else "video"
+        found.append((m.start(), url, kind))
+
+    media_re = (
+        r'https?:\\?/\\?/[^"\'<>\s]*(?:'
+        r'v\.redd\.it|redditmedia\.com|i\.imgur\.com|media\.tumblr\.com|tumblr\.media|'
+        r'sndcdn\.com|bcbits\.com|clips-media-assets\d*\.twitch\.tv|usher\.ttvnw\.net'
+        r')[^"\'<>\s]*'
+        r'(?:\.(?:m3u8|mpd|mp4|webm|mov|m4v|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)[^"\'<>\s]*)?'
+    )
+    for m in re.finditer(media_re, body, re.IGNORECASE):
+        url = _decode(m.group(0))
+        kind = "image" if re.search(r"\.(?:jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)", url, re.I) else "video"
+        found.append((m.start(), url, kind))
+
+    found.sort(key=lambda t: t[0])
+    seen: set[str] = set()
+    entries: list[dict[str, Any]] = []
+    for _off, url, kind in found:
+        if not url.startswith("http"):
+            continue
+        key = url.split("?")[0]
+        if key in seen:
+            continue
+        seen.add(key)
+        is_hls = ".m3u8" in url
+        ext = _guess_ext_from_url(url) or ("m3u8" if is_hls else ("jpg" if kind == "image" else "mp4"))
+        entries.append({
+            "id":           _cache_key(url),
+            "url":          url,
+            "ext":          ext,
+            "protocol":     "m3u8_native" if is_hls else "https",
+            "http_headers": {"User-Agent": ua, "Referer": page_url},
+        })
+
+    if not entries:
+        return None
+    title = None
+    if m := re.search(r'<meta\s+property\s*=\s*["\']og:title["\'][^>]+content\s*=\s*["\']([^"\']+)["\']', body, re.I):
+        title = html.unescape(m.group(1))
+    if len(entries) == 1:
+        one = entries[0]
+        return {**one, "title": title}
+    return {"_type": "playlist", "entries": entries, "title": title, "id": _cache_key(page_url)}
+
+
 # Shared yt-dlp invocation — used by both /extract and /download
 _WEIBO_DESKTOP_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/125.0.0.0 Safari/537.36"
+    DESKTOP_UA
 )
 
 
@@ -717,11 +807,30 @@ def _run_ydl(
         http_headers["Referer"]    = "https://www.xiaohongshu.com/"
         http_headers["Origin"]     = "https://www.xiaohongshu.com"
         http_headers["User-Agent"] = _MOBILE_UA
+    elif any(host in page_url for host in ("reddit.com", "redd.it", "redditmedia.com", "v.redd.it")):
+        http_headers["Referer"]    = "https://www.reddit.com/"
+        http_headers["User-Agent"] = _MOBILE_UA
+    elif any(host in page_url for host in ("twitch.tv", "clips.twitch.tv", "usher.ttvnw.net", "usher.twitch.tv")):
+        http_headers["Referer"]    = "https://www.twitch.tv/"
+        http_headers["Origin"]     = "https://www.twitch.tv"
+        http_headers["User-Agent"] = DESKTOP_UA
+    elif any(host in page_url for host in ("imgur.com", "i.imgur.com")):
+        http_headers["Referer"]    = "https://imgur.com/"
+        http_headers["User-Agent"] = DESKTOP_UA
+    elif any(host in page_url for host in ("tumblr.com", "tumblr.media")):
+        http_headers["Referer"]    = "https://www.tumblr.com/"
+        http_headers["User-Agent"] = DESKTOP_UA
+    elif any(host in page_url for host in ("soundcloud.com", "sndcdn.com")):
+        http_headers["Referer"]    = "https://soundcloud.com/"
+        http_headers["User-Agent"] = DESKTOP_UA
+    elif any(host in page_url for host in ("bandcamp.com", "bcbits.com")):
+        http_headers["Referer"]    = "https://bandcamp.com/"
+        http_headers["User-Agent"] = DESKTOP_UA
     if cookies:
         http_headers["Cookie"] = cookies
 
     direct_media = re.search(
-        r"(?:\.(?:mp4|webm|mov|m4v|m3u8|mpd)(?:[?#]|$)|bilivideo\.com/|weibocdn\.com/|xhscdn\.com/|cdninstagram\.com/|scontent[-\w]*\.cdninstagram\.com/|fbcdn\.net/|threadscdn\.com/)",
+        r"(?:\.(?:mp4|webm|mov|m4v|m3u8|mpd|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)|bilivideo\.com/|weibocdn\.com/|xhscdn\.com/|cdninstagram\.com/|scontent[-\w]*\.cdninstagram\.com/|fbcdn\.net/|threadscdn\.com/|v\.redd\.it/|redditmedia\.com/|i\.imgur\.com/|media\.tumblr\.com/|tumblr\.media/|sndcdn\.com/|bcbits\.com/)",
         page_url,
         re.IGNORECASE,
     )
@@ -823,6 +932,22 @@ def _run_ydl(
                 except Exception: pass
             return instagram_info
         print(f"[instagram] HTML scrape found nothing; falling back to yt-dlp for {page_url}")
+    if "facebook.com" in page_url or "fb.watch" in page_url:
+        facebook_info = _extract_meta_page(page_url, cookies, "facebook")
+        if facebook_info:
+            if user_cookie_file:
+                try: os.unlink(user_cookie_file)
+                except Exception: pass
+            return facebook_info
+        print(f"[facebook] HTML scrape found nothing; falling back to yt-dlp for {page_url}")
+    if "tumblr.com" in page_url:
+        tumblr_info = _extract_html_media_page(page_url, cookies, "tumblr", "https://www.tumblr.com/")
+        if tumblr_info:
+            if user_cookie_file:
+                try: os.unlink(user_cookie_file)
+                except Exception: pass
+            return tumblr_info
+        print(f"[tumblr] HTML scrape found nothing; falling back to yt-dlp for {page_url}")
 
     try:
         try:
@@ -945,7 +1070,7 @@ def _download_headers(referer: str | None, cookies: str | None, page_url: str | 
     elif page_url and ("weibo.com" in page_url or "weibo.cn" in page_url or "weibocdn.com" in page_url):
         headers["Referer"] = "https://weibo.com/"
         headers["Origin"]  = "https://weibo.com"
-    elif page_url and ("xiaohongshu.com" in page_url or "xhscdn.com" in page_url):
+    elif page_url and ("xiaohongshu.com" in page_url or "xhslink.com" in page_url or "xhscdn.com" in page_url):
         headers["Referer"] = "https://www.xiaohongshu.com/"
         headers["Origin"]  = "https://www.xiaohongshu.com"
     if cookies:
@@ -965,6 +1090,7 @@ _HEADERED_DIRECT_HOSTS = (
     "sinaimg.cn",
     "weibocdn.com",
     "xiaohongshu.com",
+    "xhslink.com",
     "xhscdn.com",
 )
 
@@ -1442,11 +1568,22 @@ def _default_proxy_headers(target_url: str, referer: str | None) -> dict[str, st
     elif "weibocdn" in host or "weibo.com" in host or "weibo.cn" in host:
         h["Referer"] = "https://weibo.com/"
         h["Origin"]  = "https://weibo.com"
-    elif "xhscdn" in host or "xiaohongshu" in host:
+    elif "xhscdn" in host or "xiaohongshu" in host or "xhslink" in host:
         h["Referer"] = "https://www.xiaohongshu.com/"
         h["Origin"]  = "https://www.xiaohongshu.com"
     elif "redd.it" in host or "redditmedia" in host:
         h["Referer"] = "https://www.reddit.com/"
+    elif "imgur" in host:
+        h["Referer"] = "https://imgur.com/"
+    elif "tumblr" in host:
+        h["Referer"] = "https://www.tumblr.com/"
+    elif "sndcdn" in host or "soundcloud" in host:
+        h["Referer"] = "https://soundcloud.com/"
+    elif "bcbits" in host or "bandcamp" in host:
+        h["Referer"] = "https://bandcamp.com/"
+    elif "twitch" in host or "ttvnw" in host:
+        h["Referer"] = "https://www.twitch.tv/"
+        h["Origin"]  = "https://www.twitch.tv"
     return h
 
 
@@ -1645,9 +1782,21 @@ def _mime_for(f: dict[str, Any]) -> str | None:
         return None
     return {
         "m4a": "audio/mp4",
+        "mp3": "audio/mpeg",
+        "aac": "audio/aac",
+        "wav": "audio/wav",
+        "ogg": "audio/ogg",
+        "opus": "audio/ogg",
+        "flac": "audio/flac",
         "mp4": "video/mp4",
         "webm": "video/webm",
         "mkv": "video/x-matroska",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "webp": "image/webp",
+        "gif": "image/gif",
+        "avif": "image/avif",
     }.get(ext, f"video/{ext}")
 
 

@@ -131,8 +131,8 @@ export function useMediaDetection() {
         const isVimeoJson = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i.test(url);
         const isDirectMedia = /\.(mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)(\?|$)/i.test(url) &&
           !/vimeocdn\.com\/.*\/v2\/range\//i.test(url);
-        const isCdnVideo  = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/|weibocdn\.com\/|xhscdn\.com\/)/i.test(url);
-        const isImageCdn = /(?:cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|pinimg\.com\/(?:originals|736x|1200x|564x)\/|sinaimg\.cn\/|xhscdn\.com\/)/i.test(url);
+        const isCdnVideo  = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|redditmedia\.com\/|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/|weibocdn\.com\/|xhscdn\.com\/|i\.imgur\.com\/|media\.tumblr\.com\/|tumblr\.media\/|sndcdn\.com\/|bcbits\.com\/)/i.test(url);
+        const isImageCdn = /(?:cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|pinimg\.com\/(?:originals|736x|1200x|564x)\/|sinaimg\.cn\/|xhscdn\.com\/|i\.imgur\.com\/|media\.tumblr\.com\/|tumblr\.media\/|redditmedia\.com\/)/i.test(url);
         if (isManifest || isVimeoJson || isDirectMedia || isCdnVideo || isImageCdn) {
           const mediaType: MediaType = guessType(url);
           setDetected((prev) => {

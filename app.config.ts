@@ -51,7 +51,15 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
   },
   plugins: [
-    'expo-sharing',
+    [
+      'expo-sharing',
+      {
+        android: {
+          enabled: true,
+          singleShareMimeTypes: ['text/plain'],
+        },
+      },
+    ],
     'expo-video',
     [
       'expo-media-library',

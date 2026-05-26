@@ -28,6 +28,10 @@ import { useSettings } from './src/hooks/useSettings';
 import { DetectedMedia, DownloadTask } from './src/types';
 import { extractFromSocialUrl, isSocialPageUrl } from './src/lib/platformExtractors';
 import {
+  isYouTubeSignInRequiredError,
+  YOUTUBE_SIGN_IN_MESSAGE,
+} from './src/lib/serverExtractor';
+import {
   BOTTOM_PAD,
   IS_ANDROID,
   IS_IOS,
@@ -68,6 +72,38 @@ import {
 // ─────────────────────────────────────────────────────────────
 type Tab = 'home' | 'browser' | 'library' | 'bookmarks';
 
+const HTTP_URL_RE = /https?:\/\/[^\s<>"']+/i;
+const YT_PAGE_RE = /(?:youtube\.com\/(?:watch|shorts|embed)|youtu\.be\/)/i;
+const YT_CDN_RE = /(?:googlevideo\.com\/videoplayback|manifest\.googlevideo\.com\/api\/manifest)/i;
+
+function extractSharedHttpUrl(value: string | null | undefined): string | null {
+  const match = value?.match(HTTP_URL_RE);
+  return match ? match[0].replace(/[.,;:!?)\]}>'"]+$/, '') : null;
+}
+
+function normaliseHttpUrl(value: string): string {
+  const trimmed = value.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
+function withBrowserPageForYouTube(item: DetectedMedia, browserUrl: string): DetectedMedia {
+  if (!YT_CDN_RE.test(item.url) || YT_PAGE_RE.test(item.pageUrl) || !YT_PAGE_RE.test(browserUrl)) {
+    return item;
+  }
+  return { ...item, pageUrl: browserUrl };
+}
+
+function getSharedUrlFromDeepLink(raw: string): string | null {
+  try {
+    const parsed = Linking.parse(raw);
+    const isShareLink = parsed.path === 'share' || parsed.hostname === 'share';
+    const sharedUrl = parsed.queryParams?.url ? String(parsed.queryParams.url) : null;
+    return isShareLink && sharedUrl ? extractSharedHttpUrl(sharedUrl) ?? sharedUrl : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
   const { theme, fontSize, fontScale, setTheme, setFontSize } = useSettings();
   const t = useTheme(theme === 'system' ? undefined : theme === 'dark');
@@ -91,10 +127,16 @@ export default function App() {
   const [fileSizes, setFileSizes]       = useState<Record<string, string>>({});
   const [libSelectMode, setLibSelectMode] = useState(false);
   const [libSelected, setLibSelected]     = useState<Set<string>>(new Set());
+  const sharedLinkDownloaderRef = useRef<(url: string) => void>(() => {});
+  const handledIncomingShareRef = useRef<string | null>(null);
 
   // ── Core hooks ────────────────────────────────────────────
   const { detected, networkLog, mseActive, onPageChange, onMessage, addDetected } = useMediaDetection();
   const { bookmarks, toggle: toggleBM, remove: removeBM, isSaved } = useBookmarks();
+  const {
+    sharedPayloads: incomingSharedPayloads,
+    clearSharedPayloads,
+  } = Sharing.useIncomingShare();
 
   const showToast = useCallback((msg: string, type: ToastMessage['type'] = 'info') => {
     setToast({ id: String(Date.now()), text: msg, type });
@@ -113,7 +155,7 @@ export default function App() {
       const parsed = Linking.parse(raw);
       if (parsed.path === 'share' || parsed.hostname === 'share') {
         const mediaUrl = parsed.queryParams?.url ? String(parsed.queryParams.url) : null;
-        if (mediaUrl) { setPasteUrl(mediaUrl); setTab('home'); showToast('Link received — tap Download', 'success'); }
+        if (mediaUrl) { setPasteUrl(mediaUrl); setTab('home'); }
       }
     } catch {}
   }, [showToast]);
@@ -127,8 +169,16 @@ export default function App() {
   // ── Download manager ──────────────────────────────────────
   const { active, history, enqueue, retry, cancel, remove } = useDownloadManager({
     onComplete: useCallback(() => showToast('Download complete', 'success'), [showToast]),
-    onError:    useCallback((task: DownloadTask) =>
-      showToast(`Failed: ${task.error ?? 'unknown error'}`, 'error'), [showToast]),
+    onError:    useCallback((task: DownloadTask) => {
+      if (task.error === YOUTUBE_SIGN_IN_MESSAGE && YT_PAGE_RE.test(task.media.pageUrl)) {
+        showToast(YOUTUBE_SIGN_IN_MESSAGE, 'error');
+        setLoadedUrl(task.media.pageUrl);
+        setBrowserInput(task.media.pageUrl);
+        setTab('browser');
+        return;
+      }
+      showToast(`Failed: ${task.error ?? 'unknown error'}`, 'error');
+    }, [showToast]),
   });
 
   // ── Detected videos ───────────────────────────────────────
@@ -191,17 +241,18 @@ export default function App() {
   const navigateBrowser = useCallback(() => {
     let url = browserInput.trim();
     if (!url) return;
-    if (!url.startsWith('http')) url = `https://${url}`;
+    url = normaliseHttpUrl(url);
     setBrowserInput(url);
     if (url === loadedUrl) webviewRef.current?.reload();
     else setLoadedUrl(url);
   }, [browserInput, loadedUrl]);
 
   // ── Home: paste → download ────────────────────────────────
-  const handleHomeDownload = useCallback(async () => {
-    let url = pasteUrl.trim();
-    if (!url || extracting) return;
-    if (!url.startsWith('http')) url = `https://${url}`;
+  const startDownloadForUrl = useCallback(async (rawUrl: string, source: 'manual' | 'share' = 'manual') => {
+    const extractedUrl = extractSharedHttpUrl(rawUrl) ?? rawUrl;
+    const candidateUrl = extractedUrl.trim();
+    if (!candidateUrl || extracting) return;
+    const url = normaliseHttpUrl(candidateUrl);
 
     if (isSocialPageUrl(url)) {
       setExtracting(true);
@@ -210,13 +261,18 @@ export default function App() {
         if (items.length > 0) {
           for (const item of items) await enqueue(item);
           setPasteUrl('');
-          showToast(`Downloading ${items.length} media item${items.length !== 1 ? 's' : ''}`, 'success');
+          showToast(`${source === 'share' ? 'Shared link received. ' : ''}Downloading ${items.length} media item${items.length !== 1 ? 's' : ''}`, 'success');
           setTab('library');
         } else {
           showToast('Opening in browser — tap the video button when it appears', 'info');
           setLoadedUrl(url); setBrowserInput(url); setTab('browser');
         }
-      } catch {
+      } catch (e) {
+        if (isYouTubeSignInRequiredError(e)) {
+          showToast(YOUTUBE_SIGN_IN_MESSAGE, 'error');
+          setLoadedUrl(url); setBrowserInput(url); setTab('browser');
+          return;
+        }
         showToast('Opening in browser instead', 'info');
         setLoadedUrl(url); setBrowserInput(url); setTab('browser');
       } finally { setExtracting(false); }
@@ -233,23 +289,59 @@ export default function App() {
       };
       await enqueue(item);
       setPasteUrl('');
-      showToast('Download started', 'success');
+      showToast(source === 'share' ? 'Shared link received. Download started' : 'Download started', 'success');
       setTab('library');
       return;
     }
 
     showToast('Opening in browser', 'info');
     setLoadedUrl(url); setBrowserInput(url); setTab('browser');
-  }, [pasteUrl, extracting, enqueue, showToast]);
+  }, [extracting, enqueue, showToast]);
+
+  sharedLinkDownloaderRef.current = (url: string) => { void startDownloadForUrl(url, 'share'); };
+
+  const handleHomeDownload = useCallback(async () => {
+    await startDownloadForUrl(pasteUrl);
+  }, [pasteUrl, startDownloadForUrl]);
+
+  useEffect(() => {
+    const sharedUrl = incomingSharedPayloads
+      .map((payload) => extractSharedHttpUrl(payload.value))
+      .find((url): url is string => Boolean(url));
+
+    if (!sharedUrl || handledIncomingShareRef.current === sharedUrl) return;
+
+    handledIncomingShareRef.current = sharedUrl;
+    clearSharedPayloads();
+    setPasteUrl(sharedUrl);
+    setTab('home');
+    void startDownloadForUrl(sharedUrl, 'share');
+  }, [clearSharedPayloads, incomingSharedPayloads, startDownloadForUrl]);
+
+  const handleSharedDeepLink = useCallback((raw: string) => {
+    const sharedUrl = getSharedUrlFromDeepLink(raw);
+    if (!sharedUrl || handledIncomingShareRef.current === sharedUrl) return;
+
+    handledIncomingShareRef.current = sharedUrl;
+    setPasteUrl(sharedUrl);
+    setTab('home');
+    void startDownloadForUrl(sharedUrl, 'share');
+  }, [startDownloadForUrl]);
+
+  useEffect(() => {
+    Linking.getInitialURL().then((url) => { if (url) handleSharedDeepLink(url); });
+    const sub = Linking.addEventListener('url', ({ url }) => handleSharedDeepLink(url));
+    return () => sub.remove();
+  }, [handleSharedDeepLink]);
 
   // ── Browser: download detected video ─────────────────────
   const handleDetectedDownload = useCallback(async (item: DetectedMedia) => {
     setVideosOpen(false);
     setPreviewItem(null);
-    await enqueue(item);
+    await enqueue(withBrowserPageForYouTube(item, browserInput));
     showToast('Download started', 'success');
     setTab('library');
-  }, [enqueue, showToast]);
+  }, [browserInput, enqueue, showToast]);
 
   // ── Export / Gallery ──────────────────────────────────────
   const handleExport = useCallback(async (task: DownloadTask) => {

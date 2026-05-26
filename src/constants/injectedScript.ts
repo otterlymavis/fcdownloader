@@ -81,6 +81,7 @@ export const INJECTED_SCRIPT = `
     if (/\\bscontent[-\\w]*\\.cdninstagram\\.com\\//.test(url))    return 'direct';
     if (/\\binstagram\\.com\\/.*\\bvideo\\b/.test(url))             return 'direct';
     if (/\\bv\\.redd\\.it\\//.test(url))                            return 'hls';
+    if (/\\bredditmedia\\.com\\//.test(url))                         return 'direct';
     if (/\\bfbcdn\\.net\\/.*\\bvideo/.test(url))                    return 'hls';
     if (/\\bfbcdn\\.net\\/.*\\.mp4/.test(url))                      return 'direct';
     if (/\\bdailymotion\\.com\\/cdn/.test(url))                     return 'hls';
@@ -89,6 +90,10 @@ export const INJECTED_SCRIPT = `
     if (/\\bmanifest\\.googlevideo\\.com\\/api\\/manifest\\/dash/.test(url)) return 'dash';
     if (/\\bpinimg\\.com\\/videos\\//.test(url))                    return 'hls';
     if (/\\busher\\.twitch\\.tv\\//.test(url))                      return 'hls';
+    if (/\\bi\\.imgur\\.com\\//.test(url))                          return 'direct';
+    if (/\\b(?:media\\.tumblr\\.com|tumblr\\.media)\\//.test(url))   return 'direct';
+    if (/\\bsndcdn\\.com\\//.test(url))                              return 'direct';
+    if (/\\bbcbits\\.com\\//.test(url))                              return 'direct';
     if (/\\bbilivideo\\.com\\//.test(url))                          return 'direct';
     if (/\\bweibocdn\\.com\\//.test(url))                            return 'direct';
     if (/\\bxhscdn\\.com\\//.test(url))                              return 'direct';
@@ -169,7 +174,7 @@ export const INJECTED_SCRIPT = `
            .replace(/\\\\u002F/gi, '/'),
     ];
     var extRe = /https?:\\/\\/[^"'\\\\\\s<>]{4,}?\\.(m3u8|mpd|mp4|webm|mov|m4v|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)[^"'\\\\\\s<>]*/gi;
-    var cdnRe = /https?:\\/\\/[^"'\\\\\\s<>]*(?:video\\.twimg\\.com|tiktokcdn\\.com|tiktokcdn-us\\.com|v\\d+-webapp\\.tiktok\\.com|cdninstagram\\.com|scontent[-\\w]*\\.cdninstagram\\.com|v\\.redd\\.it|fbcdn\\.net|threadscdn\\.com|vimeocdn\\.com\\/video|googlevideo\\.com\\/videoplayback|pinimg\\.com\\/(?:videos|originals|736x|1200x|564x)|dmcdn\\.net|usher\\.twitch\\.tv|bilivideo\\.com|weibocdn\\.com|xhscdn\\.com)[^"'\\\\\\s<>]{4,}/gi;
+    var cdnRe = /https?:\\/\\/[^"'\\\\\\s<>]*(?:video\\.twimg\\.com|tiktokcdn\\.com|tiktokcdn-us\\.com|v\\d+-webapp\\.tiktok\\.com|cdninstagram\\.com|scontent[-\\w]*\\.cdninstagram\\.com|v\\.redd\\.it|redditmedia\\.com|fbcdn\\.net|threadscdn\\.com|vimeocdn\\.com\\/video|googlevideo\\.com\\/videoplayback|pinimg\\.com\\/(?:videos|originals|736x|1200x|564x)|dmcdn\\.net|usher\\.twitch\\.tv|i\\.imgur\\.com|media\\.tumblr\\.com|tumblr\\.media|sndcdn\\.com|bcbits\\.com|bilivideo\\.com|weibocdn\\.com|xhscdn\\.com)[^"'\\\\\\s<>]{4,}/gi;
     variants.forEach(function (body) {
       var m;
       extRe.lastIndex = 0;

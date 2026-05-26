@@ -5,7 +5,7 @@
  */
 import { DetectedMedia, Provenance } from '../types';
 import { extractYouTubeStreams } from './ytExtractor';
-import { extractViaServer } from './serverExtractor';
+import { extractViaServer, isYouTubeSignInRequiredError } from './serverExtractor';
 
 let _seq = 0;
 const genId = () => `ext_${Date.now()}_${_seq++}`;
@@ -77,6 +77,9 @@ function extractUrls(text: string, re: RegExp): string[] {
 // ── TikTok ────────────────────────────────────────────────────────
 async function extractTikTok(pageUrl: string): Promise<DetectedMedia[]> {
   try {
+    const serverItems = await extractViaServer(pageUrl);
+    if (serverItems.length > 0) return serverItems;
+
     const html = await fetchHtml(pageUrl, MOBILE_UA);
     const results: DetectedMedia[] = [];
 
@@ -110,6 +113,9 @@ async function extractTikTok(pageUrl: string): Promise<DetectedMedia[]> {
 // ── Twitter / X ───────────────────────────────────────────────────
 async function extractTwitter(pageUrl: string): Promise<DetectedMedia[]> {
   try {
+    const serverItems = await extractViaServer(pageUrl);
+    if (serverItems.length > 0) return serverItems;
+
     const html = await fetchHtml(pageUrl);
     const results: DetectedMedia[] = [];
 
@@ -228,6 +234,7 @@ async function extractYouTube(pageUrl: string): Promise<DetectedMedia[]> {
     const items = await extractViaServer(pageUrl);
     if (items.length > 0) return items;
   } catch (e) {
+    if (isYouTubeSignInRequiredError(e)) throw e;
     console.warn('[extractYouTube] server extractor errored:', String(e).slice(0, 200));
   }
 
@@ -274,6 +281,9 @@ async function extractTVer(pageUrl: string): Promise<DetectedMedia[]> {
 // ── Facebook ──────────────────────────────────────────────────────
 async function extractFacebook(pageUrl: string): Promise<DetectedMedia[]> {
   try {
+    const serverItems = await extractViaServer(pageUrl);
+    if (serverItems.length > 0) return serverItems;
+
     const html = await fetchHtml(pageUrl, MOBILE_UA);
     const results: DetectedMedia[] = [];
 
@@ -421,6 +431,17 @@ async function extractXiaohongshu(pageUrl: string): Promise<DetectedMedia[]> {
   } catch { return []; }
 }
 
+async function extractViaBackendOnly(pageUrl: string, label?: string): Promise<DetectedMedia[]> {
+  try {
+    const items = await extractViaServer(pageUrl);
+    if (!label) return items;
+    return items.map(item => ({ ...item, label: item.label ?? label }));
+  } catch (e) {
+    console.warn('[extractViaBackendOnly] server extractor errored:', String(e).slice(0, 200));
+    return [];
+  }
+}
+
 async function extractOgVideo(pageUrl: string): Promise<DetectedMedia[]> {
   try {
     const html = await fetchHtml(pageUrl);
@@ -435,13 +456,20 @@ async function extractOgVideo(pageUrl: string): Promise<DetectedMedia[]> {
 
 // ── Platform registry ─────────────────────────────────────────────
 const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[]> }> = [
-  { re: /tiktok\.com\/@[^/]+\/video\/\d+|tiktok\.com\/t\/[A-Za-z0-9]+/,          fn: extractTikTok      },
+  { re: /tiktok\.com\/(?:@[^/]+\/(?:video|photo)\/\d+|t\/[A-Za-z0-9]+|.+\/photo\/\d+)/, fn: extractTikTok      },
   { re: /(?:twitter|x)\.com\/[^/]+\/status\/\d+/,                                  fn: extractTwitter     },
   { re: /instagram\.com\/(?:(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+|share\/(?:p|reel)\/[A-Za-z0-9_-]+)/, fn: extractInstagram   },
   { re: /threads\.net\/@[^/]+\/post\/[A-Za-z0-9_-]+/,                              fn: extractInstagram   },
   { re: /dailymotion\.com\/video\/[A-Za-z0-9]+/,                                    fn: extractDailymotion },
   { re: /(?:youtube\.com\/(?:watch|shorts)|youtu\.be\/)[?/]?[A-Za-z0-9_-]{11}/,   fn: extractYouTube     },
   { re: /facebook\.com\/(?:watch|reel|video)|fb\.watch/,                            fn: extractFacebook    },
+  { re: /(?:reddit\.com|redd\.it)\/(?:r\/[^/]+\/comments\/|gallery\/|comments\/|video\/|[^?\s]+)/i, fn: (url) => extractViaBackendOnly(url, 'Reddit') },
+  { re: /(?:vimeo\.com\/\d+|player\.vimeo\.com\/video\/\d+)/i,                      fn: (url) => extractViaBackendOnly(url, 'Vimeo') },
+  { re: /(?:twitch\.tv\/(?:[^/]+\/clip\/|videos\/\d+|[^/]+$)|clips\.twitch\.tv\/)/i, fn: (url) => extractViaBackendOnly(url, 'Twitch') },
+  { re: /(?:imgur\.com\/(?:a\/|gallery\/)?[A-Za-z0-9]+|i\.imgur\.com\/)/i,          fn: (url) => extractViaBackendOnly(url, 'Imgur') },
+  { re: /tumblr\.com\/(?:[^/]+\/)?(?:post|video)\/\d+|[A-Za-z0-9_-]+\.tumblr\.com\/post\/\d+/i, fn: (url) => extractViaBackendOnly(url, 'Tumblr') },
+  { re: /soundcloud\.com\/[^?\s]+/i,                                                 fn: (url) => extractViaBackendOnly(url, 'SoundCloud') },
+  { re: /bandcamp\.com\/(?:track|album)\/[^?\s]+|[A-Za-z0-9_-]+\.bandcamp\.com\/(?:track|album)\/[^?\s]+/i, fn: (url) => extractViaBackendOnly(url, 'Bandcamp') },
   { re: /pinterest\.(?:com|[a-z]{2,3})\/pin\/\d+/,                                 fn: extractPinterest   },
   { re: /tver\.jp\/episodes\/ep[A-Za-z0-9]+/,                                       fn: extractTVer        },
   { re: /(?:bilibili\.com\/video\/[ABab][Vv][A-Za-z0-9]+|m\.bilibili\.com\/video\/[ABab][Vv][A-Za-z0-9]+|b23\.tv\/[A-Za-z0-9]+|bilibili\.tv\/(?:[a-z]{2}\/)?video\/\d+)/, fn: extractBilibili    },

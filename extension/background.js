@@ -274,6 +274,7 @@ async function preflightBackendUrl(url) {
 async function downloadItem(tabId, item) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   const tabPageUrl = tab?.url || "";
+  const tabTitle = tab?.title || "";
 
   // For backendRouted items (popup-resolved /extract results), item.pageUrl
   // is the actual URL we sent to /extract (e.g. https://player.vimeo.com/...),
@@ -309,7 +310,7 @@ async function downloadItem(tabId, item) {
     if (!check.ok) {
       throw new Error(`Backend: ${check.error}`);
     }
-    return chromeDownload(dlUrl, suggestedFilename(item, urlForBackend));
+    return chromeDownload(dlUrl, suggestedFilename(item, urlForBackend, tabTitle));
   }
 
   if (item.backendRouted) {
@@ -328,11 +329,11 @@ async function downloadItem(tabId, item) {
   // Plain mp4/webm CDN URLs that don't require auth — direct download.
   console.log("[fcdl] → direct CDN");
   try {
-    return await chromeDownload(item.url, suggestedFilename(item, downloadPageUrl));
+    return await chromeDownload(item.url, suggestedFilename(item, downloadPageUrl, tabTitle));
   } catch (e) {
     console.warn("[fcdl] direct failed, falling back to backend:", e);
     const dlUrl = backendDownloadUrl(backend, item.url, referer, cookies);
-    return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl));
+    return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl, tabTitle));
   }
 }
 
@@ -360,8 +361,8 @@ function chromeDownload(url, filename) {
   });
 }
 
-function suggestedFilename(item, pageUrl) {
-  const title = item.title || hostname(pageUrl) || "media";
+function suggestedFilename(item, pageUrl, tabTitle = "") {
+  const title = item.title || tabTitle || hostname(pageUrl) || "media";
   const safe = title.replace(/[<>:"/\\|?*\x00-\x1F]+/g, "").slice(0, 80);
   const ext = (item.ext || extFromUrl(item.url) || (item.kind === "image" ? "jpg" : item.kind === "audio" ? "mp3" : "mp4")).toLowerCase();
   return `${safe}.${ext.replace(/[^a-z0-9]/g, "") || "bin"}`;

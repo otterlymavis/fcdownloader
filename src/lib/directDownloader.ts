@@ -36,6 +36,26 @@ function mediaIsAudio(url: string, mimeType?: string | null): boolean {
   return /^audio\//i.test(mimeType || '') || /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i.test(url);
 }
 
+function expectsLargeMedia(media: DetectedMedia): boolean {
+  return (
+    media.mediaKind === 'video' ||
+    media.mediaKind === 'audio' ||
+    (!media.mediaKind && !mediaIsImage(media.url, media.mimeType))
+  );
+}
+
+function tinyDownloadMessage(media: DetectedMedia): string {
+  if (/(?:xiaohongshu\.com|xhslink\.com|xhscdn\.com)/i.test(`${media.pageUrl} ${media.url}`)) {
+    return 'Xiaohongshu returned a tiny non-media file. Open Browse, log in to Xiaohongshu, reload the post, then try again.';
+  }
+
+  return 'Downloaded file is too small to be media. The site likely returned a login, challenge, or expired-link page.';
+}
+
+function isXiaohongshuMedia(media: DetectedMedia): boolean {
+  return /(?:xiaohongshu\.com|xhslink\.com|xhscdn\.com)/i.test(`${media.pageUrl} ${media.url}`);
+}
+
 export async function downloadDirect(
   media: DetectedMedia,
   taskId: string,
@@ -62,6 +82,12 @@ export async function downloadDirect(
     const cookies = needsCookies ? await extractSessionCookies(media.pageUrl) : '';
     headers = { 'User-Agent': ua, 'Referer': media.pageUrl, 'Accept': '*/*' };
     if (cookies) headers['Cookie'] = cookies;
+  }
+
+  if (isXiaohongshuMedia(media)) {
+    headers['User-Agent'] = headers['User-Agent'] || ua;
+    headers['Referer'] = 'https://www.xiaohongshu.com/';
+    headers['Origin'] = 'https://www.xiaohongshu.com';
   }
 
   const ext = guessExt(media.url, media.mimeType);
@@ -114,6 +140,10 @@ export async function downloadDirect(
   const info = await FileSystem.getInfoAsync(filePath);
   if (!info.exists || (info.size ?? 0) === 0) {
     throw new Error('Downloaded file is empty — the URL may require a login or has expired');
+  }
+
+  if (expectsLargeMedia(media) && (info.size ?? 0) < 32 * 1024) {
+    throw new Error(tinyDownloadMessage(media));
   }
 
   onProgress?.(1, 1);

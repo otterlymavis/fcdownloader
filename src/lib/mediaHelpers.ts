@@ -11,6 +11,10 @@ const SOURCE_NAMES: Array<[RegExp, string]> = [
   [/dailymotion\.com|dmcdn\.net/i, 'Dailymotion'],
   [/facebook\.com|fbcdn\.net/i, 'Facebook'],
   [/twitch\.tv|usher\.twitch\.tv/i, 'Twitch'],
+  [/imgur\.com/i, 'Imgur'],
+  [/tumblr\.com|tumblr\.media/i, 'Tumblr'],
+  [/soundcloud\.com|sndcdn\.com/i, 'SoundCloud'],
+  [/bandcamp\.com|bcbits\.com/i, 'Bandcamp'],
   [/pinimg\.com|pinterest\.com/i, 'Pinterest'],
   [/bilivideo\.com|bilibili\.com|bilibili\.tv|b23\.tv/i, 'Bilibili'],
   [/weibo\.com|weibo\.cn|weibocdn\.com|sinaimg\.cn/i, 'Weibo'],
@@ -32,13 +36,15 @@ const MIME_BY_EXT: Record<string, string> = {
   m4a: 'audio/mp4',
   wav: 'audio/wav',
   ogg: 'audio/ogg',
+  opus: 'audio/ogg',
+  flac: 'audio/flac',
 };
 
 const SEGMENT_RE = /\.(ts|m4s|aac|m4a|cmfv|cmfa)(\?|#|$)/i;
 const VIMEO_RANGE_RE = /vimeocdn\.com\/.*\/v2\/range\/.*\/avf\//i;
 const USEFUL_EXT_RE = /\.(m3u8|mpd|mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)(\?|#|$)/i;
 const VIMEO_JSON_RE = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i;
-const VIDEO_CDN_RE = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|threadscdn\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|fbcdn\.net\/videos|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/|weibocdn\.com\/|xhscdn\.com\/)/i;
+const VIDEO_CDN_RE = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|threadscdn\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|redditmedia\.com\/|fbcdn\.net\/videos|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/|weibocdn\.com\/|xhscdn\.com\/|i\.imgur\.com\/|media\.tumblr\.com\/|tumblr\.media\/|sndcdn\.com\/|bcbits\.com\/)/i;
 const YT_RANGE_RE = /googlevideo\.com\/videoplayback[^#]*[?&](?:range=|sq=)\d/i;
 const YT_CDN_RE = /googlevideo\.com\/videoplayback/i;
 const TW_VIDEO_RE = /video\.twimg\.com\/(?:ext_tw_video|amplify_video)\/(\d+)\//i;

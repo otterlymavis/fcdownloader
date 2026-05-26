@@ -53,7 +53,7 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
 
   // Meta/TikTok/Twitter direct CDN URLs are usually signed MP4/WebM responses
   // even when the URL path does not expose a file extension.
-  if (/(?:cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|video\.twimg\.com|tiktokcdn\.com|tiktokcdn-us\.com|v\d+-webapp\.tiktok\.com|weibocdn\.com|xhscdn\.com)/i.test(url)) {
+  if (/(?:cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|video\.twimg\.com|tiktokcdn\.com|tiktokcdn-us\.com|v\d+-webapp\.tiktok\.com|weibocdn\.com|xhscdn\.com|i\.imgur\.com|media\.tumblr\.com|tumblr\.media|sndcdn\.com|bcbits\.com|redditmedia\.com)/i.test(url)) {
     return 'direct';
   }
 

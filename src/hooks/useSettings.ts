@@ -15,7 +15,7 @@ interface Settings {
   fontSize: FontSizePref;
 }
 
-const DEFAULT: Settings = { theme: 'system', fontSize: 'medium' };
+const DEFAULT: Settings = { theme: 'light', fontSize: 'medium' };
 const KEY = '@fcdownloader/settings_v1';
 
 export function useSettings() {

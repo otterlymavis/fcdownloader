@@ -1,4 +1,5 @@
 <resources>
   <string name="app_name">FCDownloader</string>
   <string name="expo_splash_screen_resize_mode" translatable="false">contain</string>
+  <string name="share_into_scheme" translatable="false">fcdownloader</string>
 </resources>

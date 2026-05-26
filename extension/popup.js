@@ -69,8 +69,8 @@ function escapeHtml(s) {
 function describeItem(item) {
   // Friendly human label: prefer a quality/format hint, else the host.
   if (item.label) return item.label;
-  if (item.kind === "image") return `Image${hostname(item.url) ? ` Â· ${hostname(item.url)}` : ""}`;
-  if (item.kind === "audio") return `Audio${hostname(item.url) ? ` Â· ${hostname(item.url)}` : ""}`;
+  if (item.kind === "image") return `Image${hostname(item.url) ? ` ·${hostname(item.url)}` : ""}`;
+  if (item.kind === "audio") return `Audio${hostname(item.url) ? ` ·${hostname(item.url)}` : ""}`;
   if (item.kind === "embed" || item.source === "iframe") return "Embedded video";
   const h = hostname(item.url);
   if (item.kind === "hls")  return `HLS stream${h ? ` · ${h}` : ""}`;

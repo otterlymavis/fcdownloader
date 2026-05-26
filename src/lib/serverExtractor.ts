@@ -37,7 +37,7 @@ import { extractSessionCookies } from './cookieManager';
 
 const STORAGE_KEY = '@fcdownloader/server_extractor_url';
 const TOKEN_STORAGE_KEY = '@fcdownloader/server_extractor_token';
-const REQUEST_TIMEOUT_MS = 15_000;
+const REQUEST_TIMEOUT_MS = 45_000;
 
 // Compile-time defaults from .env.local (EXPO_PUBLIC_EXTRACTOR_URL / TOKEN).
 // AsyncStorage values, when present, override these — letting power users
@@ -50,10 +50,31 @@ const BUNDLED_URL   = (_extra.bundledExtractorUrl   ?? '').trim();
 const BUNDLED_TOKEN = (_extra.bundledExtractorToken ?? '').trim();
 const SERVER_CONFIDENCE = 0.97;
 
+const YOUTUBE_PAGE_RE = /(?:youtube\.com\/(?:watch|shorts|embed)|youtu\.be\/)/i;
+export const YOUTUBE_SIGN_IN_MESSAGE =
+  'YouTube needs sign-in. Open Browse, log in to YouTube, then try again.';
+
+export class YouTubeSignInRequiredError extends Error {
+  constructor(message = YOUTUBE_SIGN_IN_MESSAGE) {
+    super(message);
+    this.name = 'YouTubeSignInRequiredError';
+  }
+}
+
+export function isYouTubeSignInRequiredError(error: unknown): boolean {
+  return error instanceof YouTubeSignInRequiredError ||
+    (error instanceof Error && error.name === 'YouTubeSignInRequiredError');
+}
+
 function normaliseUrl(raw: string): string {
   let s = raw.trim().replace(/\/+$/, '');
   if (!/^https?:\/\//i.test(s)) s = `http://${s}`;
   return s;
+}
+
+function isYouTubeAuthFailure(pageUrl: string, message: string): boolean {
+  if (!YOUTUBE_PAGE_RE.test(pageUrl)) return false;
+  return /sign in|confirm you'?re not a bot|cookies-from-browser|--cookies|authentication|login required/i.test(message);
 }
 
 let _seq = 0;
@@ -137,12 +158,17 @@ export async function extractViaServer(pageUrl: string): Promise<DetectedMedia[]
       signal: ac.signal,
     });
     if (!res.ok) {
-      console.warn('[serverExtractor] HTTP', res.status);
+      const text = await res.text().catch(() => '');
+      console.warn('[serverExtractor] HTTP', res.status, text.slice(0, 200));
+      if (isYouTubeAuthFailure(pageUrl, text)) {
+        throw new YouTubeSignInRequiredError();
+      }
       return [];
     }
     const data = (await res.json()) as ServerExtractResponse;
     return toDetectedMedia(data, pageUrl);
   } catch (e) {
+    if (isYouTubeSignInRequiredError(e)) throw e;
     console.warn('[serverExtractor] request failed:', String(e).slice(0, 200));
     return [];
   } finally {
