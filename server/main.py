@@ -939,6 +939,102 @@ def _try_ydl_client(page_url: str, ydl_opts: dict[str, Any], client: str) -> dic
         return _extractor_result(strategy, False, reason=msg or "yt-dlp failed")
 
 
+_YTDL_STREAM_FORMAT = (
+    # For server-side streaming, prefer a pre-muxed format when available
+    # so FFmpeg doesn't need to merge. Fall back to video+audio merge.
+    "b[ext=mp4][height<=1080]/bv*[height<=1080]+ba/best[height<=1080]/best"
+)
+
+_SERVER_BASE_URL = os.environ.get("SERVER_URL", "https://fcdownloader-extractor.fly.dev")
+
+
+def _ytdl_stream_generator(page_url: str) -> Iterator[bytes]:
+    """Run yt-dlp in real download mode piped to stdout. Handles SABR."""
+    cmd = [
+        "yt-dlp",
+        "--format", _YTDL_STREAM_FORMAT,
+        "--merge-output-format", "mp4",
+        "--output", "-",
+        "--no-playlist",
+        "--quiet",
+        "--no-warnings",
+        page_url,
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        env=UTF8_ENV,
+    )
+    try:
+        while True:
+            chunk = proc.stdout.read(65536)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        proc.wait()
+
+
+def _try_ytdl_stream_url(page_url: str, ydl_opts: dict[str, Any]) -> dict[str, Any]:
+    """Last-resort strategy: return a server-side stream URL.
+
+    For YouTube SABR videos, skip_download=True cannot resolve format URLs
+    because SABR generates them dynamically. The /ytdl-stream endpoint runs
+    yt-dlp in actual download mode (which handles SABR natively) and pipes
+    the result to the client. This strategy builds that proxy URL.
+
+    Only used for YouTube — other sites work fine with skip_download.
+    """
+    strategy = "ytdl-stream"
+    if not any(x in page_url for x in ("youtube.com/", "youtu.be/", "youtube-nocookie.com/")):
+        return _extractor_result(strategy, False, reason="not a YouTube URL — ytdl-stream not needed")
+
+    # Try to pull basic metadata (title/thumbnail) without format selection.
+    # Format 18 is YouTube's legacy pre-muxed 360p MP4 that predates SABR.
+    # If bot-walled completely, this will fail silently and we return minimal info.
+    meta: dict[str, Any] = {}
+    for fmt in ("18", "b[height<=360]", "b[ext=mp4]"):
+        try:
+            opts = {
+                **ydl_opts,
+                "format": fmt,
+                "quiet": True,
+                "no_warnings": True,
+                "skip_download": True,
+            }
+            with YoutubeDL(opts) as ydl:
+                result = ydl.extract_info(page_url, download=False)
+            if result and result.get("title"):
+                meta = result
+                break
+        except Exception:
+            continue
+
+    stream_url = (
+        f"{_SERVER_BASE_URL}/ytdl-stream"
+        f"?page_url={urllib.parse.quote(page_url, safe='')}"
+    )
+    print(f"[extract] ytdl-stream fallback: {stream_url} title={meta.get('title')!r}")
+
+    return _extractor_result(strategy, True, media={
+        "url":         stream_url,
+        "title":       meta.get("title") or "YouTube Video",
+        "thumbnail":   meta.get("thumbnail"),
+        "duration":    meta.get("duration"),
+        "ext":         "mp4",
+        "id":          meta.get("id") or _cache_key(page_url),
+        "webpage_url": page_url,
+        "protocol":    "https",
+        "extractor":   "youtube",
+        "http_headers": {},   # Server endpoint needs no auth headers from client
+    })
+
+
 def _try_platform_extractors(page_url: str, cookies: str | None) -> dict[str, Any]:
     try:
         if any(host in page_url for host in ("weibo.com", "weibo.cn", "video.weibo.com")):
@@ -1149,8 +1245,10 @@ def _run_ydl(
         }
 
     # YouTube client selection (order matters — first match wins):
-    #   - tv:          newer TV client, returns non-SABR formats up to 1080p
-    #                  and is the current recommended primary client.
+    #   - ios:         iOS app client; returns direct MP4 URLs (no SABR),
+    #                  historically reliable on datacenter IPs.
+    #   - tv:          TV client, non-SABR up to 1080p but first to be
+    #                  bot-walled on Fly.io.
     #   - web_safari:  desktop client that doesn't require po_token.
     #   - mweb:        mobile web, lower quality but reliable last-resort.
     # `android_vr` / `tv_simply` started returning sabr.malformed_config in
@@ -1168,7 +1266,7 @@ def _run_ydl(
     # succeed on the other clients before yt-dlp gives up.
     extractor_args: dict[str, Any] = {
         "youtube": {
-            "player_client": ["web_safari", "web_creator", "mweb", "tv"],
+            "player_client": ["ios", "web_safari", "web_creator", "mweb", "tv"],
         },
     }
     # Vimeo's embed-only check reads its `referer` extractor_arg first, then
@@ -1232,6 +1330,8 @@ def _run_ydl(
         )
         yt_client_fallbacks: list[tuple[str, Any]] = (
             [
+                # ios client returns direct MP4 URLs (no SABR) — try first.
+                ("yt-dlp/ios",         lambda: _try_ydl_client(page_url, ydl_opts, "ios")),
                 ("yt-dlp/mweb",        lambda: _try_ydl_client(page_url, ydl_opts, "mweb")),
                 ("yt-dlp/tv",          lambda: _try_ydl_client(page_url, ydl_opts, "tv")),
                 ("yt-dlp/web_safari",  lambda: _try_ydl_client(page_url, ydl_opts, "web_safari")),
@@ -1249,6 +1349,9 @@ def _run_ydl(
             ("generic media detector", lambda: _try_html_media_detector(page_url, http_headers, cookies, "generic")),
             *yt_client_fallbacks,
             ("generic yt-dlp extractor", lambda: _try_ydl(page_url, ydl_opts, force_generic=True)),
+            # Last resort for YouTube SABR: server streams the video via yt-dlp
+            # download mode (which CAN handle SABR) and returns a proxy URL.
+            ("ytdl-stream",           lambda: _try_ytdl_stream_url(page_url, ydl_opts)),
             ("browser playback fallback", lambda: _unsupported_server_strategy("browser playback fallback", "browser playback fallback must run in the app WebView")),
         ]
 
@@ -1279,10 +1382,12 @@ def _run_ydl(
 
     reason = "; ".join(
         f"{d.get('strategy', 'extractor')}: {d.get('reason', 'failed')}"
-        for d in diagnostics[-6:]
+        for d in diagnostics
+        if d.get("reason") and d.get("reason") != "browser runtime is client-side only"
+           and d.get("reason") != "browser playback fallback must run in the app WebView"
     )
-    print(f"[extract] all strategies failed for {page_url}: {reason[:500]}")
-    raise HTTPException(502, f"unsupported after all extraction strategies failed: {reason[:500]}")
+    print(f"[extract] all strategies failed for {page_url}: {reason[:800]}")
+    raise HTTPException(502, f"unsupported after all extraction strategies failed: {reason[:800]}")
 
 
 def _run_ydl_with_format(
@@ -1821,6 +1926,40 @@ def download_post(
             media_type="video/mp4", headers=headers,
         )
     return _direct_media_stream(response["url"], request_headers, headers)
+
+
+# ── /ytdl-stream — server-side yt-dlp download proxy for YouTube SABR ────────
+#
+# Called when /extract's ytdl-stream fallback strategy wins. yt-dlp in
+# skip_download=True mode cannot resolve SABR format URLs (they're generated
+# dynamically by YouTube's server). Running yt-dlp in actual download mode
+# (which has full SABR support) and piping stdout to the client bypasses this.
+#
+# The endpoint is intentionally narrow: it only accepts YouTube URLs to
+# prevent abuse. Rate-limited the same as /extract.
+
+
+@app.get("/ytdl-stream")
+@limiter.limit(RATE_LIMIT)
+def ytdl_stream_endpoint(
+    request: Request,
+    page_url: str = Query(..., description="YouTube page URL to stream"),
+) -> StreamingResponse:
+    page_url = _normalize_url(page_url)
+    if not page_url:
+        raise HTTPException(400, "page_url is required")
+    if not any(x in page_url for x in ("youtube.com/", "youtu.be/", "youtube-nocookie.com/")):
+        raise HTTPException(400, "ytdl-stream only supports YouTube URLs")
+
+    print(f"[ytdl-stream] starting download: {page_url}")
+    return StreamingResponse(
+        _ytdl_stream_generator(page_url),
+        media_type="video/mp4",
+        headers={
+            "Content-Disposition": 'attachment; filename="youtube.mp4"',
+            "Cache-Control": "no-cache, no-store",
+        },
+    )
 
 
 # ── /playlist — return flat item list for a playlist URL ─────────────────────
