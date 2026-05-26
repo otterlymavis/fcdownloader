@@ -4,6 +4,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'FCDownloader',
   slug: 'fcdownloader',
+  owner: 'mabisuuu',
   version: '1.1.0',
   orientation: 'default',
   userInterfaceStyle: 'automatic', // dark mode support
