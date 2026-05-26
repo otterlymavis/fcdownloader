@@ -940,51 +940,82 @@ def _try_ydl_client(page_url: str, ydl_opts: dict[str, Any], client: str) -> dic
 
 
 _YTDL_STREAM_FORMAT = (
-    # For server-side streaming, prefer a pre-muxed format when available
-    # so FFmpeg doesn't need to merge. Fall back to video+audio merge.
-    "b[ext=mp4][height<=1080]/bv*[height<=1080]+ba/best[height<=1080]/best"
+    # Prefer pre-muxed formats that download as a single file (no merge step,
+    # so streaming starts as soon as the download finishes). Limit to 720p
+    # so the temp-file download on the Fly.io 512 MB VM stays manageable.
+    #
+    # Format 18 = YouTube legacy 360p pre-muxed MP4 (predates SABR; always
+    # has a static URL the ios client can serve).
+    "18/"                                               # 360p pre-muxed (fastest)
+    "b[height<=480][ext=mp4]/"                          # 480p pre-muxed
+    "bv*[height<=720][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/"  # 720p h264+aac
+    "bv*[height<=720]+ba/"                              # 720p any codec
+    "best[height<=720]/"                                # best at 720p
+    "bv*+ba/"                                           # any quality paired
+    "best"                                              # absolute fallback
 )
 
 _SERVER_BASE_URL = os.environ.get("SERVER_URL", "https://fcdownloader-extractor.fly.dev")
 
 
 def _ytdl_stream_generator(page_url: str) -> Iterator[bytes]:
-    """Run yt-dlp in real download mode piped to stdout. Handles SABR."""
-    cmd = [
-        "yt-dlp",
-        "--format", _YTDL_STREAM_FORMAT,
-        "--merge-output-format", "mp4",
-        "--output", "-",
-        "--no-playlist",
-        # Keep warnings on so we can see what's failing in fly logs
-        page_url,
-    ]
-    print(f"[ytdl-stream] cmd: {' '.join(shlex.quote(a) for a in cmd)}")
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,   # capture for logging
-        env=UTF8_ENV,
-    )
-    yielded = 0
-    try:
-        while True:
-            chunk = proc.stdout.read(65536)
-            if not chunk:
-                break
-            yielded += len(chunk)
-            yield chunk
-    finally:
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        _, stderr_data = proc.communicate()
-        if stderr_data:
-            err = stderr_data.decode("utf-8", errors="replace").strip()
-            print(f"[ytdl-stream] exit (yielded={yielded}B) stderr: {err[:600]}")
-        else:
-            print(f"[ytdl-stream] done, yielded={yielded}B, exit={proc.returncode}")
+    """Download via yt-dlp to a temp file, then stream the result.
+
+    The --output - (stdout pipe) approach requires FFmpeg to finish merging
+    before any bytes flow, causing long client timeouts. Downloading to a temp
+    file first lets us report errors cleanly and start streaming as soon as
+    the file is ready.
+
+    Uses the ios player_client which returns pre-muxed MP4 formats (no SABR),
+    so format-18 (360p) can download in seconds even on a slow connection.
+    """
+    with tempfile.TemporaryDirectory(prefix="ytdl_") as tmpdir:
+        out_tpl = os.path.join(tmpdir, "video.%(ext)s")
+        cmd = [
+            "yt-dlp",
+            "--extractor-args", "youtube:player_client=ios,web_safari,mweb",
+            "--format", _YTDL_STREAM_FORMAT,
+            "--merge-output-format", "mp4",
+            "--output", out_tpl,
+            "--no-playlist",
+            "--max-filesize", "800M",
+            page_url,
+        ]
+        print(f"[ytdl-stream] downloading: {page_url}")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            env=UTF8_ENV,
+            timeout=300,   # 5 min ceiling — 720p/360p should always finish in time
+        )
+        stderr_txt = result.stderr.decode("utf-8", errors="replace").strip()
+        if result.returncode != 0:
+            print(f"[ytdl-stream] yt-dlp failed ({result.returncode}): {stderr_txt[:600]}")
+            return
+        if stderr_txt:
+            # Log warnings even on success (e.g. format-selection notices)
+            print(f"[ytdl-stream] yt-dlp stderr: {stderr_txt[:400]}")
+
+        files = [
+            f for f in os.listdir(tmpdir)
+            if os.path.isfile(os.path.join(tmpdir, f))
+        ]
+        if not files:
+            print("[ytdl-stream] no output file found in tmpdir")
+            return
+
+        filepath = os.path.join(tmpdir, files[0])
+        size = os.path.getsize(filepath)
+        print(f"[ytdl-stream] streaming {files[0]} ({size:,} bytes)")
+
+        with open(filepath, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+
+        print("[ytdl-stream] done streaming")
 
 
 def _try_ytdl_stream_url(page_url: str, ydl_opts: dict[str, Any]) -> dict[str, Any]:
@@ -1003,6 +1034,7 @@ def _try_ytdl_stream_url(page_url: str, ydl_opts: dict[str, Any]) -> dict[str, A
 
     # Try to pull basic metadata (title/thumbnail) without format selection.
     # Format 18 is YouTube's legacy pre-muxed 360p MP4 that predates SABR.
+    # Use the ios client which returns pre-muxed formats with static URLs.
     # If bot-walled completely, this will fail silently and we return minimal info.
     meta: dict[str, Any] = {}
     for fmt in ("18", "b[height<=360]", "b[ext=mp4]"):
@@ -1013,6 +1045,10 @@ def _try_ytdl_stream_url(page_url: str, ydl_opts: dict[str, Any]) -> dict[str, A
                 "quiet": True,
                 "no_warnings": True,
                 "skip_download": True,
+                "extractor_args": {
+                    **(ydl_opts.get("extractor_args") or {}),
+                    "youtube": {"player_client": ["ios", "web_safari"]},
+                },
             }
             with YoutubeDL(opts) as ydl:
                 result = ydl.extract_info(page_url, download=False)
