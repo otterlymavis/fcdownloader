@@ -14,8 +14,8 @@ name: Build Android APK
 #
 #   EXPO_PUBLIC_EXTRACTOR_URL    (optional)
 #                                Fly.io backend URL for the HD extractor. Only used
-#                                when building the `backend-version` branch. Leave
-#                                unset for master-only builds.
+#                                when building the `backend-version` or `plus-version`
+#                                branch. Leave unset for master-only builds.
 
 on:
   push:
@@ -25,6 +25,12 @@ on:
       - 'server/**'
       - '.gitignore'
   workflow_dispatch:
+
+# Force Node.js 24 for all JavaScript actions. GitHub is migrating from
+# Node.js 20 → 24 starting June 2026; enabling this now avoids broken
+# action tarball downloads during the transition window.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
