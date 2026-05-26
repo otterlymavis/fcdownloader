@@ -68,6 +68,17 @@ import {
 // ─────────────────────────────────────────────────────────────
 type Tab = 'home' | 'browser' | 'library' | 'bookmarks';
 
+function formatOptionLabel(format: NonNullable<DetectedMedia['availableFormats']>[number]): string {
+  const parts = [
+    format.label,
+    format.height ? `${format.height}p` : undefined,
+    format.ext?.toUpperCase(),
+    format.vcodec && format.vcodec !== 'none' ? format.vcodec : undefined,
+    format.acodec && format.acodec !== 'none' ? format.acodec : undefined,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join('  ') : format.id;
+}
+
 export default function App() {
   const { theme, fontSize, fontScale, setTheme, setFontSize } = useSettings();
   const t = useTheme(theme === 'system' ? undefined : theme === 'dark');
@@ -84,6 +95,7 @@ export default function App() {
   // ── UI ────────────────────────────────────────────────────
   const [videosOpen, setVideosOpen]     = useState(false);
   const [previewItem, setPreviewItem]   = useState<DetectedMedia | null>(null);
+  const [selectedFormatId, setSelectedFormatId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [playingPath, setPlayingPath]   = useState<string | null>(null);
   const [toast, setToast]               = useState<ToastMessage | null>(null);
@@ -101,6 +113,10 @@ export default function App() {
   }, []);
 
   const homepageSet = useRef(false);
+  useEffect(() => {
+    setSelectedFormatId(null);
+  }, [previewItem?.id]);
+
   useEffect(() => {
     if (homepageSet.current) return;
     const home = bookmarks[0]?.url ?? 'https://www.google.com';
@@ -246,10 +262,22 @@ export default function App() {
   const handleDetectedDownload = useCallback(async (item: DetectedMedia) => {
     setVideosOpen(false);
     setPreviewItem(null);
-    await enqueue(item);
+    const selected = selectedFormatId && item.availableFormats?.some((f) => f.id === selectedFormatId)
+      ? item.availableFormats.find((f) => f.id === selectedFormatId)
+      : null;
+    await enqueue(selected
+      ? {
+          ...item,
+          formatId: selected.id,
+          label: selected.label ?? item.label,
+          mimeType: selected.ext ? `${item.mediaKind === 'audio' ? 'audio' : 'video'}/${selected.ext}` : item.mimeType,
+          forceServerDownload: true,
+        }
+      : item);
+    setSelectedFormatId(null);
     showToast('Download started', 'success');
     setTab('library');
-  }, [enqueue, showToast]);
+  }, [enqueue, selectedFormatId, showToast]);
 
   // ── Export / Gallery ──────────────────────────────────────
   const handleExport = useCallback(async (task: DownloadTask) => {
@@ -906,6 +934,31 @@ export default function App() {
                     {getMediaFormat(previewItem)}
                   </Text>
                 </View>
+
+                {previewItem.availableFormats && previewItem.availableFormats.length > 0 && (
+                  <View style={{ marginTop: S.md }}>
+                    <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.xs }]}>
+                      FORMATS
+                    </Text>
+                    {previewItem.availableFormats.slice(0, 8).map((format) => {
+                      const selected = selectedFormatId === format.id || (!selectedFormatId && format.id === previewItem.formatId);
+                      return (
+                        <Pressable
+                          key={format.id}
+                          android_ripple={RIPPLE}
+                          onPress={() => setSelectedFormatId(format.id)}
+                          style={[s.metaRow, { borderBottomColor: t.sep }]}>
+                          <Text style={[s.metaKey, { color: selected ? t.ink : t.ink2, fontSize: fs(13) }]}>
+                            {selected ? 'Selected' : format.id}
+                          </Text>
+                          <Text style={[s.metaVal, { color: t.ink, fontSize: fs(13) }]} numberOfLines={2}>
+                            {formatOptionLabel(format)}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                )}
 
                 <Pressable
                   android_ripple={{ color: 'rgba(255,255,255,0.15)', borderless: false }}

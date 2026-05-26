@@ -19,7 +19,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [master, backend-version]
+    branches: [master, backend-version, plus-version]
     paths-ignore:
       - '**.md'
       - 'server/**'
@@ -86,8 +86,8 @@ jobs:
           echo "$KS" | base64 -d > android/app/fcdownloader.keystore
           ls -l android/app/fcdownloader.keystore
 
-      - name: Inline server URL into .env.local (backend-version only)
-        if: github.ref_name == 'backend-version'
+      - name: Inline server URL into .env.local (backend-version and plus-version)
+        if: github.ref_name == 'backend-version' || github.ref_name == 'plus-version'
         env:
           EXTRACTOR_URL: ${{ secrets.EXPO_PUBLIC_EXTRACTOR_URL }}
         run: |

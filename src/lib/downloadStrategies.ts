@@ -3,7 +3,8 @@ import { downloadHLS, DRMProtectedError, DownloadOptions } from './hlsDownloader
 import { downloadDirect } from './directDownloader';
 import { downloadVimeoJson } from './vimeoJsonDownloader';
 import { downloadDASH } from './dashDownloader';
-import { downloadWithYtDlp } from './ytDlpDownloader';
+import { downloadYouTube } from './youtubeDownloader';
+import { downloadViaServer } from './serverDownloader';
 
 export { DRMProtectedError };
 
@@ -20,6 +21,7 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
   const url  = media.url;
   const mime = media.mimeType ?? '';
 
+  if (media.forceServerDownload) return 'server-download';
   if (media.mediaKind === 'image' || media.mediaKind === 'audio') return 'direct';
   if (/^(image|audio)\//i.test(mime)) return 'direct';
 
@@ -68,6 +70,7 @@ export const STRATEGY_LABELS: Record<DownloadStrategy, string> = {
   'vimeo-json':   'Vimeo Playlist',
   'ffmpeg':       'FFmpeg',
   'yt-dlp':       'yt-dlp',
+  'server-download': 'Server yt-dlp',
 };
 
 export async function runDownload(
@@ -76,13 +79,25 @@ export async function runDownload(
   strategy: DownloadStrategy,
   opts: DownloadOptions = {},
 ): Promise<string> {
-  switch (strategy) {
-    case 'yt-dlp':       return downloadWithYtDlp(media, taskId, opts);
-    case 'direct':       return downloadDirect(media, taskId, opts);
-    case 'hls-segments': return downloadHLS(media, taskId, opts);
-    case 'vimeo-json':   return downloadVimeoJson(media, taskId, opts);
-    case 'dash':
-    case 'ffmpeg':       return downloadDASH(media, taskId, opts);
-    default:             return downloadHLS(media, taskId, opts);
+  try {
+    switch (strategy) {
+      case 'yt-dlp':       return downloadYouTube(media, taskId, opts);
+      case 'direct':       return downloadDirect(media, taskId, opts);
+      case 'hls-segments': return downloadHLS(media, taskId, opts);
+      case 'vimeo-json':   return downloadVimeoJson(media, taskId, opts);
+      case 'server-download': return downloadViaServer(media, taskId, opts);
+      case 'dash':
+      case 'ffmpeg':       return downloadDASH(media, taskId, opts);
+      default:             return downloadHLS(media, taskId, opts);
+    }
+  } catch (err) {
+    if (strategy === 'server-download' || opts.signal?.aborted || err instanceof DRMProtectedError) {
+      throw err;
+    }
+    if (media.sourcePageUrl || media.provenance === 'social-extractor') {
+      opts.onStatus?.('fetching_manifest');
+      return downloadViaServer(media, taskId, opts);
+    }
+    throw err;
   }
 }

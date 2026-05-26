@@ -83,7 +83,7 @@ async function streamToDisk(
   return filePath;
 }
 
-export async function downloadWithYtDlp(
+export async function downloadYouTube(
   media: DetectedMedia,
   taskId: string,
   opts: DownloadOptions = {},

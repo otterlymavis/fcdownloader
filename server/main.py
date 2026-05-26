@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import http.client
 import json
 import os
@@ -26,8 +27,10 @@ import shlex
 import socket
 import ssl
 import subprocess
+import sys
 import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 import urllib.parse
@@ -35,11 +38,114 @@ from typing import Any, Iterator
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from yt_dlp import YoutubeDL
+from yt_dlp.version import __version__ as YT_DLP_VERSION
+
+
+UTF8_ENV = {
+    **os.environ,
+    "PYTHONIOENCODING": "utf-8",
+    "LANG": "en_US.UTF-8",
+    "LC_ALL": "en_US.UTF-8",
+}
+
+
+def _configure_utf8_runtime() -> None:
+    os.environ.update({
+        "PYTHONIOENCODING": "utf-8",
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+    })
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
+_configure_utf8_runtime()
+
+
+class UTF8JSONResponse(JSONResponse):
+    media_type = "application/json; charset=utf-8"
+
+    def render(self, content: Any) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8", errors="replace")
+
+
+def _safe_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value).encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+
+
+def _strip_header_controls(value: str) -> str:
+    return re.sub(r"[\r\n\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+", " ", _safe_text(value)).strip()
+
+
+def _normalize_url(url: str) -> str:
+    raw = _safe_text(url).strip()
+    if not raw:
+        return raw
+    try:
+        parts = urllib.parse.urlsplit(raw)
+        scheme = parts.scheme.lower()
+        netloc = parts.netloc
+        if parts.hostname:
+            host = parts.hostname.encode("idna").decode("ascii")
+            userinfo = ""
+            if parts.username:
+                userinfo = urllib.parse.quote(parts.username, safe="")
+                if parts.password:
+                    userinfo += ":" + urllib.parse.quote(parts.password, safe="")
+                userinfo += "@"
+            port = f":{parts.port}" if parts.port else ""
+            netloc = f"{userinfo}{host}{port}"
+        path = urllib.parse.quote(parts.path, safe="/%:@!$&'()*+,;=")
+        query = urllib.parse.quote(parts.query, safe="=&?/:;%+@,$!'()*[]")
+        fragment = urllib.parse.quote(parts.fragment, safe="=&?/:;%+@,$!'()*[]")
+        return urllib.parse.urlunsplit((scheme, netloc, path, query, fragment))
+    except Exception:
+        return urllib.parse.quote(raw, safe=":/?#[]@!$&'()*+,;=%")
+
+
+def _safe_header_value(name: str, value: Any) -> str:
+    s = _strip_header_controls(_safe_text(value))
+    lname = name.lower()
+    if lname in {"referer", "referrer"}:
+        return _normalize_url(s)
+    if lname == "origin":
+        try:
+            p = urllib.parse.urlsplit(_normalize_url(s))
+            return urllib.parse.urlunsplit((p.scheme, p.netloc, "", "", ""))
+        except Exception:
+            return s
+    return "".join(ch if 32 <= ord(ch) <= 126 or ord(ch) == 9 else "?" for ch in s)
+
+
+def _safe_headers(headers: dict[str, Any] | None) -> dict[str, str]:
+    if not headers:
+        return {}
+    cleaned: dict[str, str] = {}
+    for raw_name, raw_value in headers.items():
+        name = re.sub(r"[^A-Za-z0-9-]+", "", _safe_text(raw_name))
+        if not name or raw_value is None:
+            continue
+        cleaned[name] = _safe_header_value(name, raw_value)
+    return cleaned
 
 
 def _client_ip(request: Request) -> str:
@@ -112,7 +218,11 @@ FORMAT_SPEC = (
 # ── App + middleware ─────────────────────────────────────────────────────────
 
 limiter = Limiter(key_func=_client_ip)
-app = FastAPI(title="fcdownloader-extractor", version="2.0")
+app = FastAPI(
+    title="fcdownloader-extractor",
+    version="2.0",
+    default_response_class=UTF8JSONResponse,
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -161,6 +271,7 @@ def _cache_put(key: str, val: dict[str, Any]) -> None:
 
 
 def _cache_key(page_url: str) -> str:
+    page_url = _normalize_url(page_url)
     # Stable across query-param shuffles by extracting the canonical video id.
     m = re.search(r"(?:[?&]v=|youtu\.be/|/shorts/|/embed/|/v/)([A-Za-z0-9_-]{11})", page_url)
     return m.group(1) if m else page_url
@@ -184,6 +295,7 @@ class DownloadRequest(BaseModel):
     pageUrl: str
     referer: str | None = None
     cookies: str | None = None
+    formatId: str | None = None
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -197,6 +309,32 @@ def health() -> dict[str, Any]:
         "rate_limit":  RATE_LIMIT,
         "cache_ttl":   CACHE_TTL,
     }
+
+
+@app.get("/version")
+def version() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "service": "fcdownloader-extractor",
+        "yt_dlp": YT_DLP_VERSION,
+        "ffmpeg": _ffmpeg_version(),
+        "cookies_loaded": bool(COOKIES_FILE and os.path.exists(COOKIES_FILE)),
+    }
+
+
+def _ffmpeg_version() -> str | None:
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=5,
+            env=UTF8_ENV,
+        )
+        return (proc.stdout.splitlines() or [None])[0]
+    except Exception:
+        return None
 
 
 # ── Threads / Meta HTML extractor ────────────────────────────────────────────
@@ -215,13 +353,14 @@ def _extract_meta_page(page_url: str, cookies: str | None, label: str) -> dict[s
     """Fetch a Meta-family page and pull out a video_url, an og:video tag,
     or any direct mp4 / m3u8 URL. Returns the standard response shape or
     None when nothing usable was found (caller falls through to yt-dlp)."""
+    page_url = _normalize_url(page_url)
     try:
-        req = urllib.request.Request(page_url, headers={
+        req = urllib.request.Request(page_url, headers=_safe_headers({
             "User-Agent": _MOBILE_UA,
             "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
             **({"Cookie": cookies} if cookies else {}),
-        })
+        }))
         with urllib.request.urlopen(req, timeout=15) as resp:
             html = resp.read().decode("utf-8", errors="replace")
     except Exception as e:  # noqa: BLE001
@@ -366,12 +505,13 @@ def _write_user_cookies_file(cookies: str, page_url: str) -> str | None:
     extension/mobile app sends those cookies along, we get the real jar
     populated and every yt-dlp internal call inherits the session.
     """
-    cookies = cookies.strip()
+    cookies = _safe_text(cookies).strip()
+    page_url = _normalize_url(page_url)
     if not cookies:
         return None
     host = ""
     try:
-        host = urllib.parse.urlparse(page_url).hostname or ""
+        host = (urllib.parse.urlparse(page_url).hostname or "").encode("idna").decode("ascii")
     except Exception:
         pass
     if not host:
@@ -389,7 +529,7 @@ def _write_user_cookies_file(cookies: str, page_url: str) -> str | None:
     expiry = int(time.time()) + 86400  # 1 day is plenty; cookies short-lived anyway
 
     tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix="-user-cookies.txt", delete=False, encoding="utf-8"
+        mode="w", suffix="-user-cookies.txt", delete=False, encoding="utf-8", errors="replace"
     )
     try:
         tmp.write("# Netscape HTTP Cookie File\n")
@@ -399,8 +539,8 @@ def _write_user_cookies_file(cookies: str, page_url: str) -> str | None:
             if not raw or "=" not in raw:
                 continue
             name, _, value = raw.partition("=")
-            name = name.strip()
-            value = value.strip()
+            name = _safe_header_value("Cookie", name.strip())
+            value = _safe_header_value("Cookie", value.strip())
             if not name:
                 continue
             # Netscape format: domain  includeSubdomains  path  secure  expiry  name  value
@@ -426,6 +566,32 @@ _WEIBO_DESKTOP_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/125.0.0.0 Safari/537.36"
 )
+
+# Japanese video/streaming sites that need Accept-Language: ja to respond
+# correctly (otherwise they often return English stubs or redirect to an
+# unsupported-region page, causing yt-dlp to fail with "Unsupported URL").
+_JAPANESE_SITE_DOMAINS: tuple[str, ...] = (
+    "nicovideo.jp", "nico.ms", "n.nicovideo.jp",
+    "abema.tv",
+    "ameba.jp", "ameblo.jp",
+    "wwd.co.jp", "wwdjapan.com",
+    "nhk.or.jp", "nhk.jp",
+    "gyao.jp",
+    "hulu.jp",
+    "openrec.tv",
+    "mildom.com",
+)
+
+
+def _is_japanese_domain(url: str) -> bool:
+    """Return True for URLs whose hostname is a known Japanese site or ends in .jp."""
+    try:
+        host = urllib.parse.urlsplit(url).hostname or ""
+    except Exception:
+        return False
+    if host.endswith(".jp"):
+        return True
+    return any(host == d or host.endswith("." + d) for d in _JAPANESE_SITE_DOMAINS)
 
 
 def _json_get_path(obj: Any, *path: str) -> Any:
@@ -468,13 +634,15 @@ def _download_weibo_json(
     query: dict[str, str] | None = None,
     data: bytes | None = None,
 ) -> dict[str, Any] | None:
+    url = _normalize_url(url)
+    page_url = _normalize_url(page_url)
     if query:
         url = f"{url}?{urllib.parse.urlencode(query)}"
     try:
         req = urllib.request.Request(
             url,
             data=data,
-            headers=_weibo_headers(page_url, cookies),
+            headers=_safe_headers(_weibo_headers(page_url, cookies)),
             method="POST" if data is not None else "GET",
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -651,7 +819,7 @@ def _extract_weibo_page(page_url: str, cookies: str | None) -> dict[str, Any] | 
     if not video_id:
         return None
     if ":" in video_id:
-        body = f'data={{"Component_Play_Playinfo":{{"oid":"{video_id}"}}}}'.encode()
+        body = f'data={{"Component_Play_Playinfo":{{"oid":"{video_id}"}}}}'.encode("utf-8", errors="replace")
         component = _download_weibo_json(
             "https://weibo.com/tv/api/component",
             page_url,
@@ -685,11 +853,188 @@ def _extract_weibo_page(page_url: str, cookies: str | None) -> dict[str, Any] | 
     return parsed
 
 
+def _extractor_result(
+    strategy: str,
+    success: bool,
+    fatal: bool = False,
+    reason: str | None = None,
+    media: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "success": success,
+        "fatal": fatal,
+        "strategy": strategy,
+        **({"reason": reason} if reason else {}),
+        **({"media": media} if media else {}),
+    }
+
+
+def _try_ydl(page_url: str, ydl_opts: dict[str, Any], force_generic: bool) -> dict[str, Any]:
+    strategy = "generic yt-dlp extractor" if force_generic else "yt-dlp"
+    opts = {**ydl_opts}
+    if force_generic:
+        opts["force_generic_extractor"] = True
+    try:
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(page_url, download=False)
+        if not info:
+            return _extractor_result(strategy, False, reason="yt-dlp returned no info")
+        return _extractor_result(strategy, True, media=info)
+    except Exception as e:  # noqa: BLE001
+        msg = _safe_text(e)[:400]
+        return _extractor_result(strategy, False, reason=msg or "yt-dlp failed")
+
+
+def _try_platform_extractors(page_url: str, cookies: str | None) -> dict[str, Any]:
+    try:
+        if any(host in page_url for host in ("weibo.com", "weibo.cn", "video.weibo.com")):
+            info = _extract_weibo_page(page_url, cookies)
+            if info:
+                return _extractor_result("platform-specific extractor", True, media=info)
+            return _extractor_result("platform-specific extractor", False, reason="Weibo extractor found no media")
+        if "threads.net" in page_url or "threads.com" in page_url:
+            info = _extract_meta_threads(page_url, cookies)
+            if info:
+                return _extractor_result("platform-specific extractor", True, media=info)
+            return _extractor_result("platform-specific extractor", False, reason="Threads extractor found no media")
+        if "instagram.com" in page_url:
+            info = _extract_meta_instagram(page_url, cookies)
+            if info:
+                return _extractor_result("platform-specific extractor", True, media=info)
+            return _extractor_result("platform-specific extractor", False, reason="Instagram extractor found no media")
+        # Japanese sites: yt-dlp handles these natively when given the right
+        # Accept-Language + User-Agent. If yt-dlp already failed, we don't have
+        # a better fallback here — just mark as "not handled" so the pipeline
+        # continues to the HTML media detectors.
+        if _is_japanese_domain(page_url):
+            return _extractor_result("platform-specific extractor", False,
+                                     reason="Japanese site — handled by yt-dlp with Accept-Language:ja; falling through to HTML detectors")
+        return _extractor_result("platform-specific extractor", False, reason="no matching platform extractor")
+    except Exception as e:  # noqa: BLE001
+        return _extractor_result("platform-specific extractor", False, reason=_safe_text(e)[:400])
+
+
+def _unsupported_server_strategy(strategy: str, reason: str) -> dict[str, Any]:
+    return _extractor_result(strategy, False, reason=reason)
+
+
+def _fetch_html_for_detection(page_url: str, headers: dict[str, str], cookies: str | None) -> tuple[str, dict[str, str]]:
+    req_headers = _safe_headers({
+        "User-Agent": headers.get("User-Agent") or _MOBILE_UA,
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Language": "ja,en-US;q=0.8,en;q=0.6",
+        **({"Referer": headers.get("Referer")} if headers.get("Referer") else {}),
+        **({"Origin": headers.get("Origin")} if headers.get("Origin") else {}),
+        **({"Cookie": cookies} if cookies else {}),
+    })
+    req = urllib.request.Request(page_url, headers=req_headers)
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        body = resp.read().decode("utf-8", errors="replace")
+    return body, req_headers
+
+
+def _info_from_media_url(
+    media_url: str,
+    page_url: str,
+    headers: dict[str, str],
+    title: str | None = None,
+) -> dict[str, Any]:
+    url = _normalize_url(html.unescape(media_url))
+    ext = _guess_ext_from_url(url) or ("m3u8" if ".m3u8" in url.lower() else "mpd" if ".mpd" in url.lower() else "mp4")
+    return {
+        "url": url,
+        "http_headers": _safe_headers({**headers, "Referer": headers.get("Referer") or page_url}),
+        "title": title,
+        "thumbnail": None,
+        "duration": None,
+        "ext": ext,
+        "protocol": "m3u8_native" if ext == "m3u8" else "http_dash_segments" if ext == "mpd" else "https",
+        "id": _cache_key(url),
+    }
+
+
+def _html_title(html_text: str) -> str | None:
+    for pattern in (
+        r'<meta\s+(?:property|name)=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+        r"<title[^>]*>(.*?)</title>",
+    ):
+        m = re.search(pattern, html_text, re.IGNORECASE | re.DOTALL)
+        if m:
+            return re.sub(r"\s+", " ", html.unescape(m.group(1))).strip()
+    return None
+
+
+def _scan_media_urls(html_text: str, mode: str) -> list[str]:
+    patterns: list[str] = []
+    if mode in {"hls", "generic"}:
+        patterns.append(r'https?:\\?/\\?/[^"\'<>\s\\]+?\.m3u8[^"\'<>\s\\]*')
+    if mode in {"dash", "generic"}:
+        patterns.append(r'https?:\\?/\\?/[^"\'<>\s\\]+?\.mpd[^"\'<>\s\\]*')
+    if mode in {"generic"}:
+        patterns.append(r'https?:\\?/\\?/[^"\'<>\s\\]+?\.(?:mp4|m4v|webm|mov)[^"\'<>\s\\]*')
+    if mode == "og":
+        patterns.append(
+            r'<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["\'](?:og:video(?::url)?|og:video:secure_url|twitter:player:stream)["\'][^>]+content\s*=\s*["\']([^"\']+)["\']'
+        )
+    found: list[str] = []
+    variants = [
+        html_text,
+        html_text.replace("\\u0026", "&").replace("\\u003d", "=").replace("\\/", "/"),
+    ]
+    for text in variants:
+        for pattern in patterns:
+            for m in re.finditer(pattern, text, re.IGNORECASE | re.DOTALL):
+                raw = m.group(1) if m.lastindex else m.group(0)
+                raw = html.unescape(raw).replace("\\/", "/").replace("\\u0026", "&").strip()
+                if raw.startswith(("http://", "https://")) and raw not in found:
+                    found.append(raw)
+    return found
+
+
+def _try_html_media_detector(
+    page_url: str,
+    headers: dict[str, str],
+    cookies: str | None,
+    mode: str,
+) -> dict[str, Any]:
+    strategy = {
+        "hls": "HLS manifest detector",
+        "dash": "DASH manifest detector",
+        "og": "OG/meta tag extractor",
+        "generic": "generic media detector",
+    }.get(mode, "HTML media detector")
+    try:
+        if mode == "hls" and ".m3u8" in page_url.lower():
+            return _extractor_result(strategy, True, media=_info_from_media_url(page_url, page_url, headers))
+        if mode == "dash" and ".mpd" in page_url.lower():
+            return _extractor_result(strategy, True, media=_info_from_media_url(page_url, page_url, headers))
+
+        html_text, request_headers = _fetch_html_for_detection(page_url, headers, cookies)
+        title = _html_title(html_text)
+        urls = _scan_media_urls(html_text, mode)
+        if not urls:
+            return _extractor_result(strategy, False, reason=f"{mode} detector found no media")
+        media_url = urllib.parse.urljoin(page_url, urls[0])
+        return _extractor_result(strategy, True, media=_info_from_media_url(media_url, page_url, request_headers, title))
+    except urllib.error.URLError as e:
+        return _extractor_result(strategy, False, reason=f"network error: {_safe_text(e)[:300]}")
+    except TimeoutError as e:
+        return _extractor_result(strategy, False, reason=f"timeout: {_safe_text(e)[:300]}")
+    except Exception as e:  # noqa: BLE001
+        return _extractor_result(strategy, False, reason=_safe_text(e)[:400])
+
+
 def _run_ydl(
     page_url: str,
     referer: str | None = None,
     cookies: str | None = None,
 ) -> dict[str, Any]:
+    page_url = _normalize_url(page_url)
+    referer = _normalize_url(referer) if referer else None
+    cookies = _safe_text(cookies) if cookies else None
+    parsed_url = urllib.parse.urlsplit(page_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise HTTPException(400, "invalid URL or unsupported protocol")
     http_headers: dict[str, str] = {}
     if referer:
         http_headers["Referer"] = referer
@@ -717,6 +1062,10 @@ def _run_ydl(
         http_headers["Referer"]    = "https://www.xiaohongshu.com/"
         http_headers["Origin"]     = "https://www.xiaohongshu.com"
         http_headers["User-Agent"] = _MOBILE_UA
+    # Japanese sites respond incorrectly (or region-block) without a Japanese
+    # Accept-Language header. Set it when not already provided by the caller.
+    if _is_japanese_domain(page_url) and "Accept-Language" not in http_headers:
+        http_headers["Accept-Language"] = "ja,en-US;q=0.9,en;q=0.8"
     if cookies:
         http_headers["Cookie"] = cookies
 
@@ -795,67 +1144,102 @@ def _run_ydl(
     if referer:
         ydl_opts["referer"] = referer
     if http_headers:
-        ydl_opts["http_headers"] = http_headers
-    if any(host in page_url for host in ("weibo.com", "weibo.cn", "video.weibo.com")):
-        weibo_info = _extract_weibo_page(page_url, cookies)
-        if weibo_info:
-            if user_cookie_file:
-                try: os.unlink(user_cookie_file)
-                except Exception: pass
-            return weibo_info
-        print(f"[weibo] ajax fallback found nothing; falling back to yt-dlp for {page_url}")
-    # Threads (Meta) has no yt-dlp extractor — handle it here by mirroring the
-    # mobile app's Instagram-style HTML regex extraction. Returns a
-    # yt-dlp-shaped info dict so the rest of the pipeline is unchanged.
-    if "threads.net" in page_url or "threads.com" in page_url:
-        threads_info = _extract_meta_threads(page_url, cookies)
-        if threads_info:
-            if user_cookie_file:
-                try: os.unlink(user_cookie_file)
-                except Exception: pass
-            return threads_info
-        print(f"[threads] HTML scrape found nothing; falling back to yt-dlp for {page_url}")
-    if "instagram.com" in page_url:
-        instagram_info = _extract_meta_instagram(page_url, cookies)
-        if instagram_info:
-            if user_cookie_file:
-                try: os.unlink(user_cookie_file)
-                except Exception: pass
-            return instagram_info
-        print(f"[instagram] HTML scrape found nothing; falling back to yt-dlp for {page_url}")
-
+        ydl_opts["http_headers"] = _safe_headers(http_headers)
     try:
-        try:
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(page_url, download=False)
-        except Exception as e:  # noqa: BLE001
-            msg = str(e)
-            # yt-dlp returns "Unsupported URL" for sites it doesn't have a
-            # dedicated extractor for. Retry with the generic extractor — it
-            # scrapes the page for video tags / m3u8 URLs / iframe embeds and
-            # often succeeds where the URL-pattern matchers gave up
-            # (AmusePlus → Vimeo iframe is the canonical case).
-            if "Unsupported URL" in msg:
-                print(f"[ydl] retrying with generic extractor for {page_url}")
-                try:
-                    ydl_opts["force_generic_extractor"] = True
-                    with YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(page_url, download=False)
-                except Exception as e2:  # noqa: BLE001
-                    print(f"[ydl] generic also failed for {page_url}: {str(e2)[:200]}")
-                    raise HTTPException(502, f"yt-dlp: {e2}")
-            else:
-                print(f"[ydl] failed for {page_url} (referer={referer}, user_cookies={bool(user_cookie_file)}, server_cookies={bool(COOKIES_FILE and os.path.exists(COOKIES_FILE))}): {msg[:200]}")
-                raise HTTPException(502, f"yt-dlp: {e}")
+        diagnostics: list[dict[str, Any]] = []
+        strategies = [
+            ("yt-dlp", lambda: _try_ydl(page_url, ydl_opts, force_generic=False)),
+            ("platform-specific extractor", lambda: _try_platform_extractors(page_url, cookies)),
+            ("WebView/runtime interception", lambda: _unsupported_server_strategy("WebView/runtime interception", "browser runtime is client-side only")),
+            ("HLS manifest detector", lambda: _try_html_media_detector(page_url, http_headers, cookies, "hls")),
+            ("DASH manifest detector", lambda: _try_html_media_detector(page_url, http_headers, cookies, "dash")),
+            ("OG/meta tag extractor", lambda: _try_html_media_detector(page_url, http_headers, cookies, "og")),
+            ("generic media detector", lambda: _try_html_media_detector(page_url, http_headers, cookies, "generic")),
+            ("generic yt-dlp extractor", lambda: _try_ydl(page_url, ydl_opts, force_generic=True)),
+            ("browser playback fallback", lambda: _unsupported_server_strategy("browser playback fallback", "browser playback fallback must run in the app WebView")),
+        ]
+
+        for idx, (name, fn) in enumerate(strategies):
+            print(f"[extract] {name} start")
+            result = fn()
+            diagnostics.append({k: v for k, v in result.items() if k != "media"})
+            if result.get("success") and result.get("media"):
+                print(f"[extract] {name} success")
+                print(f"[extract] extraction success via {name}")
+                info = result["media"]
+                if isinstance(info, dict):
+                    info.setdefault("_extractor_strategy", name)
+                    info.setdefault("_extractor_diagnostics", diagnostics)
+                    return info
+            reason = _safe_text(result.get("reason") or "no media")
+            print(f"[extract] {name} failed: {reason[:240]}")
+            if result.get("fatal"):
+                raise HTTPException(400, reason or "fatal extraction error")
+            if idx < len(strategies) - 1:
+                print(f"[extract] falling back to {strategies[idx + 1][0]}")
     finally:
         # yt-dlp's cookiejar is populated when it opens the file; safe to
         # remove the temp file now regardless of how extract_info exited.
         if user_cookie_file:
             try: os.unlink(user_cookie_file)
             except Exception: pass
-    if not info:
-        raise HTTPException(502, "yt-dlp returned no info")
-    return info
+
+    reason = "; ".join(
+        f"{d.get('strategy', 'extractor')}: {d.get('reason', 'failed')}"
+        for d in diagnostics[-6:]
+    )
+    print(f"[extract] all strategies failed for {page_url}: {reason[:500]}")
+    raise HTTPException(502, f"unsupported after all extraction strategies failed: {reason[:500]}")
+
+
+def _run_ydl_with_format(
+    page_url: str,
+    referer: str | None = None,
+    cookies: str | None = None,
+    format_id: str | None = None,
+) -> dict[str, Any]:
+    selected = _safe_text(format_id).strip()
+    if not selected:
+        return _run_ydl(page_url, referer=referer, cookies=cookies)
+
+    page_url = _normalize_url(page_url)
+    referer = _normalize_url(referer) if referer else None
+    cookies = _safe_text(cookies) if cookies else None
+    ydl_opts: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "format": selected,
+        "skip_download": True,
+        "outtmpl": "/tmp/%(id)s.%(ext)s",
+    }
+    http_headers: dict[str, str] = {}
+    if referer:
+        http_headers["Referer"] = referer
+    if cookies:
+        http_headers["Cookie"] = cookies
+
+    user_cookie_file: str | None = None
+    if cookies:
+        user_cookie_file = _write_user_cookies_file(cookies, page_url)
+        if user_cookie_file:
+            ydl_opts["cookiefile"] = user_cookie_file
+    elif COOKIES_FILE and os.path.exists(COOKIES_FILE):
+        ydl_opts["cookiefile"] = COOKIES_FILE
+    if referer:
+        ydl_opts["referer"] = referer
+    if http_headers:
+        ydl_opts["http_headers"] = _safe_headers(http_headers)
+
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            return ydl.extract_info(page_url, download=False)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"selected format failed: {_safe_text(e)[:400]}")
+    finally:
+        if user_cookie_file:
+            try: os.unlink(user_cookie_file)
+            except Exception: pass
+
 
 
 @app.post("/extract")
@@ -905,7 +1289,7 @@ def extract(
             has_bili_cookies = False
             if COOKIES_FILE and os.path.exists(COOKIES_FILE):
                 try:
-                    with open(COOKIES_FILE, "r", encoding="utf-8", errors="ignore") as f:
+                    with open(COOKIES_FILE, "r", encoding="utf-8", errors="replace") as f:
                         has_bili_cookies = any("bilibili" in line for line in f)
                 except Exception:
                     pass
@@ -920,23 +1304,57 @@ def extract(
 
 
 def _safe_filename(title: str | None, video_id: str) -> str:
-    base = title if title else video_id
-    # Strip path-unsafe chars; collapse whitespace; cap length.
-    s = re.sub(r"[^\w\-一-鿿぀-ヿ ]", "", base, flags=re.UNICODE).strip()
-    s = re.sub(r"\s+", " ", s) or video_id
-    return s[:80] + ".mp4"
+    base = unicodedata.normalize("NFC", _safe_text(title or video_id))
+    # Preserve Japanese, emoji, and mixed-language titles. Only remove
+    # filesystem-invalid/control characters and normalize whitespace.
+    s = re.sub(r'[<>:"/\\|?*\x00-\x1F\x7F]+', "", base, flags=re.UNICODE)
+    s = re.sub(r"\s+", " ", s).strip(" .")
+    if not s:
+        s = _safe_ascii_filename(video_id, "download")
+    return f"{s[:160]}.mp4"
+
+
+def _safe_ascii_filename(value: str | None, fallback: str = "download") -> str:
+    s = unicodedata.normalize("NFKD", _safe_text(value or ""))
+    s = "".join(ch for ch in s if 32 <= ord(ch) <= 126)
+    s = re.sub(r'[<>:"/\\|?*\x00-\x1F\x7F]+', "", s)
+    s = re.sub(r"\s+", " ", s).strip(" .")
+    return (s[:80] or fallback)
+
+
+def _content_disposition(filename: str, fallback_stem: str = "download") -> str:
+    safe = _safe_filename(filename.removesuffix(".mp4"), fallback_stem)
+    fallback = _safe_ascii_filename(fallback_stem, "download")
+    if not fallback.lower().endswith(".mp4"):
+        fallback = f"{fallback}.mp4"
+    return (
+        f'attachment; filename="{fallback}"; '
+        f"filename*=UTF-8''{_url_quote(safe)}"
+    )
+
+
+def _content_disposition_any(filename: str, fallback: str = "download") -> str:
+    raw = unicodedata.normalize("NFC", _safe_text(filename))
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1F\x7F]+', "", raw, flags=re.UNICODE)
+    safe = re.sub(r"\s+", " ", safe).strip(" .")[:160] or fallback
+    ascii_fallback = _safe_ascii_filename(safe, fallback)
+    return (
+        f'attachment; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{_url_quote(safe)}"
+    )
 
 
 def _ffmpeg_header_arg(headers: dict[str, str] | None) -> str | None:
-    if not headers:
+    safe = _safe_headers(headers)
+    if not safe:
         return None
-    return "".join(f"{k}: {v}\r\n" for k, v in headers.items() if v)
+    return "".join(f"{k}: {v}\r\n" for k, v in safe.items() if v)
 
 
 def _download_headers(referer: str | None, cookies: str | None, page_url: str | None = None) -> dict[str, str]:
     headers: dict[str, str] = {}
     if referer:
-        headers["Referer"] = referer
+        headers["Referer"] = _normalize_url(referer)
     elif page_url and ("bilibili.com" in page_url or "bilivideo.com" in page_url):
         # Bilibili CDN (upos-*.bilivideo.com) returns 403 without Referer.
         # If the caller didn't pass one, derive it from the page URL host.
@@ -949,8 +1367,8 @@ def _download_headers(referer: str | None, cookies: str | None, page_url: str | 
         headers["Referer"] = "https://www.xiaohongshu.com/"
         headers["Origin"]  = "https://www.xiaohongshu.com"
     if cookies:
-        headers["Cookie"] = cookies
-    return headers
+        headers["Cookie"] = _safe_text(cookies)
+    return _safe_headers(headers)
 
 
 _HEADERED_DIRECT_HOSTS = (
@@ -994,6 +1412,9 @@ def _ffmpeg_stream(
     """
     ff_headers = _ffmpeg_header_arg(request_headers)
     input_header_args = ["-headers", ff_headers] if ff_headers else []
+    video_url = _normalize_url(video_url) if video_url else video_url
+    audio_url = _normalize_url(audio_url) if audio_url else audio_url
+    hls_master = _normalize_url(hls_master) if hls_master else hls_master
 
     if audio_url:
         args = [
@@ -1018,7 +1439,11 @@ def _ffmpeg_stream(
 
     print("[download] ffmpeg", shlex.join(args[:12]) + " ...")
     proc = subprocess.Popen(
-        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        bufsize=0,
+        env=UTF8_ENV,
     )
     try:
         while True:
@@ -1038,11 +1463,12 @@ def _direct_media_stream(
     request_headers: dict[str, str],
     response_headers: dict[str, str],
 ) -> StreamingResponse:
-    headers = {
+    media_url = _normalize_url(media_url)
+    headers = _safe_headers({
         "User-Agent": _MOBILE_UA,
         "Accept": "*/*",
         **(request_headers or {}),
-    }
+    })
     try:
         upstream = _open_direct_media(media_url, headers)
     except urllib.error.HTTPError as e:  # type: ignore[attr-defined]
@@ -1117,6 +1543,8 @@ def _resolve_a_records(host: str) -> list[str]:
 
 
 def _open_https_via_ip(url: str, headers: dict[str, str]) -> http.client.HTTPResponse:
+    url = _normalize_url(url)
+    headers = _safe_headers(headers)
     parsed = urllib.parse.urlparse(url)
     host = parsed.hostname or ""
     if not host:
@@ -1138,7 +1566,7 @@ def _open_https_via_ip(url: str, headers: dict[str, str]) -> http.client.HTTPRes
             tls = context.wrap_socket(sock, server_hostname=host)
             conn = http.client.HTTPSConnection(host, timeout=30)
             conn.sock = tls
-            conn.request("GET", path, headers={**headers, "Host": host})
+            conn.request("GET", path, headers=_safe_headers({**headers, "Host": host}))
             resp = conn.getresponse()
             if 300 <= resp.status < 400 and resp.getheader("Location"):
                 location = urllib.parse.urljoin(url, resp.getheader("Location") or "")
@@ -1160,6 +1588,8 @@ def _open_https_via_ip(url: str, headers: dict[str, str]) -> http.client.HTTPRes
 
 
 def _open_direct_media(url: str, headers: dict[str, str]) -> Any:
+    url = _normalize_url(url)
+    headers = _safe_headers(headers)
     try:
         req = urllib.request.Request(url, headers=headers)
         return urllib.request.urlopen(req, timeout=30)
@@ -1185,12 +1615,7 @@ def download(
     filename = _safe_filename(info.get("title"), video_id)
 
     headers = {
-        # Content-Disposition with both forms — RFC 5987 filename* for unicode,
-        # plain filename= as ASCII fallback for older browsers.
-        "Content-Disposition": (
-            f'attachment; filename="{video_id}.mp4"; '
-            f"filename*=UTF-8''{_url_quote(filename)}"
-        ),
+        "Content-Disposition": _content_disposition(filename, video_id),
         "Cache-Control": "no-store",
     }
 
@@ -1219,15 +1644,12 @@ def download_post(
     request: Request,
     req: DownloadRequest,
 ) -> StreamingResponse:
-    info = _run_ydl(req.pageUrl, referer=req.referer, cookies=req.cookies)
+    info = _run_ydl_with_format(req.pageUrl, referer=req.referer, cookies=req.cookies, format_id=req.formatId)
     response = _to_response(info)
     video_id = info.get("id") or _cache_key(req.pageUrl)
     filename = _safe_filename(info.get("title"), video_id)
     headers = {
-        "Content-Disposition": (
-            f'attachment; filename="{video_id}.mp4"; '
-            f"filename*=UTF-8''{_url_quote(filename)}"
-        ),
+        "Content-Disposition": _content_disposition(filename, video_id),
         "Cache-Control": "no-store",
     }
     request_headers = {**(response.get("headers") or {}), **_download_headers(req.referer, req.cookies, page_url=req.pageUrl)}
@@ -1288,7 +1710,7 @@ def debug_extract(
     # bilibili.com or yt-dlp can only see the 480p durl track.
     if COOKIES_FILE and os.path.exists(COOKIES_FILE):
         try:
-            with open(COOKIES_FILE, "r", encoding="utf-8", errors="ignore") as f:
+            with open(COOKIES_FILE, "r", encoding="utf-8", errors="replace") as f:
                 domains: dict[str, list[str]] = {}
                 for line in f:
                     if line.startswith("#") or "\t" not in line:
@@ -1459,11 +1881,13 @@ def proxy(
     cookies: str | None = Query(None),
     filename: str | None = Query(None, description="Suggested filename for Content-Disposition"),
 ) -> StreamingResponse:
+    url = _normalize_url(url)
+    referer = _normalize_url(referer) if referer else None
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "url must be absolute http(s)")
-    headers = _default_proxy_headers(url, referer)
+    headers = _safe_headers(_default_proxy_headers(url, referer))
     if cookies:
-        headers["Cookie"] = cookies
+        headers["Cookie"] = _safe_header_value("Cookie", cookies)
 
     try:
         req = urllib.request.Request(url, headers=headers)
@@ -1479,8 +1903,7 @@ def proxy(
     content_type = upstream.headers.get("Content-Type", "application/octet-stream")
     out_headers: dict[str, str] = {"Cache-Control": "no-store"}
     if filename:
-        safe = re.sub(r'[<>:"/\\|?*\x00-\x1F]+', "", filename).strip()[:160] or "download"
-        out_headers["Content-Disposition"] = f'attachment; filename="{safe}"; filename*=UTF-8\'\'{_url_quote(safe)}'
+        out_headers["Content-Disposition"] = _content_disposition_any(filename)
     # Pass through Content-Length when known so the browser shows accurate progress.
     if cl := upstream.headers.get("Content-Length"):
         out_headers["Content-Length"] = cl
@@ -1505,9 +1928,9 @@ def _url_quote(s: str) -> str:
 
 
 def _request_cache_key(page_url: str, referer: str | None, cookies: str | None) -> str:
-    key = _cache_key(page_url)
+    key = _cache_key(_normalize_url(page_url))
     if referer:
-        key += "|" + referer
+        key += "|" + _normalize_url(referer)
     if cookies:
         key += "|cookies:" + hashlib.sha256(cookies.encode("utf-8")).hexdigest()[:16]
     return key
@@ -1550,6 +1973,10 @@ def _to_gallery_response(info: dict[str, Any]) -> dict[str, Any]:
                 "label":         _label_for(video),
                 "ext":           video.get("ext") or "mp4",
                 "title":         entry.get("title"),
+                "thumbnail":     entry.get("thumbnail"),
+                "duration":      entry.get("duration"),
+                "extractor":     entry.get("extractor"),
+                "formatId":      "+".join([_safe_text(video.get("format_id")), _safe_text(audio.get("format_id"))]).strip("+"),
             })
             continue
 
@@ -1570,9 +1997,40 @@ def _to_gallery_response(info: dict[str, Any]) -> dict[str, Any]:
             "ext":      ext or ("mp4" if not is_image else "jpg"),
             "mimeType": _mime_for(entry) if not is_image else f"image/{ext or 'jpeg'}",
             "title":    entry.get("title"),
+            "thumbnail": entry.get("thumbnail"),
+            "duration": entry.get("duration"),
+            "extractor": entry.get("extractor"),
+            "formatId": entry.get("format_id"),
         })
 
     return {"kind": "gallery", "items": items, "count": len(items)}
+
+
+def _format_options(info: dict[str, Any]) -> list[dict[str, Any]]:
+    formats = info.get("formats") or []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for f in formats:
+        if not isinstance(f, dict):
+            continue
+        fid = _safe_text(f.get("format_id"))
+        if not fid or fid in seen:
+            continue
+        seen.add(fid)
+        out.append({
+            "id":             fid,
+            "label":          _label_for(f) or f.get("format"),
+            "ext":            f.get("ext"),
+            "protocol":       f.get("protocol"),
+            "width":          f.get("width"),
+            "height":         f.get("height"),
+            "fps":            f.get("fps"),
+            "vcodec":         f.get("vcodec"),
+            "acodec":         f.get("acodec"),
+            "filesize":       f.get("filesize"),
+            "filesizeApprox": f.get("filesize_approx"),
+        })
+    return out
 
 
 def _to_response(info: dict[str, Any]) -> dict[str, Any]:
@@ -1590,6 +2048,9 @@ def _to_response(info: dict[str, Any]) -> dict[str, Any]:
             "mimeType":      _mime_for(video),
             "audioMimeType": _mime_for(audio),
             "expire":        _expire_of(video["url"]),
+            "extractor":     info.get("extractor"),
+            "formatId":      "+".join([_safe_text(video.get("format_id")), _safe_text(audio.get("format_id"))]).strip("+"),
+            "formats":       _format_options(info),
         }
 
     url = info.get("url")
@@ -1604,6 +2065,9 @@ def _to_response(info: dict[str, Any]) -> dict[str, Any]:
             "label":    _label_for(info),
             "mimeType": "application/x-mpegURL",
             "expire":   _expire_of(url),
+            "extractor": info.get("extractor"),
+            "formatId": info.get("format_id"),
+            "formats":  _format_options(info),
         }
 
     return {
@@ -1613,6 +2077,9 @@ def _to_response(info: dict[str, Any]) -> dict[str, Any]:
         "label":    _label_for(info),
         "mimeType": _mime_for(info),
         "expire":   _expire_of(url),
+        "extractor": info.get("extractor"),
+        "formatId": info.get("format_id"),
+        "formats":  _format_options(info),
     }
 
 
@@ -1628,7 +2095,7 @@ def _headers_for(f: dict[str, Any]) -> dict[str, str]:
     h.pop("authorization", None)
     h.pop("Cookie", None)
     h.pop("cookie", None)
-    return h
+    return _safe_headers(h)
 
 
 def _label_for(f: dict[str, Any]) -> str | None:

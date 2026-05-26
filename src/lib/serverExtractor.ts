@@ -32,7 +32,7 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import { DetectedMedia } from '../types';
+import { DetectedMedia, FormatOption } from '../types';
 import { extractSessionCookies } from './cookieManager';
 
 const STORAGE_KEY = '@fcdownloader/server_extractor_url';
@@ -70,6 +70,12 @@ export interface ServerExtractResponse {
   expire?: number;
   mimeType?: string;
   audioMimeType?: string;
+  title?: string;
+  thumbnail?: string;
+  duration?: number;
+  extractor?: string;
+  formatId?: string;
+  formats?: FormatOption[];
 }
 
 export async function getServerExtractorUrl(): Promise<string | null> {
@@ -108,7 +114,7 @@ export async function extractViaServer(pageUrl: string): Promise<DetectedMedia[]
   const timer = setTimeout(() => ac.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const headers: Record<string, string> = { 'Content-Type': 'application/json; charset=utf-8' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
     // Forward the user's logged-in cookies from the in-app WebView. If they
@@ -165,6 +171,13 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
     timestamp: Date.now(),
     confidence: SERVER_CONFIDENCE,
     provenance: 'social-extractor' as const,
+    sourcePageUrl: pageUrl,
+    sourceTitle: r.title,
+    thumbnailUrl: r.thumbnail,
+    duration: r.duration,
+    extractor: r.extractor,
+    formatId: r.formatId,
+    availableFormats: r.formats,
   };
 
   if (r.kind === 'hls' && r.url) {
@@ -204,6 +217,7 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
       hasAudio: true,
       hasVideo: true,
       label: r.label,
+      forceServerDownload: false,
     }];
   }
 

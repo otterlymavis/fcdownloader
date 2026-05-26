@@ -6,6 +6,7 @@
 import { DetectedMedia, Provenance } from '../types';
 import { extractYouTubeStreams } from './ytExtractor';
 import { extractViaServer } from './serverExtractor';
+import { getAcceptLanguage } from './siteRegistry';
 
 let _seq = 0;
 const genId = () => `ext_${Date.now()}_${_seq++}`;
@@ -17,12 +18,39 @@ const MOBILE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) ' +
   'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 
-async function fetchHtml(url: string, ua = DESKTOP_UA): Promise<string> {
+/**
+ * Returns true for URLs whose hostname is a known Japanese site or ends in .jp.
+ * Used to set appropriate Accept-Language + User-Agent for locale-sensitive sites.
+ */
+export function isJapaneseDomain(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host.endsWith('.jp')) return true;
+    const JAPANESE_DOMAINS = [
+      'nicovideo.jp', 'nico.ms', 'n.nicovideo.jp',
+      'abema.tv', 'ameba.jp', 'ameblo.jp',
+      'wwd.co.jp', 'wwdjapan.com',
+      'gyao.jp', 'hulu.jp', 'openrec.tv', 'mildom.com',
+    ];
+    return JAPANESE_DOMAINS.some(d => host === d || host.endsWith('.' + d));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetch HTML with locale-aware Accept-Language.
+ * For Japanese sites the Accept-Language is automatically set to ja,en-US
+ * so locale-sensitive sites return the correct page content instead of an
+ * English stub or a "region not supported" redirect.
+ */
+async function fetchHtml(url: string, ua = DESKTOP_UA, acceptLanguage?: string): Promise<string> {
+  const lang = acceptLanguage ?? getAcceptLanguage(url);
   const res = await fetch(url, {
     headers: {
       'User-Agent': ua,
       'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Language': lang,
     },
   });
   return res.text();
@@ -59,6 +87,33 @@ function pushUnique(results: DetectedMedia[], item: DetectedMedia): void {
   if (!results.some(r => r.url === item.url)) results.push(item);
 }
 
+type ExtractorResult = {
+  success: boolean;
+  fatal: boolean;
+  reason?: string;
+  media?: DetectedMedia[];
+};
+
+async function runExtractor(
+  name: string,
+  fn: () => Promise<DetectedMedia[]>,
+): Promise<ExtractorResult> {
+  console.log(`[extract] ${name} start`);
+  try {
+    const media = await fn();
+    if (media.length > 0) {
+      console.log(`[extract] ${name} success`);
+      return { success: true, fatal: false, media };
+    }
+    console.log(`[extract] ${name} failed: no media`);
+    return { success: false, fatal: false, reason: 'no media' };
+  } catch (e) {
+    const reason = String((e as Error)?.message || e).slice(0, 240);
+    console.warn(`[extract] ${name} failed:`, reason);
+    return { success: false, fatal: false, reason };
+  }
+}
+
 function extractUrls(text: string, re: RegExp): string[] {
   const results: string[] = [];
   let m: RegExpExecArray | null;
@@ -71,6 +126,22 @@ function extractUrls(text: string, re: RegExp): string[] {
       .trim();
     if (raw.startsWith('http') && !results.includes(raw)) results.push(raw);
   }
+  return results;
+}
+
+async function extractHtmlMedia(pageUrl: string, mode: 'hls' | 'dash' | 'generic'): Promise<DetectedMedia[]> {
+  const html = await fetchHtml(pageUrl);
+  const results: DetectedMedia[] = [];
+  const patterns =
+    mode === 'hls' ? [/(https?:\/\/[^"'\\<>\s]+?\.m3u8[^"'\\<>\s]*)/gi]
+    : mode === 'dash' ? [/(https?:\/\/[^"'\\<>\s]+?\.mpd[^"'\\<>\s]*)/gi]
+    : [
+        /(https?:\/\/[^"'\\<>\s]+?\.(?:m3u8|mpd|mp4|m4v|webm|mov)[^"'\\<>\s]*)/gi,
+        /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.com|weibocdn\.com|xhscdn\.com)[^"'\\<>\s]*)/gi,
+      ];
+  patterns.forEach((re) => {
+    extractUrls(html, re).forEach((u) => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.65)));
+  });
   return results;
 }
 
@@ -421,6 +492,135 @@ async function extractXiaohongshu(pageUrl: string): Promise<DetectedMedia[]> {
   } catch { return []; }
 }
 
+// ── NicoNico ──────────────────────────────────────────────────────────────────
+async function extractNicoNico(pageUrl: string): Promise<DetectedMedia[]> {
+  // Tier 1: server-assisted (yt-dlp knows NicoNico's API well)
+  try {
+    const items = await extractViaServer(pageUrl);
+    if (items.length > 0) return items.map(item => ({ ...item, label: item.label ?? 'NicoNico' }));
+  } catch (e) {
+    console.warn('[extractNicoNico] server extractor errored:', String(e).slice(0, 200));
+  }
+
+  // Tier 2: on-page JSON. NicoNico embeds video info in window.__INITIAL_WATCH_DATA__
+  // or a <script type="application/ld+json"> block.
+  try {
+    const html = await fetchHtml(pageUrl, DESKTOP_UA, 'ja,en-US;q=0.9,en;q=0.8');
+    const results: DetectedMedia[] = [];
+
+    // Try window.__INITIAL_WATCH_DATA__ (newer layout)
+    const dataMatch = html.match(/window\.__INITIAL_WATCH_DATA__\s*=\s*(\{[\s\S]+?\});?\s*<\/script>/);
+    if (dataMatch) {
+      try {
+        const json = JSON.stringify(JSON.parse(dataMatch[1]));
+        extractUrls(json, /(https?:\/\/[^"\\]+\.m3u8[^"\\]*)/g)
+          .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'NicoNico')));
+        extractUrls(json, /"contentUrl"\s*:\s*"(https?:\/\/[^"]+)"/g)
+          .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'NicoNico')));
+      } catch {}
+    }
+
+    // Fallback: scan for any HLS/MP4 CDN URLs in page
+    if (results.length === 0) {
+      extractUrls(html, /(https?:\/\/[^"'\\<>\s]*nicovideo\.cdn[^"'\\<>\s]*\.m3u8[^"'\\<>\s]*)/g)
+        .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'NicoNico')));
+    }
+
+    return results;
+  } catch { return []; }
+}
+
+// ── Abema ─────────────────────────────────────────────────────────────────────
+async function extractAbema(pageUrl: string): Promise<DetectedMedia[]> {
+  // Server-first: yt-dlp has an Abema extractor and can handle auth
+  try {
+    const items = await extractViaServer(pageUrl);
+    if (items.length > 0) return items.map(item => ({ ...item, label: item.label ?? 'Abema' }));
+  } catch (e) {
+    console.warn('[extractAbema] server extractor errored:', String(e).slice(0, 200));
+  }
+
+  // On-page HLS scan with Japanese locale
+  try {
+    const html = await fetchHtml(pageUrl, DESKTOP_UA, 'ja,en-US;q=0.9,en;q=0.8');
+    const results: DetectedMedia[] = [];
+
+    // Abema embeds media URLs in JSON-like structures within script tags
+    extractUrls(html, /(https?:\/\/[^"'\\<>\s]*(?:abema(?:video)?\.com|edge\.api\.abema\.io)[^"'\\<>\s]*\.m3u8[^"'\\<>\s]*)/gi)
+      .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'Abema')));
+
+    extractUrls(html, /<meta\s+property\s*=\s*["']og:video["'][^>]+content\s*=\s*["']([^"']+)["']/gi)
+      .filter(u => u.startsWith('http'))
+      .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'Abema')));
+
+    return results;
+  } catch { return []; }
+}
+
+// ── Ameba ─────────────────────────────────────────────────────────────────────
+async function extractAmeba(pageUrl: string): Promise<DetectedMedia[]> {
+  // Server-first
+  try {
+    const items = await extractViaServer(pageUrl);
+    if (items.length > 0) return items.map(item => ({ ...item, label: item.label ?? 'Ameba' }));
+  } catch (e) {
+    console.warn('[extractAmeba] server extractor errored:', String(e).slice(0, 200));
+  }
+
+  // On-page scan with Japanese locale
+  try {
+    const html = await fetchHtml(pageUrl, DESKTOP_UA, 'ja,en-US;q=0.9,en;q=0.8');
+    const results: DetectedMedia[] = [];
+
+    extractUrls(html, /(https?:\/\/[^"'\\<>\s]*ameba(?:cdn|video)?[^"'\\<>\s]*\.(?:m3u8|mp4)[^"'\\<>\s]*)/gi)
+      .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'Ameba')));
+
+    // OG video fallback
+    extractUrls(html, /<meta\s+property\s*=\s*["']og:video(?::url)?["'][^>]+content\s*=\s*["']([^"']+)["']/gi)
+      .filter(u => u.startsWith('http'))
+      .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'Ameba')));
+
+    return results;
+  } catch { return []; }
+}
+
+// ── Generic Japanese site ─────────────────────────────────────────────────────
+/**
+ * Generic fallback for Japanese streaming sites not covered by a dedicated
+ * extractor. Fetches with Accept-Language: ja and scans for HLS/MP4/DASH URLs.
+ */
+async function extractJapaneseGeneric(pageUrl: string): Promise<DetectedMedia[]> {
+  // Server-first
+  try {
+    const items = await extractViaServer(pageUrl);
+    if (items.length > 0) return items;
+  } catch {}
+
+  try {
+    const html = await fetchHtml(pageUrl, DESKTOP_UA, 'ja,en-US;q=0.9,en;q=0.8');
+    const results: DetectedMedia[] = [];
+
+    const patterns: RegExp[] = [
+      /(https?:\/\/[^"'\\<>\s]+?\.m3u8[^"'\\<>\s]*)/gi,
+      /(https?:\/\/[^"'\\<>\s]+?\.mpd[^"'\\<>\s]*)/gi,
+      /(https?:\/\/[^"'\\<>\s]+?\.mp4[^"'\\<>\s]*)/gi,
+    ];
+    patterns.forEach(re => {
+      extractUrls(html, re).forEach(u => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.6)));
+    });
+
+    // OG/twitter card
+    extractUrls(
+      html,
+      /<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream)["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
+    )
+      .filter(u => u.startsWith('http'))
+      .forEach(u => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.55)));
+
+    return results;
+  } catch { return []; }
+}
+
 async function extractOgVideo(pageUrl: string): Promise<DetectedMedia[]> {
   try {
     const html = await fetchHtml(pageUrl);
@@ -447,6 +647,10 @@ const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[
   { re: /(?:bilibili\.com\/video\/[ABab][Vv][A-Za-z0-9]+|m\.bilibili\.com\/video\/[ABab][Vv][A-Za-z0-9]+|b23\.tv\/[A-Za-z0-9]+|bilibili\.tv\/(?:[a-z]{2}\/)?video\/\d+)/, fn: extractBilibili    },
   { re: /(?:weibo\.com\/(?:tv\/show\/|u\/\d+|(?:\d+|0)\/[A-Za-z0-9]+)|m\.weibo\.cn\/(?:status|detail)\/[A-Za-z0-9]+|video\.weibo\.com\/show\?)/, fn: extractWeibo },
   { re: /(?:xiaohongshu\.com\/(?:explore|discovery\/item)\/[\da-f]+|xhslink\.com\/[A-Za-z0-9/?=&._-]+)/i, fn: extractXiaohongshu },
+  // ── Japanese sites ──────────────────────────────────────────────────────────
+  { re: /(?:nicovideo\.jp\/watch\/|nico\.ms\/)[a-zA-Z0-9]+/,                       fn: extractNicoNico    },
+  { re: /abema\.tv\/video\/(?:episode|series)\/[A-Za-z0-9_-]+/,                    fn: extractAbema       },
+  { re: /(?:ameba\.jp\/[^/]+\/entry\/\d+|ameblo\.jp\/[^/]+\/entry-\d+)/,           fn: extractAmeba       },
 ];
 
 /** Returns true if the URL looks like a social-media post page (not a CDN media URL). */
@@ -456,9 +660,50 @@ export function isSocialPageUrl(url: string): boolean {
 
 /**
  * Attempts to extract video URLs from a social-media post page URL.
- * Falls back to scanning OG meta tags if the platform extractor finds nothing.
+ * Every extractor failure is non-fatal; unsupported is only reported by the
+ * caller after this full chain returns no media.
  */
 export async function extractFromSocialUrl(pageUrl: string): Promise<DetectedMedia[]> {
+  if (!/^https?:\/\//i.test(pageUrl)) {
+    console.warn('[extract] invalid URL or unsupported protocol:', pageUrl);
+    return [];
+  }
+  const platform = PLATFORMS.find(p => p.re.test(pageUrl));
+  const japaneseUrl = isJapaneseDomain(pageUrl);
+  const strategies: Array<[string, () => Promise<DetectedMedia[]>]> = [
+    ['yt-dlp extraction', () => extractViaServer(pageUrl)],
+    ['platform-specific extractor', () => platform ? platform.fn(pageUrl) : Promise.resolve([])],
+    // For Japanese URLs without a specific extractor, try the generic Japanese
+    // scraper (Accept-Language: ja + HLS/MP4 scan) before the generic English paths.
+    ...(japaneseUrl && !platform
+      ? [['Japanese generic extractor', () => extractJapaneseGeneric(pageUrl)] as [string, () => Promise<DetectedMedia[]>]]
+      : []),
+    ['WebView/runtime interception', () => Promise.resolve([])],
+    ['HLS manifest detection', () => extractHtmlMedia(pageUrl, 'hls')],
+    ['DASH manifest detection', () => extractHtmlMedia(pageUrl, 'dash')],
+    ['OG/meta tag extraction', () => extractOgVideo(pageUrl)],
+    ['generic media detection', () => extractHtmlMedia(pageUrl, 'generic')],
+    ['browser playback fallback', () => Promise.resolve([])],
+  ];
+
+  const diagnostics: string[] = [];
+  for (let i = 0; i < strategies.length; i += 1) {
+    const [name, fn] = strategies[i];
+    const result = await runExtractor(name, fn);
+    if (result.success && result.media?.length) {
+      console.log(`[extract] extraction success via ${name}`);
+      return result.media;
+    }
+    diagnostics.push(`${name}: ${result.reason ?? 'failed'}`);
+    if (i < strategies.length - 1) {
+      console.log(`[extract] falling back to ${strategies[i + 1][0]}`);
+    }
+  }
+  console.warn('[extract] all strategies failed:', diagnostics.slice(-6).join('; '));
+  return [];
+}
+
+export async function extractFromSocialUrlLegacy(pageUrl: string): Promise<DetectedMedia[]> {
   for (const platform of PLATFORMS) {
     if (platform.re.test(pageUrl)) {
       const items = await platform.fn(pageUrl);

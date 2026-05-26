@@ -10,7 +10,21 @@ export type DownloadStatus =
   | 'failed'
   | 'cancelled';
 
-export type DownloadStrategy = 'hls-segments' | 'direct' | 'dash' | 'vimeo-json' | 'ffmpeg' | 'yt-dlp';
+export type DownloadStrategy = 'hls-segments' | 'direct' | 'dash' | 'vimeo-json' | 'ffmpeg' | 'yt-dlp' | 'server-download';
+
+export interface FormatOption {
+  id: string;
+  label?: string;
+  ext?: string;
+  protocol?: string;
+  width?: number;
+  height?: number;
+  fps?: number;
+  vcodec?: string;
+  acodec?: string;
+  filesize?: number;
+  filesizeApprox?: number;
+}
 
 /** Where the URL was first observed. Ordered from highest to lowest signal strength. */
 export type Provenance =
@@ -48,6 +62,14 @@ export interface DetectedMedia {
   codecs?: string;
   hasAudio?: boolean;
   hasVideo?: boolean;
+  sourcePageUrl?: string;
+  sourceTitle?: string;
+  thumbnailUrl?: string;
+  duration?: number;
+  extractor?: string;
+  formatId?: string;
+  availableFormats?: FormatOption[];
+  forceServerDownload?: boolean;
   /** Exact HTTP headers to replay for all download requests (set by extractors). When present, downloaders must use these verbatim instead of building their own. */
   httpHeaders?: Record<string, string>;
 }
