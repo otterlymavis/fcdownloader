@@ -403,11 +403,14 @@ async function _watchYtdlStreamDownload(downloadId) {
   if (!dl) return;
 
   const isJsonFile = /\.json$/i.test(dl.filename || "");
+  // Also catch cases where Chrome respected the .mp4 filename hint but wrote
+  // the server's JSON error body — any real video file is much larger than 1 KB.
+  const isTinyFile = dl.state === "complete" && typeof dl.fileSize === "number" && dl.fileSize > 0 && dl.fileSize < 1024;
   const interrupted = dl.state === "interrupted";
 
-  if (isJsonFile && dl.state === "complete") {
+  if ((isJsonFile || isTinyFile) && dl.state === "complete") {
     // Chrome saved the server's JSON error body — remove it and tell the user.
-    console.warn("[fcdl] ytdl-stream returned a JSON error file — removing:", dl.filename);
+    console.warn("[fcdl] ytdl-stream returned a JSON/tiny error file — removing:", dl.filename, "size:", dl.fileSize);
     chrome.downloads.removeFile(downloadId, () => {
       chrome.downloads.erase({ id: downloadId }, () => {});
     });

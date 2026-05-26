@@ -25,6 +25,7 @@ import { fetch as expoFetch } from 'expo/fetch';
 import { DetectedMedia } from '../types';
 import { downloadHLS, DownloadOptions } from './hlsDownloader';
 import { downloadDASH } from './dashDownloader';
+import { downloadViaServer } from './serverDownloader';
 import { extractYouTubeStreams } from './ytExtractor';
 import { extractViaServer } from './serverExtractor';
 
@@ -43,9 +44,12 @@ async function streamToDisk(
   signal: AbortSignal | undefined,
   onProgress: DownloadOptions['onProgress'],
 ): Promise<string> {
-  const ext      = url.split('?')[0].split('.').pop()?.slice(0, 4) ?? 'mp4';
+  // Use a regex so URLs like /ytdl-stream (no file extension in path) fall
+  // back to 'mp4' instead of producing a garbage extension from split('.').
+  const extMatch = url.split('?')[0].match(/\.([a-z0-9]{2,5})$/i);
+  const ext      = extMatch ? extMatch[1].toLowerCase() : 'mp4';
   const dir      = `${FileSystem.documentDirectory}downloads/${taskId}/`;
-  const filePath = `${dir}video.${ext.length <= 4 ? ext : 'mp4'}`;
+  const filePath = `${dir}video.${ext}`;
 
   await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
 
@@ -125,6 +129,18 @@ export async function downloadYouTube(
   // muxes via the native MediaMuxerModule.
   if (best.audioTrackUrl) {
     return downloadDASH(best, taskId, opts);
+  }
+
+  // ytdl-stream proxy URL (set by the server extractor when yt-dlp in
+  // skip_download mode hits the SABR bot-check and falls back to a blocking
+  // download proxy).  Must go through downloadViaServer / _downloadYtdlStream
+  // which carries the bearer token and applies the JSON-error guard.
+  // Calling streamToDisk directly on this URL would:
+  //   a) produce a wrong file extension  (url has no .mp4 in the path), and
+  //   b) skip the content-type check, so a JSON error body can be written
+  //      to disk as a "video" file.
+  if (best.forceServerDownload || best.url.includes('/ytdl-stream?')) {
+    return downloadViaServer(best, taskId, opts);
   }
 
   // Direct progressive mp4 (360p itag-18 or anything single-file).

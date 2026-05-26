@@ -63,10 +63,32 @@ export async function downloadViaServer(
   });
 
   if (signal?.aborted) throw new Error('Cancelled');
-  if (!res.ok) throw new Error(`Server download failed (${res.status})`);
+  if (!res.ok) {
+    let detail = `Server download failed (${res.status})`;
+    try {
+      const body = await res.text();
+      const parsed = JSON.parse(body);
+      const msg = parsed?.detail ?? parsed?.error ?? body;
+      if (typeof msg === 'string' && msg.trim()) detail = msg.slice(0, 400);
+    } catch {}
+    throw new Error(detail);
+  }
   if (!res.body) throw new Error('Server download returned an empty body');
 
-  const contentType = res.headers.get('content-type');
+  // Guard: a real media stream is never JSON. Detect a JSON error body that
+  // slipped through (wrong-status proxy response, CDN error, etc.).
+  const contentType = res.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    let detail = `Server returned JSON instead of media (status ${res.status})`;
+    try {
+      const body = await res.text();
+      const parsed = JSON.parse(body);
+      const msg = parsed?.detail ?? parsed?.error ?? body;
+      if (typeof msg === 'string' && msg.trim()) detail = msg.slice(0, 400);
+    } catch {}
+    throw new Error(detail);
+  }
+
   const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
   const ext = guessExt(media, contentType);
   const dir = `${FileSystem.documentDirectory}downloads/${taskId}/`;
@@ -120,10 +142,36 @@ async function _downloadYtdlStream(
   const res = await expoFetch(media.url, { headers: reqHeaders, signal });
 
   if (signal?.aborted) throw new Error('Cancelled');
-  if (!res.ok) throw new Error(`ytdl-stream failed (${res.status})`);
+  if (!res.ok) {
+    // Attempt to pull the server's error detail from the JSON body so the
+    // toast shows something actionable instead of a bare HTTP status.
+    let detail = `ytdl-stream failed (${res.status})`;
+    try {
+      const body = await res.text();
+      const parsed = JSON.parse(body);
+      const msg = parsed?.detail ?? parsed?.error ?? body;
+      if (typeof msg === 'string' && msg.trim()) detail = msg.slice(0, 400);
+    } catch { /* ignore parse errors — fall through to generic message */ }
+    throw new Error(detail);
+  }
+
+  // Guard: detect a JSON error body that slipped through (e.g. expoFetch
+  // treating a non-2xx redirect as ok, or a CDN error page with wrong status).
+  // A real video stream never has Content-Type: application/json.
+  const contentType = res.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    let detail = `Server returned JSON instead of video (status ${res.status})`;
+    try {
+      const body = await res.text();
+      const parsed = JSON.parse(body);
+      const msg = parsed?.detail ?? parsed?.error ?? body;
+      if (typeof msg === 'string' && msg.trim()) detail = msg.slice(0, 400);
+    } catch {}
+    throw new Error(detail);
+  }
+
   if (!res.body) throw new Error('ytdl-stream returned an empty body');
 
-  const contentType = res.headers.get('content-type');
   const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
   const ext = guessExt(media, contentType);
   const dir = `${FileSystem.documentDirectory}downloads/${taskId}/`;
@@ -152,6 +200,11 @@ async function _downloadYtdlStream(
   }
 
   if (file.size === 0) throw new Error('ytdl-stream produced an empty file');
+  // A real video file is always larger than 1 KB. A JSON error body that was
+  // accidentally written to disk (e.g. due to a network-layer quirk) is tiny.
+  if (file.size < 1024) {
+    throw new Error(`ytdl-stream produced a suspiciously small file (${file.size} bytes) — the download may have failed on the server`);
+  }
   onStatus?.('assembling');
   onProgress?.(1, 1);
   return filePath;
