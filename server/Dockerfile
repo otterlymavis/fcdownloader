@@ -11,7 +11,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py .
+# Copy all server modules (main.py + service layers)
+COPY main.py config.py models.py registry.py classifier.py auth.py \
+     telemetry.py extractors.py strategies.py supervisor.py utils.py ./
 
 ENV PORT=8080 \
     PYTHONIOENCODING=utf-8 \
