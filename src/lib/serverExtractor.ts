@@ -37,7 +37,9 @@ import { extractSessionCookies } from './cookieManager';
 
 const STORAGE_KEY = '@fcdownloader/server_extractor_url';
 const TOKEN_STORAGE_KEY = '@fcdownloader/server_extractor_token';
-const REQUEST_TIMEOUT_MS = 15_000;
+// YouTube via ytdl-stream: server runs 1–2 yt-dlp calls (extract + metadata)
+// before returning. Each call takes 5–15 s from a datacenter IP. Allow 45 s.
+const REQUEST_TIMEOUT_MS = 45_000;
 
 // Compile-time defaults from .env.local (EXPO_PUBLIC_EXTRACTOR_URL / TOKEN).
 // AsyncStorage values, when present, override these — letting power users
@@ -208,6 +210,11 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
   }
 
   if ((r.kind === 'direct' || r.kind === 'image' || r.kind === 'audio') && r.url) {
+    // When the server's ytdl-stream strategy wins it returns a /ytdl-stream
+    // proxy URL as the download URL. The mobile app must download that URL
+    // directly — not re-route through /download (which ignores item.url and
+    // re-extracts the page, throwing the proxy URL away).
+    const isYtdlStream = r.url.includes('/ytdl-stream?');
     return [{
       ...baseItem,
       url: r.url,
@@ -216,8 +223,10 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
       mediaKind: directMediaKind(r),
       hasAudio: true,
       hasVideo: true,
-      label: r.label,
-      forceServerDownload: false,
+      label: r.label ?? (isYtdlStream ? 'Server download' : undefined),
+      // forceServerDownload=true → pickStrategy returns 'server-download' →
+      // downloadViaServer detects the ytdl-stream URL and downloads directly.
+      forceServerDownload: isYtdlStream,
     }];
   }
 

@@ -36,6 +36,14 @@ export async function downloadViaServer(
 
   onStatus?.('fetching_manifest');
 
+  // ytdl-stream proxy URL: the server already did the extraction and returned
+  // a /ytdl-stream?page_url=...&cookies=... URL. Download it directly using
+  // the streaming download path — do NOT re-route through /download, which
+  // would discard this URL and re-extract (double download, wrong path).
+  if (media.url.includes('/ytdl-stream?')) {
+    return _downloadYtdlStream(media, taskId, opts);
+  }
+
   const token = await getServerExtractorToken();
   const cookies = await extractSessionCookies(media.pageUrl).catch(() => '');
   const headers: Record<string, string> = { 'Content-Type': 'application/json; charset=utf-8' };
@@ -88,6 +96,62 @@ export async function downloadViaServer(
   }
 
   if (file.size === 0) throw new Error('Server download produced an empty file');
+  onStatus?.('assembling');
+  onProgress?.(1, 1);
+  return filePath;
+}
+
+// Download a /ytdl-stream?... URL directly. The server ran yt-dlp in download
+// mode, blocks until the file is ready, then streams it back with Content-Length.
+// Cookies are already baked into the URL query string by the server; we still
+// send the bearer token in the Authorization header for endpoint protection.
+async function _downloadYtdlStream(
+  media: DetectedMedia,
+  taskId: string,
+  opts: DownloadOptions,
+): Promise<string> {
+  const { signal, onStatus, onProgress } = opts;
+  onStatus?.('downloading');
+
+  const token = await getServerExtractorToken();
+  const reqHeaders: Record<string, string> = {};
+  if (token) reqHeaders.Authorization = `Bearer ${token}`;
+
+  const res = await expoFetch(media.url, { headers: reqHeaders, signal });
+
+  if (signal?.aborted) throw new Error('Cancelled');
+  if (!res.ok) throw new Error(`ytdl-stream failed (${res.status})`);
+  if (!res.body) throw new Error('ytdl-stream returned an empty body');
+
+  const contentType = res.headers.get('content-type');
+  const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
+  const ext = guessExt(media, contentType);
+  const dir = `${FileSystem.documentDirectory}downloads/${taskId}/`;
+  const filePath = `${dir}${fileStem(media)}.${ext}`;
+  await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+
+  onProgress?.(0, contentLength || 1);
+
+  const file = new File(filePath);
+  file.create({ intermediates: true, overwrite: true });
+  const handle = file.open();
+
+  try {
+    const reader = res.body.getReader();
+    let written = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (signal?.aborted) throw new Error('Cancelled');
+      handle.writeBytes(value);
+      written += value.byteLength;
+      onProgress?.(written, contentLength || Math.max(written, 1));
+    }
+  } finally {
+    handle.close();
+  }
+
+  if (file.size === 0) throw new Error('ytdl-stream produced an empty file');
   onStatus?.('assembling');
   onProgress?.(1, 1);
   return filePath;

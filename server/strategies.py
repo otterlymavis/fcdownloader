@@ -266,29 +266,28 @@ def _strategy_ytdl_stream_url(
     if not registry.is_youtube(page_url):
         return _result(name, False, reason="not a YouTube URL — ytdl-stream not needed")
 
-    # Try to fetch basic metadata for the response preview (title, thumbnail).
-    # Fails silently when unauthenticated — the stream URL is still valid.
+    # Fetch lightweight metadata (title, thumbnail) for the UI preview.
+    # Format 18 (360p muxed mp4) is a non-SABR/non-adaptive format that
+    # yt-dlp can resolve even from datacenter IPs — one attempt, fail silently.
     meta: dict[str, Any] = {}
-    for fmt in ("18", "b[height<=360]", "b[ext=mp4]"):
-        try:
-            opts = {
-                **ydl_opts,
-                "format": fmt,
-                "quiet": True,
-                "no_warnings": True,
-                "skip_download": True,
-                "extractor_args": {
-                    **(ydl_opts.get("extractor_args") or {}),
-                    "youtube": {"player_client": ["ios", "web_safari"]},
-                },
-            }
-            with YoutubeDL(opts) as ydl:
-                result = ydl.extract_info(page_url, download=False)
-            if result and result.get("title"):
-                meta = result
-                break
-        except Exception:
-            continue
+    try:
+        opts = {
+            **ydl_opts,
+            "format": "18/b[height<=360][ext=mp4]/b[ext=mp4]",
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "extractor_args": {
+                **(ydl_opts.get("extractor_args") or {}),
+                "youtube": {"player_client": ["ios", "web_safari"]},
+            },
+        }
+        with YoutubeDL(opts) as ydl:
+            result = ydl.extract_info(page_url, download=False)
+        if result and result.get("title"):
+            meta = result
+    except Exception:
+        pass
 
     stream_url = (
         f"{SERVER_BASE_URL}/ytdl-stream"
@@ -525,20 +524,17 @@ def run_extraction(
         # HTML page never embeds raw m3u8/mpd/mp4 URLs. Omitting them saves ~4 slow
         # HTTP fetches per request.
         #
-        # _strategy_ydl and _strategy_ydl_client both include a YouTube-HLS guard:
-        # if skip_download=True resolves to an m3u8 (SABR bot-check fallback), they
-        # return failure so we fall through to ytdl-stream.
+        # _strategy_ydl includes all five player clients in one call (ios,
+        # web_safari, web_creator, mweb, tv — see build_ydl_opts). Individual
+        # per-client fallbacks would add 5 extra sequential yt-dlp calls that
+        # never improve on the combined attempt; skip them.
         #
-        # ytdl-stream runs yt-dlp in actual download mode which handles SABR
-        # internally (downloads + muxes on the server, then streams the MP4).
+        # The HLS guard in _strategy_ydl treats m3u8 results as failures so we
+        # fall directly to ytdl-stream, which runs yt-dlp in actual download
+        # mode and handles SABR internally.
         strategies: list[tuple[str, Callable[[], dict[str, Any]]]] = [
-            ("yt-dlp",               lambda: _strategy_ydl(page_url, ydl_opts, False)),
-            ("yt-dlp/ios",           lambda: _strategy_ydl_client(page_url, ydl_opts, "ios")),
-            ("yt-dlp/mweb",          lambda: _strategy_ydl_client(page_url, ydl_opts, "mweb")),
-            ("yt-dlp/tv",            lambda: _strategy_ydl_client(page_url, ydl_opts, "tv")),
-            ("yt-dlp/web_safari",    lambda: _strategy_ydl_client(page_url, ydl_opts, "web_safari")),
-            ("yt-dlp/web_creator",   lambda: _strategy_ydl_client(page_url, ydl_opts, "web_creator")),
-            ("ytdl-stream",          lambda: _strategy_ytdl_stream_url(page_url, ydl_opts, cookies)),
+            ("yt-dlp",    lambda: _strategy_ydl(page_url, ydl_opts, False)),
+            ("ytdl-stream", lambda: _strategy_ytdl_stream_url(page_url, ydl_opts, cookies)),
             ("browser playback fallback", lambda: _strategy_skip(
                 "browser playback fallback",
                 "browser playback fallback must run in the app WebView",
