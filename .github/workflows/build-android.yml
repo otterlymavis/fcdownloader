@@ -52,9 +52,20 @@ jobs:
           java -version
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: ''   # Gradle will pull just what build.gradle requests
+        # ubuntu-24.04 ships Android SDK at $ANDROID_HOME with sdkmanager pre-installed.
+        # Avoid android-actions/setup-android (third-party action) — its tarball is
+        # unavailable on codeload.github.com for fresh uncached runners during the
+        # Node.js 20→24 GitHub Actions migration. Accept licenses inline instead.
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -f "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+            echo "SDK licenses accepted"
+          else
+            echo "::warning::sdkmanager not found at $SDKMANAGER — Gradle will handle SDK resolution"
+          fi
 
       - name: Cache Gradle
         uses: actions/cache@v4
