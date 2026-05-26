@@ -958,73 +958,23 @@ _YTDL_STREAM_FORMAT = (
 _SERVER_BASE_URL = os.environ.get("SERVER_URL", "https://fcdownloader-extractor.fly.dev")
 
 
-def _ytdl_stream_generator(page_url: str) -> Iterator[bytes]:
-    """Download via yt-dlp to a temp file, then stream the result.
-
-    The --output - (stdout pipe) approach requires FFmpeg to finish merging
-    before any bytes flow, causing long client timeouts. Downloading to a temp
-    file first lets us report errors cleanly and start streaming as soon as
-    the file is ready.
-
-    Uses the ios player_client which returns pre-muxed MP4 formats (no SABR),
-    so format-18 (360p) can download in seconds even on a slow connection.
-    """
-    with tempfile.TemporaryDirectory(prefix="ytdl_") as tmpdir:
-        out_tpl = os.path.join(tmpdir, "video.%(ext)s")
-        cmd = [
-            "yt-dlp",
-            "--extractor-args", "youtube:player_client=ios,web_safari,mweb",
-            "--format", _YTDL_STREAM_FORMAT,
-            "--merge-output-format", "mp4",
-            "--output", out_tpl,
-            "--no-playlist",
-            "--max-filesize", "800M",
-            page_url,
-        ]
-        print(f"[ytdl-stream] downloading: {page_url}")
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            env=UTF8_ENV,
-            timeout=300,   # 5 min ceiling — 720p/360p should always finish in time
-        )
-        stderr_txt = result.stderr.decode("utf-8", errors="replace").strip()
-        if result.returncode != 0:
-            print(f"[ytdl-stream] yt-dlp failed ({result.returncode}): {stderr_txt[:600]}")
-            return
-        if stderr_txt:
-            # Log warnings even on success (e.g. format-selection notices)
-            print(f"[ytdl-stream] yt-dlp stderr: {stderr_txt[:400]}")
-
-        files = [
-            f for f in os.listdir(tmpdir)
-            if os.path.isfile(os.path.join(tmpdir, f))
-        ]
-        if not files:
-            print("[ytdl-stream] no output file found in tmpdir")
-            return
-
-        filepath = os.path.join(tmpdir, files[0])
-        size = os.path.getsize(filepath)
-        print(f"[ytdl-stream] streaming {files[0]} ({size:,} bytes)")
-
-        with open(filepath, "rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                yield chunk
-
-        print("[ytdl-stream] done streaming")
+# _ytdl_stream_generator removed — download logic is now in the route handler
+# so we can return proper error codes before any body bytes are sent.
 
 
-def _try_ytdl_stream_url(page_url: str, ydl_opts: dict[str, Any]) -> dict[str, Any]:
+def _try_ytdl_stream_url(
+    page_url: str,
+    ydl_opts: dict[str, Any],
+    cookies: str | None = None,
+) -> dict[str, Any]:
     """Last-resort strategy: return a server-side stream URL.
 
     For YouTube SABR videos, skip_download=True cannot resolve format URLs
-    because SABR generates them dynamically. The /ytdl-stream endpoint runs
-    yt-dlp in actual download mode (which handles SABR natively) and pipes
-    the result to the client. This strategy builds that proxy URL.
+    because SABR generates them dynamically, and YouTube requires session
+    cookies to authenticate from Fly.io datacenter IPs.
+
+    The /ytdl-stream endpoint runs yt-dlp in actual download mode with the
+    user's cookies and streams the result to the client.
 
     Only used for YouTube — other sites work fine with skip_download.
     """
@@ -1032,10 +982,10 @@ def _try_ytdl_stream_url(page_url: str, ydl_opts: dict[str, Any]) -> dict[str, A
     if not any(x in page_url for x in ("youtube.com/", "youtu.be/", "youtube-nocookie.com/")):
         return _extractor_result(strategy, False, reason="not a YouTube URL — ytdl-stream not needed")
 
-    # Try to pull basic metadata (title/thumbnail) without format selection.
+    # Try to pull basic metadata (title/thumbnail) with user's cookies.
     # Format 18 is YouTube's legacy pre-muxed 360p MP4 that predates SABR.
-    # Use the ios client which returns pre-muxed formats with static URLs.
-    # If bot-walled completely, this will fail silently and we return minimal info.
+    # This succeeds when the user has valid YouTube session cookies; silently
+    # fails when unauthenticated (bot-check blocks the request).
     meta: dict[str, Any] = {}
     for fmt in ("18", "b[height<=360]", "b[ext=mp4]"):
         try:
@@ -1058,11 +1008,18 @@ def _try_ytdl_stream_url(page_url: str, ydl_opts: dict[str, Any]) -> dict[str, A
         except Exception:
             continue
 
+    # Build the stream URL, including cookies so the download endpoint can
+    # authenticate with YouTube. Cookies are already shared with this server
+    # (the client sent them in the /extract request) so URL-encoding them is
+    # no worse than what the client already trusts us with.
     stream_url = (
         f"{_SERVER_BASE_URL}/ytdl-stream"
         f"?page_url={urllib.parse.quote(page_url, safe='')}"
     )
-    print(f"[extract] ytdl-stream fallback: {stream_url} title={meta.get('title')!r}")
+    if cookies:
+        stream_url += f"&cookies={urllib.parse.quote(cookies, safe='')}"
+
+    print(f"[extract] ytdl-stream fallback: cookies={'yes' if cookies else 'no'} title={meta.get('title')!r}")
 
     return _extractor_result(strategy, True, media={
         "url":         stream_url,
@@ -1074,7 +1031,7 @@ def _try_ytdl_stream_url(page_url: str, ydl_opts: dict[str, Any]) -> dict[str, A
         "webpage_url": page_url,
         "protocol":    "https",
         "extractor":   "youtube",
-        "http_headers": {},   # Server endpoint needs no auth headers from client
+        "http_headers": {},   # No extra headers — cookies are in the URL
     })
 
 
@@ -1394,7 +1351,8 @@ def _run_ydl(
             ("generic yt-dlp extractor", lambda: _try_ydl(page_url, ydl_opts, force_generic=True)),
             # Last resort for YouTube SABR: server streams the video via yt-dlp
             # download mode (which CAN handle SABR) and returns a proxy URL.
-            ("ytdl-stream",           lambda: _try_ytdl_stream_url(page_url, ydl_opts)),
+            # Pass cookies so the /ytdl-stream endpoint can authenticate.
+            ("ytdl-stream",           lambda: _try_ytdl_stream_url(page_url, ydl_opts, cookies=cookies)),
             ("browser playback fallback", lambda: _unsupported_server_strategy("browser playback fallback", "browser playback fallback must run in the app WebView")),
         ]
 
@@ -1987,22 +1945,115 @@ def download_post(
 def ytdl_stream_endpoint(
     request: Request,
     page_url: str = Query(..., description="YouTube page URL to stream"),
+    cookies: str | None = Query(None, description="Optional YouTube session cookies (Cookie header value)"),
 ) -> StreamingResponse:
+    """Download a YouTube video via yt-dlp and stream it to the client.
+
+    The download blocks until yt-dlp finishes, then the file is streamed.
+    If YouTube bot-detection fires (no cookies), returns 422 with a hint.
+    If cookies are provided they are written to a temp cookiefile so yt-dlp
+    can authenticate the session and bypass the bot check.
+    """
     page_url = _normalize_url(page_url)
     if not page_url:
         raise HTTPException(400, "page_url is required")
     if not any(x in page_url for x in ("youtube.com/", "youtu.be/", "youtube-nocookie.com/")):
         raise HTTPException(400, "ytdl-stream only supports YouTube URLs")
 
-    print(f"[ytdl-stream] starting download: {page_url}")
-    return StreamingResponse(
-        _ytdl_stream_generator(page_url),
-        media_type="video/mp4",
-        headers={
-            "Content-Disposition": 'attachment; filename="youtube.mp4"',
-            "Cache-Control": "no-cache, no-store",
-        },
-    )
+    cookies = _safe_text(cookies) if cookies else None
+    tmpdir = tempfile.mkdtemp(prefix="ytdl_")
+
+    try:
+        out_tpl = os.path.join(tmpdir, "video.%(ext)s")
+        cmd = [
+            "yt-dlp",
+            "--extractor-args", "youtube:player_client=ios,web_safari,mweb",
+            "--format", _YTDL_STREAM_FORMAT,
+            "--merge-output-format", "mp4",
+            "--output", out_tpl,
+            "--no-playlist",
+            "--max-filesize", "800M",
+        ]
+        if cookies:
+            cookie_file = _write_user_cookies_file(cookies, page_url)
+            if cookie_file:
+                cmd += ["--cookies", cookie_file]
+        cmd.append(page_url)
+
+        print(f"[ytdl-stream] downloading: {page_url} (cookies={'yes' if cookies else 'no'})")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            env=UTF8_ENV,
+            timeout=300,
+        )
+        stderr_txt = result.stderr.decode("utf-8", errors="replace").strip()
+
+        if result.returncode != 0:
+            print(f"[ytdl-stream] yt-dlp failed ({result.returncode}): {stderr_txt[:600]}")
+            import shutil as _shutil
+            _shutil.rmtree(tmpdir, ignore_errors=True)
+
+            # Give a helpful message for the bot-detection case
+            if any(k in stderr_txt for k in (
+                "Sign in to confirm", "bot", "not a bot",
+                "cookies", "authentication required",
+            )):
+                raise HTTPException(
+                    422,
+                    "YouTube requires your session cookies to download from a server. "
+                    "Open the video in your browser, use the FCDownload bookmarklet or "
+                    "extension to capture your session, and try again.",
+                )
+            raise HTTPException(500, f"YouTube download failed: {stderr_txt[:400] or 'unknown error'}")
+
+        if stderr_txt:
+            print(f"[ytdl-stream] yt-dlp warnings: {stderr_txt[:400]}")
+
+        files = [f for f in os.listdir(tmpdir) if os.path.isfile(os.path.join(tmpdir, f))]
+        if not files:
+            import shutil as _shutil
+            _shutil.rmtree(tmpdir, ignore_errors=True)
+            raise HTTPException(500, "yt-dlp produced no output file")
+
+        filepath = os.path.join(tmpdir, files[0])
+        filesize = os.path.getsize(filepath)
+        filename = files[0]
+        print(f"[ytdl-stream] streaming {filename} ({filesize:,} bytes)")
+
+        def _stream_and_cleanup() -> Iterator[bytes]:
+            try:
+                with open(filepath, "rb") as f:
+                    while True:
+                        chunk = f.read(65536)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                import shutil as _shutil
+                _shutil.rmtree(tmpdir, ignore_errors=True)
+                print("[ytdl-stream] done, temp cleaned up")
+
+        return StreamingResponse(
+            _stream_and_cleanup(),
+            media_type="video/mp4",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(filesize),
+                "Cache-Control": "no-cache, no-store",
+            },
+        )
+
+    except HTTPException:
+        raise
+    except subprocess.TimeoutExpired:
+        import shutil as _shutil
+        _shutil.rmtree(tmpdir, ignore_errors=True)
+        raise HTTPException(504, "YouTube download timed out (5 min limit)")
+    except Exception as e:
+        import shutil as _shutil
+        _shutil.rmtree(tmpdir, ignore_errors=True)
+        raise HTTPException(500, f"ytdl-stream error: {str(e)[:200]}")
 
 
 # ── /playlist — return flat item list for a playlist URL ─────────────────────
