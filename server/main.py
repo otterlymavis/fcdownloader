@@ -204,26 +204,14 @@ CACHE_MAX = int(os.environ.get("CACHE_MAX", "2000")) # hard cap on entries
 # accept any codec/container so we don't fail entire videos when YouTube only
 # serves vp9/opus for a particular region+client combination.
 FORMAT_SPEC = (
-    # ── Non-HLS tiers (preferred) ─────────────────────────────────────────────
-    # HLS manifests from yt-dlp carry per-segment auth that FFmpeg cannot
-    # replicate server-side (YouTube's CDN 403s on every segment → 0-byte file).
-    # Exclude m3u8/m3u8_native protocols in every tier; only fall back to HLS
-    # at the very end when the site literally has no direct/DASH formats.
-    #
-    # Ideal — h264/avc1 video + m4a/aac audio (MediaMuxer-compatible), no HLS
-    "bv*[height<=1080][vcodec^=avc1][ext=mp4][protocol!=m3u8_native][protocol!=m3u8]"
-    "+ba[ext=m4a][protocol!=m3u8_native][protocol!=m3u8]/"
-    "bv*[height<=1080][ext=mp4][protocol!=m3u8_native][protocol!=m3u8]"
-    "+ba[ext=m4a][protocol!=m3u8_native][protocol!=m3u8]/"
-    # Any non-HLS 1080p paired (vp9+opus, etc.)
-    "bv*[height<=1080][protocol!=m3u8_native][protocol!=m3u8]"
-    "+ba[protocol!=m3u8_native][protocol!=m3u8]/"
-    # Pre-muxed non-HLS single file
-    "b[ext=mp4][height<=1080][protocol!=m3u8_native][protocol!=m3u8]/"
-    "b[height<=1080][protocol!=m3u8_native][protocol!=m3u8]/"
-    # ── HLS last resort — only when the site has no direct/DASH formats at all
-    #    (live streams, some regional TV sites). FFmpeg handles these when segment
-    #    URLs are self-authenticating (token in URL, not in headers).
+    # Ideal — h264/avc1 video + m4a/aac audio (MediaMuxer-compatible)
+    "bv*[height<=1080][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/"
+    "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/"
+    # Any 1080p video + best audio (might need re-encode if vp9/opus on Android)
+    "bv*[height<=1080]+ba/"
+    # Any pre-muxed file (single download, no mux step at all)
+    "b[ext=mp4][height<=1080]/"
+    "b[height<=1080]/"
     "b"
 )
 
