@@ -289,6 +289,11 @@ class ExtractRequest(BaseModel):
     referer: str | None = None
     # Optional raw Cookie header for logged-in pages. Do not send this in a URL.
     cookies: str | None = None
+    # Optional HTTP proxy (e.g. "socks5://127.0.0.1:1080" or "http://proxy:8080").
+    proxy: str | None = None
+    # Include subtitle URLs in the response (does not embed — client downloads separately).
+    subtitles: bool = False
+    subLangs: str = "en"
 
 
 class DownloadRequest(BaseModel):
@@ -296,6 +301,24 @@ class DownloadRequest(BaseModel):
     referer: str | None = None
     cookies: str | None = None
     formatId: str | None = None
+    # Audio-only extraction: returns best audio (m4a/mp3) instead of video.
+    audioOnly: bool = False
+    # Download and embed subtitles (requires FFmpeg on server).
+    subtitles: bool = False
+    subLangs: str = "en"
+    # Embed chapter markers into the output file via FFmpeg.
+    embedChapters: bool = False
+    # Parallel fragment download count for HLS/DASH (yt-dlp --concurrent-fragments).
+    concurrentFragments: int = 1
+    # Optional HTTP proxy forwarded to yt-dlp.
+    proxy: str | None = None
+
+
+class PlaylistRequest(BaseModel):
+    pageUrl: str
+    referer: str | None = None
+    cookies: str | None = None
+    proxy: str | None = None
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -885,6 +908,37 @@ def _try_ydl(page_url: str, ydl_opts: dict[str, Any], force_generic: bool) -> di
         return _extractor_result(strategy, False, reason=msg or "yt-dlp failed")
 
 
+def _try_ydl_client(page_url: str, ydl_opts: dict[str, Any], client: str) -> dict[str, Any]:
+    """Re-try yt-dlp with a single specific YouTube player_client.
+
+    Used as individual fallback strategies after the multi-client primary
+    attempt fails — so that each client gets its own chance in our pipeline
+    rather than stopping at whichever client yt-dlp internally gave up on.
+    For non-YouTube URLs the extractor_args override is harmless (ignored).
+    """
+    strategy = f"yt-dlp/{client}"
+    existing_args = ydl_opts.get("extractor_args") or {}
+    opts = {
+        **ydl_opts,
+        "extractor_args": {
+            **existing_args,
+            "youtube": {
+                **(existing_args.get("youtube") or {}),
+                "player_client": [client],
+            },
+        },
+    }
+    try:
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(page_url, download=False)
+        if not info:
+            return _extractor_result(strategy, False, reason="yt-dlp returned no info")
+        return _extractor_result(strategy, True, media=info)
+    except Exception as e:  # noqa: BLE001
+        msg = _safe_text(e)[:400]
+        return _extractor_result(strategy, False, reason=msg or "yt-dlp failed")
+
+
 def _try_platform_extractors(page_url: str, cookies: str | None) -> dict[str, Any]:
     try:
         if any(host in page_url for host in ("weibo.com", "weibo.cn", "video.weibo.com")):
@@ -1028,6 +1082,13 @@ def _run_ydl(
     page_url: str,
     referer: str | None = None,
     cookies: str | None = None,
+    *,
+    audio_only: bool = False,
+    subtitles: bool = False,
+    sub_langs: str = "en",
+    embed_chapters: bool = False,
+    concurrent_fragments: int = 1,
+    proxy: str | None = None,
 ) -> dict[str, Any]:
     page_url = _normalize_url(page_url)
     referer = _normalize_url(referer) if referer else None
@@ -1120,11 +1181,24 @@ def _run_ydl(
     ydl_opts: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
-        "format": FORMAT_SPEC,
+        "format": (
+            # Audio-only: best m4a first (most compatible), then any audio
+            "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio"
+            if audio_only else FORMAT_SPEC
+        ),
         "skip_download": True,
         "outtmpl": "/tmp/%(id)s.%(ext)s",
         "extractor_args": extractor_args,
     }
+    if concurrent_fragments > 1:
+        ydl_opts["concurrent_fragment_downloads"] = concurrent_fragments
+    if proxy:
+        ydl_opts["proxy"] = proxy
+    if subtitles:
+        ydl_opts["writesubtitles"] = True
+        ydl_opts["writeautomaticsub"] = True
+        ydl_opts["subtitleslangs"] = [s.strip() for s in sub_langs.split(",") if s.strip()] or ["en"]
+        ydl_opts["subtitlesformat"] = "srt"
     # Cookie sourcing priority:
     #  1. User-supplied `cookies` from the extension/mobile (their own logged-in
     #     session) — write to a per-request temp file so yt-dlp's cookiejar gets
@@ -1147,7 +1221,25 @@ def _run_ydl(
         ydl_opts["http_headers"] = _safe_headers(http_headers)
     try:
         diagnostics: list[dict[str, Any]] = []
-        strategies = [
+        # Per-client YouTube fallbacks: injected AFTER the HTML detectors so
+        # each YouTube player_client gets its own independent yt-dlp attempt.
+        # If the primary multi-client call stops internally on the first SABR
+        # error, each client here still gets a clean shot. Only added for
+        # YouTube URLs to avoid 4× overhead on every other site.
+        is_youtube = any(
+            x in page_url
+            for x in ("youtube.com/", "youtu.be/", "youtube-nocookie.com/")
+        )
+        yt_client_fallbacks: list[tuple[str, Any]] = (
+            [
+                ("yt-dlp/mweb",        lambda: _try_ydl_client(page_url, ydl_opts, "mweb")),
+                ("yt-dlp/tv",          lambda: _try_ydl_client(page_url, ydl_opts, "tv")),
+                ("yt-dlp/web_safari",  lambda: _try_ydl_client(page_url, ydl_opts, "web_safari")),
+                ("yt-dlp/web_creator", lambda: _try_ydl_client(page_url, ydl_opts, "web_creator")),
+            ]
+            if is_youtube else []
+        )
+        strategies: list[tuple[str, Any]] = [
             ("yt-dlp", lambda: _try_ydl(page_url, ydl_opts, force_generic=False)),
             ("platform-specific extractor", lambda: _try_platform_extractors(page_url, cookies)),
             ("WebView/runtime interception", lambda: _unsupported_server_strategy("WebView/runtime interception", "browser runtime is client-side only")),
@@ -1155,6 +1247,7 @@ def _run_ydl(
             ("DASH manifest detector", lambda: _try_html_media_detector(page_url, http_headers, cookies, "dash")),
             ("OG/meta tag extractor", lambda: _try_html_media_detector(page_url, http_headers, cookies, "og")),
             ("generic media detector", lambda: _try_html_media_detector(page_url, http_headers, cookies, "generic")),
+            *yt_client_fallbacks,
             ("generic yt-dlp extractor", lambda: _try_ydl(page_url, ydl_opts, force_generic=True)),
             ("browser playback fallback", lambda: _unsupported_server_strategy("browser playback fallback", "browser playback fallback must run in the app WebView")),
         ]
@@ -1197,10 +1290,22 @@ def _run_ydl_with_format(
     referer: str | None = None,
     cookies: str | None = None,
     format_id: str | None = None,
+    *,
+    audio_only: bool = False,
+    subtitles: bool = False,
+    sub_langs: str = "en",
+    embed_chapters: bool = False,
+    concurrent_fragments: int = 1,
+    proxy: str | None = None,
 ) -> dict[str, Any]:
     selected = _safe_text(format_id).strip()
     if not selected:
-        return _run_ydl(page_url, referer=referer, cookies=cookies)
+        return _run_ydl(
+            page_url, referer=referer, cookies=cookies,
+            audio_only=audio_only, subtitles=subtitles, sub_langs=sub_langs,
+            embed_chapters=embed_chapters, concurrent_fragments=concurrent_fragments,
+            proxy=proxy,
+        )
 
     page_url = _normalize_url(page_url)
     referer = _normalize_url(referer) if referer else None
@@ -1212,6 +1317,10 @@ def _run_ydl_with_format(
         "skip_download": True,
         "outtmpl": "/tmp/%(id)s.%(ext)s",
     }
+    if concurrent_fragments > 1:
+        ydl_opts["concurrent_fragment_downloads"] = concurrent_fragments
+    if proxy:
+        ydl_opts["proxy"] = proxy
     http_headers: dict[str, str] = {}
     if referer:
         http_headers["Referer"] = referer
@@ -1254,7 +1363,10 @@ def extract(
     if (cached := _cache_get(cache_key)) is not None:
         return cached
 
-    info = _run_ydl(req.pageUrl, referer=req.referer, cookies=req.cookies)
+    info = _run_ydl(
+        req.pageUrl, referer=req.referer, cookies=req.cookies,
+        subtitles=req.subtitles, sub_langs=req.subLangs, proxy=req.proxy,
+    )
 
     # Instagram carousels / Reddit galleries / Threads carousels come back as
     # yt-dlp playlists. Return them as a gallery so the client can offer
@@ -1272,6 +1384,14 @@ def extract(
     response["title"]     = info.get("title")
     response["thumbnail"] = info.get("thumbnail")
     response["duration"]  = info.get("duration")
+    # Subtitle track URLs — only populated when req.subtitles=True.
+    # Each value is a dict of lang → list of {url, ext} objects.
+    if req.subtitles:
+        subs = info.get("subtitles") or {}
+        auto = info.get("automatic_captions") or {}
+        if subs or auto:
+            response["subtitles"] = subs
+            response["automaticCaptions"] = auto
 
     if response.get("kind") == "paired":
         rf = info.get("requested_formats", [{}, {}])
@@ -1301,6 +1421,16 @@ def extract(
 
 
 # ── /download — server-muxed mp4 streamed to the client ─────────────────────
+
+
+def _safe_filename_audio(title: str | None, video_id: str, ext: str = "m4a") -> str:
+    """Like _safe_filename but uses the given audio extension."""
+    base = unicodedata.normalize("NFC", _safe_text(title or video_id))
+    s = re.sub(r'[<>:"/\\|?*\x00-\x1F\x7F]+', "", base, flags=re.UNICODE)
+    s = re.sub(r"\s+", " ", s).strip(" .")
+    if not s:
+        s = _safe_ascii_filename(video_id, "download")
+    return f"{s[:160]}.{ext}"
 
 
 def _safe_filename(title: str | None, video_id: str) -> str:
@@ -1608,11 +1738,16 @@ def download(
     url: str = Query(..., description="Video page or player URL"),
     referer: str | None = Query(None, description="Optional Referer for domain-restricted embeds (e.g. AmusePlus → Vimeo)"),
     cookies: str | None = Query(None, description="Optional Cookie header for logged-in embeds"),
+    audioOnly: bool = Query(False, description="Extract audio only (best m4a/mp3)"),
+    proxy: str | None = Query(None, description="HTTP/SOCKS proxy for yt-dlp"),
 ) -> StreamingResponse:
-    info = _run_ydl(url, referer=referer, cookies=cookies)
+    info = _run_ydl(url, referer=referer, cookies=cookies, audio_only=audioOnly, proxy=proxy)
     response = _to_response(info)
     video_id = info.get("id") or _cache_key(url)
-    filename = _safe_filename(info.get("title"), video_id)
+    filename = (
+        _safe_filename_audio(info.get("title"), video_id)
+        if audioOnly else _safe_filename(info.get("title"), video_id)
+    )
 
     headers = {
         "Content-Disposition": _content_disposition(filename, video_id),
@@ -1644,10 +1779,18 @@ def download_post(
     request: Request,
     req: DownloadRequest,
 ) -> StreamingResponse:
-    info = _run_ydl_with_format(req.pageUrl, referer=req.referer, cookies=req.cookies, format_id=req.formatId)
+    info = _run_ydl_with_format(
+        req.pageUrl, referer=req.referer, cookies=req.cookies, format_id=req.formatId,
+        audio_only=req.audioOnly, subtitles=req.subtitles, sub_langs=req.subLangs,
+        embed_chapters=req.embedChapters, concurrent_fragments=req.concurrentFragments,
+        proxy=req.proxy,
+    )
     response = _to_response(info)
     video_id = info.get("id") or _cache_key(req.pageUrl)
-    filename = _safe_filename(info.get("title"), video_id)
+    filename = (
+        _safe_filename_audio(info.get("title"), video_id)
+        if req.audioOnly else _safe_filename(info.get("title"), video_id)
+    )
     headers = {
         "Content-Disposition": _content_disposition(filename, video_id),
         "Cache-Control": "no-store",
@@ -1666,6 +1809,87 @@ def download_post(
             media_type="video/mp4", headers=headers,
         )
     return _direct_media_stream(response["url"], request_headers, headers)
+
+
+# ── /playlist — return flat item list for a playlist URL ─────────────────────
+
+
+@app.post("/playlist")
+@limiter.limit(RATE_LIMIT)
+def playlist_extract(request: Request, req: PlaylistRequest) -> dict[str, Any]:
+    """Return the flat item list for a YouTube/yt-dlp playlist URL.
+
+    Uses yt-dlp's extract_flat mode — fast, no per-video network round-trips.
+    Each item has: url, title, thumbnail, duration, id.
+    """
+    page_url = _normalize_url(req.pageUrl)
+    if not page_url:
+        raise HTTPException(400, "pageUrl is required")
+
+    ydl_opts: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": "in_playlist",
+        "skip_download": True,
+    }
+    if req.proxy:
+        ydl_opts["proxy"] = req.proxy
+
+    user_cookie_file: str | None = None
+    if req.cookies:
+        user_cookie_file = _write_user_cookies_file(req.cookies, page_url)
+        if user_cookie_file:
+            ydl_opts["cookiefile"] = user_cookie_file
+    elif COOKIES_FILE and os.path.exists(COOKIES_FILE):
+        ydl_opts["cookiefile"] = COOKIES_FILE
+    if req.referer:
+        ydl_opts["referer"] = req.referer
+
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(page_url, download=False)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"playlist extraction failed: {_safe_text(e)[:400]}")
+    finally:
+        if user_cookie_file:
+            try:
+                os.unlink(user_cookie_file)
+            except Exception:
+                pass
+
+    if not info:
+        raise HTTPException(502, "no playlist info returned by yt-dlp")
+
+    entries = info.get("entries") or []
+    if not entries:
+        raise HTTPException(400, "URL is a single video or empty playlist — use /extract for single videos")
+
+    items = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        url = entry.get("url") or entry.get("webpage_url") or ""
+        if not url:
+            continue
+        # Flat entries often give a bare video ID; resolve to full URL
+        if not url.startswith("http") and entry.get("ie_key") == "Youtube":
+            url = f"https://www.youtube.com/watch?v={url}"
+        items.append({
+            "id":        entry.get("id"),
+            "url":       url,
+            "title":     entry.get("title"),
+            "thumbnail": entry.get("thumbnail") or entry.get("thumbnails", [{}])[-1].get("url") if entry.get("thumbnails") else None,
+            "duration":  entry.get("duration"),
+            "uploader":  entry.get("uploader") or entry.get("channel"),
+        })
+
+    print(f"[playlist] {len(items)} items from {page_url}")
+    return {
+        "title":    info.get("title"),
+        "uploader": info.get("uploader") or info.get("channel"),
+        "count":    len(items),
+        "items":    items,
+    }
 
 
 # ── /debug — diagnostic endpoint, no caching, returns yt-dlp's raw format list
