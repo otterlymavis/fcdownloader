@@ -313,6 +313,16 @@ async function downloadItem(tabId, item) {
     return chromeDownload(dlUrl, suggestedFilename(item, urlForBackend, tabTitle));
   }
 
+  // ytdl-stream proxy URL: download it directly without re-routing through /download.
+  // The URL already has page_url + cookies baked in from the /extract call.
+  // Re-routing through /download would ignore this URL entirely (it uses item.pageUrl
+  // as the extraction target), re-extract the page, and double-download the video.
+  // chrome.downloads handles the blocking download; errors arrive as "interrupted".
+  if ((item.url || "").includes("/ytdl-stream?")) {
+    console.log("[fcdl] → ytdl-stream direct download");
+    return chromeDownload(item.url, suggestedFilename(item, item.url, tabTitle));
+  }
+
   if (item.backendRouted) {
     return viaBackend(urlForBackend);
   }

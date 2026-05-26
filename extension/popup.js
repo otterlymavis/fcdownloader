@@ -212,10 +212,17 @@ extractBtn.addEventListener("click", async () => {
       return;
     }
 
+    // When the server returns a /ytdl-stream proxy URL it means yt-dlp couldn't
+    // resolve a direct CDN URL (SABR / datacenter IP challenge). The proxy runs
+    // yt-dlp in actual download mode on the server and streams back a real MP4.
+    // Tag the item so background.js can download it directly without re-routing
+    // through /download (which would throw the URL away and double-extract).
+    const isYtdlStream = typeof info.url === "string" && info.url.includes("/ytdl-stream?");
     const item = {
       url: info.kind === "paired" ? info.videoUrl : info.url,
       title: info.title,
-      label: info.label,
+      label: isYtdlStream ? "Server download (mp4)" : info.label,
+      ext: isYtdlStream ? "mp4" : undefined,
       kind: info.kind,
       source: "backend",
       backendRouted: true,

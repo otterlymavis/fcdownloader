@@ -79,6 +79,21 @@ def _strategy_ydl(
             info = ydl.extract_info(page_url, download=False)
         if not info:
             return _result(name, False, reason="yt-dlp returned no info")
+        # YouTube guard: skip_download=True from a datacenter IP often resolves
+        # HLS/m3u8 as a SABR fallback.  Those URLs require YouTube session cookies
+        # bound to the extracting IP, so ffmpeg can't remux them client-side.
+        # Treat HLS as a failure so ytdl-stream (actual download mode) runs instead.
+        if registry.is_youtube(page_url):
+            _proto = (info.get("protocol") or "").lower()
+            _url = (info.get("url") or "").lower()
+            if "m3u8" in _proto or ".m3u8" in _url:
+                return _result(
+                    name, False,
+                    reason=(
+                        f"YouTube returned HLS ({_proto!r}) via skip_download — "
+                        "SABR fallback; ytdl-stream needed"
+                    ),
+                )
         return _result(name, True, media=info)
     except Exception as exc:  # noqa: BLE001
         msg = safe_text(exc)[:400]
@@ -108,6 +123,18 @@ def _strategy_ydl_client(
             info = ydl.extract_info(page_url, download=False)
         if not info:
             return _result(name, False, reason="yt-dlp returned no info")
+        # Same HLS guard as _strategy_ydl — individual clients also hit SABR.
+        if registry.is_youtube(page_url):
+            _proto = (info.get("protocol") or "").lower()
+            _url = (info.get("url") or "").lower()
+            if "m3u8" in _proto or ".m3u8" in _url:
+                return _result(
+                    name, False,
+                    reason=(
+                        f"YouTube/{client} returned HLS ({_proto!r}) via skip_download — "
+                        "SABR fallback; ytdl-stream needed"
+                    ),
+                )
         return _result(name, True, media=info)
     except Exception as exc:  # noqa: BLE001
         msg = safe_text(exc)[:400]
@@ -490,36 +517,53 @@ def run_extraction(
     )
 
     is_yt = profile.is_youtube
-    yt_client_fallbacks: list[tuple[str, Callable[[], dict[str, Any]]]] = (
-        [
-            ("yt-dlp/ios",         lambda: _strategy_ydl_client(page_url, ydl_opts, "ios")),
-            ("yt-dlp/mweb",        lambda: _strategy_ydl_client(page_url, ydl_opts, "mweb")),
-            ("yt-dlp/tv",          lambda: _strategy_ydl_client(page_url, ydl_opts, "tv")),
-            ("yt-dlp/web_safari",  lambda: _strategy_ydl_client(page_url, ydl_opts, "web_safari")),
-            ("yt-dlp/web_creator", lambda: _strategy_ydl_client(page_url, ydl_opts, "web_creator")),
-        ]
-        if is_yt else []
-    )
 
-    strategies: list[tuple[str, Callable[[], dict[str, Any]]]] = [
-        ("yt-dlp",                   lambda: _strategy_ydl(page_url, ydl_opts, False)),
-        ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies)),
-        ("WebView/runtime interception", lambda: _strategy_skip(
-            "WebView/runtime interception",
-            "browser runtime is client-side only",
-        )),
-        ("HLS manifest detector",    lambda: _strategy_html_detector(page_url, http_headers, cookies, "hls")),
-        ("DASH manifest detector",   lambda: _strategy_html_detector(page_url, http_headers, cookies, "dash")),
-        ("OG/meta tag extractor",    lambda: _strategy_html_detector(page_url, http_headers, cookies, "og")),
-        ("generic media detector",   lambda: _strategy_html_detector(page_url, http_headers, cookies, "generic")),
-        *yt_client_fallbacks,
-        ("generic yt-dlp extractor", lambda: _strategy_ydl(page_url, ydl_opts, True)),
-        ("ytdl-stream",              lambda: _strategy_ytdl_stream_url(page_url, ydl_opts, cookies)),
-        ("browser playback fallback", lambda: _strategy_skip(
-            "browser playback fallback",
-            "browser playback fallback must run in the app WebView",
-        )),
-    ]
+    if is_yt:
+        # YouTube-specific pipeline.
+        #
+        # HTML detectors (HLS/DASH/OG/generic) are useless for YouTube — YouTube's
+        # HTML page never embeds raw m3u8/mpd/mp4 URLs. Omitting them saves ~4 slow
+        # HTTP fetches per request.
+        #
+        # _strategy_ydl and _strategy_ydl_client both include a YouTube-HLS guard:
+        # if skip_download=True resolves to an m3u8 (SABR bot-check fallback), they
+        # return failure so we fall through to ytdl-stream.
+        #
+        # ytdl-stream runs yt-dlp in actual download mode which handles SABR
+        # internally (downloads + muxes on the server, then streams the MP4).
+        strategies: list[tuple[str, Callable[[], dict[str, Any]]]] = [
+            ("yt-dlp",               lambda: _strategy_ydl(page_url, ydl_opts, False)),
+            ("yt-dlp/ios",           lambda: _strategy_ydl_client(page_url, ydl_opts, "ios")),
+            ("yt-dlp/mweb",          lambda: _strategy_ydl_client(page_url, ydl_opts, "mweb")),
+            ("yt-dlp/tv",            lambda: _strategy_ydl_client(page_url, ydl_opts, "tv")),
+            ("yt-dlp/web_safari",    lambda: _strategy_ydl_client(page_url, ydl_opts, "web_safari")),
+            ("yt-dlp/web_creator",   lambda: _strategy_ydl_client(page_url, ydl_opts, "web_creator")),
+            ("ytdl-stream",          lambda: _strategy_ytdl_stream_url(page_url, ydl_opts, cookies)),
+            ("browser playback fallback", lambda: _strategy_skip(
+                "browser playback fallback",
+                "browser playback fallback must run in the app WebView",
+            )),
+        ]
+    else:
+        # Non-YouTube pipeline — full strategy sweep.
+        strategies: list[tuple[str, Callable[[], dict[str, Any]]]] = [
+            ("yt-dlp",                   lambda: _strategy_ydl(page_url, ydl_opts, False)),
+            ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies)),
+            ("WebView/runtime interception", lambda: _strategy_skip(
+                "WebView/runtime interception",
+                "browser runtime is client-side only",
+            )),
+            ("HLS manifest detector",    lambda: _strategy_html_detector(page_url, http_headers, cookies, "hls")),
+            ("DASH manifest detector",   lambda: _strategy_html_detector(page_url, http_headers, cookies, "dash")),
+            ("OG/meta tag extractor",    lambda: _strategy_html_detector(page_url, http_headers, cookies, "og")),
+            ("generic media detector",   lambda: _strategy_html_detector(page_url, http_headers, cookies, "generic")),
+            ("generic yt-dlp extractor", lambda: _strategy_ydl(page_url, ydl_opts, True)),
+            ("ytdl-stream",              lambda: _strategy_ytdl_stream_url(page_url, ydl_opts, cookies)),
+            ("browser playback fallback", lambda: _strategy_skip(
+                "browser playback fallback",
+                "browser playback fallback must run in the app WebView",
+            )),
+        ]
 
     # ── Pipeline execution ────────────────────────────────────────────────────
     diagnostics: list[dict[str, Any]] = []

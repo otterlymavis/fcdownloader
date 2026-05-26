@@ -313,3 +313,112 @@ class TestUtils:
         quoted = url_quote("https://example.com/path?key=val&foo=bar")
         assert ":" not in quoted
         assert "/" not in quoted
+
+
+# ── YouTube HLS guard (strategies._strategy_ydl / _strategy_ydl_client) ──────
+#
+# When yt-dlp returns an m3u8/HLS protocol for YouTube in skip_download mode
+# it's a SABR fallback that ffmpeg cannot remux (URL is IP-bound / auth-gated).
+# Both _strategy_ydl and _strategy_ydl_client must treat that as a failure.
+
+class TestYouTubeHlsGuard:
+    """_strategy_ydl and _strategy_ydl_client reject YouTube HLS results."""
+
+    _YT_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    _OTHER_URL = "https://www.bilibili.com/video/BV1x"
+
+    def _make_fake_ydl(self, protocol: str, url: str = "https://cdn.example.com/stream"):
+        """Return a YoutubeDL drop-in that reports a specific protocol."""
+        info = {
+            "url": url,
+            "protocol": protocol,
+            "ext": "mp4",
+            "title": "Test Video",
+            "id": "test123",
+        }
+
+        class _FakeYDL:
+            def __init__(self, opts): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def extract_info(self_, url, download=True): return info
+
+        return _FakeYDL
+
+    # ── _strategy_ydl ─────────────────────────────────────────────────────────
+
+    def test_youtube_m3u8_native_is_failure(self, monkeypatch):
+        from strategies import _strategy_ydl
+        monkeypatch.setattr("strategies.YoutubeDL", self._make_fake_ydl("m3u8_native"))
+        result = _strategy_ydl(self._YT_URL, {"quiet": True, "skip_download": True})
+        assert not result["success"], "YouTube HLS must be treated as failure"
+        assert "HLS" in result.get("reason", "") or "m3u8" in result.get("reason", "").lower()
+
+    def test_youtube_m3u8_url_is_failure(self, monkeypatch):
+        from strategies import _strategy_ydl
+        monkeypatch.setattr(
+            "strategies.YoutubeDL",
+            self._make_fake_ydl("https", "https://r4.googlevideo.com/stream.m3u8"),
+        )
+        result = _strategy_ydl(self._YT_URL, {"quiet": True, "skip_download": True})
+        assert not result["success"]
+
+    def test_youtube_direct_mp4_is_success(self, monkeypatch):
+        from strategies import _strategy_ydl
+        monkeypatch.setattr(
+            "strategies.YoutubeDL",
+            self._make_fake_ydl("https", "https://r4.googlevideo.com/video.mp4"),
+        )
+        result = _strategy_ydl(self._YT_URL, {"quiet": True, "skip_download": True})
+        assert result["success"], "Direct MP4 should succeed even for YouTube"
+
+    def test_non_youtube_hls_is_success(self, monkeypatch):
+        """Non-YouTube HLS is legitimate (Bilibili, Abema, etc.) — must not be rejected."""
+        from strategies import _strategy_ydl
+        monkeypatch.setattr("strategies.YoutubeDL", self._make_fake_ydl("m3u8_native"))
+        result = _strategy_ydl(self._OTHER_URL, {"quiet": True, "skip_download": True})
+        assert result["success"], "Non-YouTube HLS must remain a valid result"
+
+    # ── _strategy_ydl_client ──────────────────────────────────────────────────
+
+    def test_ydl_client_youtube_m3u8_is_failure(self, monkeypatch):
+        from strategies import _strategy_ydl_client
+        monkeypatch.setattr("strategies.YoutubeDL", self._make_fake_ydl("m3u8_native"))
+        result = _strategy_ydl_client(self._YT_URL, {"quiet": True, "skip_download": True}, "ios")
+        assert not result["success"]
+        assert "HLS" in result.get("reason", "") or "m3u8" in result.get("reason", "").lower()
+
+    def test_ydl_client_youtube_direct_is_success(self, monkeypatch):
+        from strategies import _strategy_ydl_client
+        monkeypatch.setattr(
+            "strategies.YoutubeDL",
+            self._make_fake_ydl("https", "https://r4.googlevideo.com/video.mp4"),
+        )
+        result = _strategy_ydl_client(self._YT_URL, {"quiet": True, "skip_download": True}, "ios")
+        assert result["success"]
+
+
+# ── supervisor PID tracking ───────────────────────────────────────────────────
+
+class TestSupervisorPidTracking:
+    """_register_pid / _unregister_pid maintain the active-PID set correctly."""
+
+    def test_register_and_unregister(self):
+        import supervisor
+        fake_pid = 99999999
+        supervisor._register_pid(fake_pid)
+        assert fake_pid in supervisor._active_pids
+        supervisor._unregister_pid(fake_pid)
+        assert fake_pid not in supervisor._active_pids
+
+    def test_unregister_missing_pid_is_safe(self):
+        import supervisor
+        supervisor._unregister_pid(0)  # should not raise
+
+    def test_register_is_idempotent(self):
+        import supervisor
+        fake_pid = 88888888
+        supervisor._register_pid(fake_pid)
+        supervisor._register_pid(fake_pid)  # double register → still one entry
+        assert fake_pid in supervisor._active_pids
+        supervisor._unregister_pid(fake_pid)

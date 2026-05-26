@@ -9,16 +9,18 @@ Design invariants:
   - Cookie temp file is deleted immediately after yt-dlp opens it.
   - Concurrent stream count is capped by MAX_CONCURRENT_STREAMS.
   - Never log raw cookie values.
+  - Active yt-dlp PIDs are tracked so a SIGTERM handler (Fly.io graceful
+    shutdown) can kill in-flight downloads before the process exits.
 
-Implementation note: we use blocking subprocess.run (not asyncio) because
+Implementation note: we use Popen + communicate() (not asyncio) because
 yt-dlp must download the entire file before we can determine its size and
 set Content-Length.  The FastAPI threadpool executes this synchronously.
 """
 from __future__ import annotations
 
-import asyncio
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -47,6 +49,53 @@ def _acquire_stream_slot(timeout: float = 10.0) -> bool:
 
 def _release_stream_slot() -> None:
     _stream_sem.release()
+
+
+# ── SIGTERM / graceful-shutdown subprocess cleanup ────────────────────────────
+#
+# Fly.io sends SIGTERM before SIGKILL during a deploy or machine replacement.
+# Any in-flight yt-dlp download will be orphaned unless we kill it first.
+# We track PIDs of active subprocesses in a thread-safe set and forward the
+# signal to each of them so the OS can reap the processes cleanly.
+
+_active_pids: set[int] = set()
+_active_pids_lock = threading.Lock()
+
+
+def _register_pid(pid: int) -> None:
+    with _active_pids_lock:
+        _active_pids.add(pid)
+
+
+def _unregister_pid(pid: int) -> None:
+    with _active_pids_lock:
+        _active_pids.discard(pid)
+
+
+def _graceful_shutdown(signum: int, frame: object) -> None:
+    """Forward shutdown signal to all tracked yt-dlp subprocesses."""
+    print(
+        f"[supervisor] signal {signum} — terminating "
+        f"{len(_active_pids)} active yt-dlp process(es)",
+        flush=True,
+    )
+    with _active_pids_lock:
+        for pid in list(_active_pids):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+            except Exception as exc:
+                print(f"[supervisor] couldn't signal pid {pid}: {exc}", flush=True)
+
+
+# Register on module import.  Use ValueError guard for environments where
+# signals can't be set (e.g. non-main threads on some platforms).
+for _sig in (signal.SIGTERM, signal.SIGINT):
+    try:
+        signal.signal(_sig, _graceful_shutdown)
+    except (OSError, ValueError):
+        pass
 
 
 # ── Main download function ────────────────────────────────────────────────────
@@ -108,28 +157,37 @@ def ytdl_download(
             f"(cookies={'yes' if cookies else 'no'})"
         )
 
+        # Use Popen so we can register the PID for SIGTERM cleanup and still
+        # capture stdout/stderr without shell=True race conditions.
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=UTF8_ENV,
+        )
+        _register_pid(proc.pid)
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                env=UTF8_ENV,
-                timeout=STREAM_DOWNLOAD_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-            raise HTTPException(
-                504,
-                f"YouTube download timed out ({STREAM_DOWNLOAD_TIMEOUT // 60} min limit)",
-            )
+            try:
+                _stdout, stderr_bytes = proc.communicate(timeout=STREAM_DOWNLOAD_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                raise HTTPException(
+                    504,
+                    f"YouTube download timed out ({STREAM_DOWNLOAD_TIMEOUT // 60} min limit)",
+                )
         finally:
+            _unregister_pid(proc.pid)
             # Delete cookie file as soon as yt-dlp exits — it read it into
             # memory at startup, so the file is no longer needed.
             auth.unlink_cookie_file(cookie_file)
 
-        stderr_txt = result.stderr.decode("utf-8", errors="replace").strip()
+        stderr_txt = stderr_bytes.decode("utf-8", errors="replace").strip()
+        returncode = proc.returncode
 
-        if result.returncode != 0:
-            print(f"[ytdl-stream] yt-dlp failed ({result.returncode}): {stderr_txt[:600]}")
+        if returncode != 0:
+            print(f"[ytdl-stream] yt-dlp failed (exit {returncode}): {stderr_txt[:600]}")
             shutil.rmtree(tmpdir, ignore_errors=True)
 
             _BOT_SIGNALS = (
