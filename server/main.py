@@ -956,28 +956,35 @@ def _ytdl_stream_generator(page_url: str) -> Iterator[bytes]:
         "--merge-output-format", "mp4",
         "--output", "-",
         "--no-playlist",
-        "--quiet",
-        "--no-warnings",
+        # Keep warnings on so we can see what's failing in fly logs
         page_url,
     ]
+    print(f"[ytdl-stream] cmd: {' '.join(shlex.quote(a) for a in cmd)}")
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,   # capture for logging
         env=UTF8_ENV,
     )
+    yielded = 0
     try:
         while True:
             chunk = proc.stdout.read(65536)
             if not chunk:
                 break
+            yielded += len(chunk)
             yield chunk
     finally:
         try:
             proc.kill()
         except Exception:
             pass
-        proc.wait()
+        _, stderr_data = proc.communicate()
+        if stderr_data:
+            err = stderr_data.decode("utf-8", errors="replace").strip()
+            print(f"[ytdl-stream] exit (yielded={yielded}B) stderr: {err[:600]}")
+        else:
+            print(f"[ytdl-stream] done, yielded={yielded}B, exit={proc.returncode}")
 
 
 def _try_ytdl_stream_url(page_url: str, ydl_opts: dict[str, Any]) -> dict[str, Any]:
