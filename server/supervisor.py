@@ -30,6 +30,7 @@ from fastapi import HTTPException
 
 import auth
 from config import (
+    COOKIES_FILE,
     MAX_CONCURRENT_STREAMS,
     STREAM_DOWNLOAD_TIMEOUT,
     STREAM_FORMAT_SPEC,
@@ -132,9 +133,12 @@ def ytdl_download(
 
     try:
         out_tpl = os.path.join(tmpdir, "video.%(ext)s")
+        # tv_embedded is first: YouTube's embedded-player client bypasses
+        # the "Sign in to confirm you're not a bot" challenge that datacenter
+        # IPs receive when using ios/web_safari/mweb, even with valid cookies.
         cmd = [
             "yt-dlp",
-            "--extractor-args", "youtube:player_client=ios,web_safari,mweb",
+            "--extractor-args", "youtube:player_client=tv_embedded,ios,mweb",
             "--format", STREAM_FORMAT_SPEC,
             "--merge-output-format", "mp4",
             "--output", out_tpl,
@@ -149,6 +153,9 @@ def ytdl_download(
                 raise HTTPException(400, str(exc))
             if cookie_file:
                 cmd += ["--cookies", cookie_file]
+        elif COOKIES_FILE and os.path.exists(COOKIES_FILE):
+            # Fall back to server-baked cookies when the caller provides none.
+            cmd += ["--cookies", COOKIES_FILE]
 
         cmd.append(page_url)
 

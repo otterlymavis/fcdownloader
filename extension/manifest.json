@@ -5,6 +5,7 @@
   "description": "Save media you own, control, or have permission to access from supported websites.",
   "permissions": [
     "downloads",
+    "notifications",
     "storage",
     "activeTab",
     "tabs",

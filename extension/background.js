@@ -305,7 +305,8 @@ async function downloadItem(tabId, item) {
 
   async function viaBackend(pageForBackend) {
     const dlUrl = backendDownloadUrl(backend, pageForBackend, referer, cookies);
-    console.log("[fcdl] → backend", dlUrl.slice(0, 120));
+    // Log the page URL only — dlUrl contains session cookies so must not be logged.
+    console.log("[fcdl] → backend for", (pageForBackend || "").slice(0, 100), "cookies?", !!cookies);
     const check = await preflightBackendUrl(dlUrl);
     if (!check.ok) {
       throw new Error(`Backend: ${check.error}`);
@@ -317,10 +318,20 @@ async function downloadItem(tabId, item) {
   // The URL already has page_url + cookies baked in from the /extract call.
   // Re-routing through /download would ignore this URL entirely (it uses item.pageUrl
   // as the extraction target), re-extract the page, and double-download the video.
-  // chrome.downloads handles the blocking download; errors arrive as "interrupted".
+  //
+  // The server blocks until yt-dlp finishes, then either streams the MP4 (200) or
+  // returns a JSON error (4xx/5xx). Chrome saves JSON error bodies using the URL
+  // path + content-type as the filename ("ytdl-stream.json"), ignoring our hint.
+  // _watchYtdlStreamDownload detects this and removes the garbage file.
   if ((item.url || "").includes("/ytdl-stream?")) {
+    // Do not log the full URL — it contains page_url + session cookies as query params.
     console.log("[fcdl] → ytdl-stream direct download");
-    return chromeDownload(item.url, suggestedFilename(item, item.url, tabTitle));
+    const dlId = await chromeDownload(item.url, suggestedFilename(item, item.url, tabTitle));
+    // Fire-and-forget monitor — does not block the popup response.
+    _watchYtdlStreamDownload(dlId).catch((e) =>
+      console.warn("[fcdl] ytdl-stream watcher error:", e?.message || e)
+    );
+    return dlId;
   }
 
   if (item.backendRouted) {
@@ -341,7 +352,7 @@ async function downloadItem(tabId, item) {
   try {
     return await chromeDownload(item.url, suggestedFilename(item, downloadPageUrl, tabTitle));
   } catch (e) {
-    console.warn("[fcdl] direct failed, falling back to backend:", e);
+    console.warn("[fcdl] direct failed, falling back to backend:", e?.message || e);
     const dlUrl = backendDownloadUrl(backend, item.url, referer, cookies);
     return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl, tabTitle));
   }
@@ -357,6 +368,81 @@ chrome.downloads.onChanged.addListener((delta) => {
     console.log("[fcdl] download complete:", delta.id);
   }
 });
+
+// Monitor a ytdl-stream download started by chrome.downloads.
+// When the server returns a JSON error (4xx/5xx) Chrome saves it using the URL
+// path + content-type as the filename ("ytdl-stream.json").  This watcher
+// detects that outcome, removes the garbage file, and shows a notification
+// so the user knows what happened.
+async function _watchYtdlStreamDownload(downloadId) {
+  const MAX_WAIT_MS = 15 * 60 * 1000; // 15 min — ytdl-stream can take a while
+  const finalState = await new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      chrome.downloads.onChanged.removeListener(onChange);
+      resolve("timeout");
+    }, MAX_WAIT_MS);
+    function onChange(delta) {
+      if (delta.id !== downloadId || settled) return;
+      const s = delta.state?.current;
+      if (s === "complete" || s === "interrupted") {
+        settled = true;
+        clearTimeout(timer);
+        chrome.downloads.onChanged.removeListener(onChange);
+        resolve(s);
+      }
+    }
+    chrome.downloads.onChanged.addListener(onChange);
+  });
+
+  if (finalState === "timeout") return; // download still in progress at max wait
+
+  const [dl] = await new Promise((res) => chrome.downloads.search({ id: downloadId }, res));
+  if (!dl) return;
+
+  const isJsonFile = /\.json$/i.test(dl.filename || "");
+  const interrupted = dl.state === "interrupted";
+
+  if (isJsonFile && dl.state === "complete") {
+    // Chrome saved the server's JSON error body — remove it and tell the user.
+    console.warn("[fcdl] ytdl-stream returned a JSON error file — removing:", dl.filename);
+    chrome.downloads.removeFile(downloadId, () => {
+      chrome.downloads.erase({ id: downloadId }, () => {});
+    });
+    _notifyYtdlError(
+      "YouTube download failed",
+      "The server couldn't download this video. YouTube is blocking server-side downloads " +
+      "for this video. Try a different video, or use the bookmarklet on desktop.",
+    );
+    return;
+  }
+
+  if (interrupted) {
+    console.warn("[fcdl] ytdl-stream download interrupted:", dl.error);
+    _notifyYtdlError(
+      "YouTube download interrupted",
+      "The server download failed (" + (dl.error || "unknown error") + "). " +
+      "YouTube may be blocking the server. Try again.",
+    );
+  }
+}
+
+function _notifyYtdlError(title, message) {
+  try {
+    if (typeof chrome.notifications?.create === "function") {
+      chrome.notifications.create("ytdl-error-" + Date.now(), {
+        type: "basic",
+        iconUrl: "icons/icon-48.png",
+        title,
+        message,
+      });
+    }
+  } catch (e) {
+    console.warn("[fcdl] notification failed:", e?.message || e);
+  }
+}
 
 function chromeDownload(url, filename) {
   return new Promise((resolve, reject) => {

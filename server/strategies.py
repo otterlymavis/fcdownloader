@@ -267,8 +267,8 @@ def _strategy_ytdl_stream_url(
         return _result(name, False, reason="not a YouTube URL — ytdl-stream not needed")
 
     # Fetch lightweight metadata (title, thumbnail) for the UI preview.
-    # Format 18 (360p muxed mp4) is a non-SABR/non-adaptive format that
-    # yt-dlp can resolve even from datacenter IPs — one attempt, fail silently.
+    # tv_embedded bypasses the "Sign in to confirm you're not a bot" challenge
+    # that datacenter IPs receive with ios/web_safari — one attempt, fail silently.
     meta: dict[str, Any] = {}
     try:
         opts = {
@@ -279,7 +279,7 @@ def _strategy_ytdl_stream_url(
             "skip_download": True,
             "extractor_args": {
                 **(ydl_opts.get("extractor_args") or {}),
-                "youtube": {"player_client": ["ios", "web_safari"]},
+                "youtube": {"player_client": ["tv_embedded", "ios"]},
             },
         }
         with YoutubeDL(opts) as ydl:

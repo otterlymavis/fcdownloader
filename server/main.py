@@ -1030,10 +1030,22 @@ def debug_extract(
     cookies: str | None = Query(None),
     authorization: str | None = Header(None),
 ) -> dict[str, Any]:
-    if TRUSTED_TOKEN:
-        bearer = (authorization or "").replace("Bearer ", "").strip()
-        if bearer != TRUSTED_TOKEN:
-            raise HTTPException(401, "debug requires TRUSTED_TOKEN")
+    # TRUSTED_TOKEN is required — /debug is always protected.
+    # If the operator hasn't set one, the endpoint returns 404 (as if it
+    # doesn't exist) so it can't be used to probe the server from the internet.
+    if not TRUSTED_TOKEN:
+        raise HTTPException(404, "Not Found")
+    bearer = (authorization or "").replace("Bearer ", "").strip()
+    if bearer != TRUSTED_TOKEN:
+        raise HTTPException(401, "debug requires TRUSTED_TOKEN")
+
+    # Validate cookies before passing to yt-dlp — same size/format guards
+    # that every other endpoint uses.  /debug was previously bypassing them.
+    if cookies:
+        try:
+            cookies = auth.validate_cookies(cookies)
+        except (auth.CookieTooLargeError, auth.CookieFormatError) as exc:
+            raise HTTPException(400, str(exc))
 
     out: dict[str, Any] = {
         "url":            url,
