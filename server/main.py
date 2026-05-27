@@ -32,13 +32,17 @@ import json
 import os
 import re
 import shlex
+import signal
 import socket
 import ssl
 import subprocess
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from typing import Any, Iterator
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
@@ -59,6 +63,7 @@ from config import (
     FORMAT_SPEC,
     MOBILE_UA,
     RATE_LIMIT,
+    STREAM_STALL_TIMEOUT,
     TRUSTED_TOKEN,
 )
 from models import DownloadRequest, ExtractRequest, PlaylistRequest
@@ -379,7 +384,21 @@ def _ffmpeg_stream(
     audio_url: str | None,
     hls_master: str | None,
     request_headers: dict[str, str] | None = None,
+    *,
+    request_id: str | None = None,
 ) -> Iterator[bytes]:
+    """Mux video+audio (or remux HLS) via ffmpeg and yield output as chunks.
+
+    Hardening:
+      - stderr captured in a drain thread (prevents pipe-buffer deadlock and
+        surfaces ffmpeg error messages in server logs on failure).
+      - Process runs in its own process group on POSIX so _kill_process_tree()
+        reaches the full subprocess tree on disconnect or stall.
+      - Stall watchdog kills ffmpeg if no bytes arrive for STREAM_STALL_TIMEOUT
+        seconds (CDN hang, codec stall, expired stream URL).
+      - Structured log on exit: bytes_sent, duration_ms, rc, stderr_tail,
+        disconnect_reason.
+    """
     ff_headers = _ffmpeg_header_arg(request_headers)
     input_header_args = ["-headers", ff_headers] if ff_headers else []
     video_url  = normalize_url(video_url) if video_url else video_url
@@ -407,27 +426,114 @@ def _ffmpeg_stream(
     else:
         raise HTTPException(500, "internal: no mux source")
 
-    print("[download] ffmpeg", shlex.join(args[:12]) + " ...")
-    proc = subprocess.Popen(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        bufsize=0,
-        env=UTF8_ENV,
+    rid = request_id or uuid.uuid4().hex[:12]
+    print(f"[ffmpeg] rid={rid} " + shlex.join(args[:12]) + " ...")
+
+    popen_kwargs: dict = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,   # capture; DEVNULL silenced errors entirely
+        "bufsize": 0,
+        "env": UTF8_ENV,
+    }
+    if sys.platform != "win32":
+        popen_kwargs["preexec_fn"] = os.setsid  # own process group
+
+    proc = subprocess.Popen(args, **popen_kwargs)
+
+    # Drain stderr in a background thread to prevent pipe-buffer deadlock.
+    # ffmpeg writes to stderr on errors even at -loglevel error.
+    _stderr_lines: list[str] = []
+
+    def _drain_stderr() -> None:
+        try:
+            assert proc.stderr is not None
+            for raw in iter(proc.stderr.readline, b""):
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                _stderr_lines.append(line)
+                if len(_stderr_lines) > 50:
+                    _stderr_lines.pop(0)
+        except Exception:
+            pass
+
+    _stderr_thread = threading.Thread(
+        target=_drain_stderr, daemon=True, name=f"ffmpeg-stderr-{rid}",
     )
+    _stderr_thread.start()
+
+    # Stall watchdog: kill ffmpeg if it stops writing bytes.
+    _last_chunk: list[float] = [time.monotonic()]
+    _kill_evt = threading.Event()
+
+    def _stall_watch() -> None:
+        while not _kill_evt.wait(timeout=5.0):
+            elapsed = time.monotonic() - _last_chunk[0]
+            if elapsed > STREAM_STALL_TIMEOUT:
+                print(
+                    f"[ffmpeg] rid={rid} stall detected ({elapsed:.0f}s without output) — killing",
+                    flush=True,
+                )
+                if sys.platform != "win32":
+                    try:
+                        _sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
+                        pgid = os.getpgid(proc.pid)
+                        os.killpg(pgid, _sigkill)
+                    except Exception:
+                        pass
+                else:
+                    proc.kill()
+                break
+
+    _watchdog_thread = threading.Thread(
+        target=_stall_watch, daemon=True, name=f"ffmpeg-stall-{rid}",
+    )
+    _watchdog_thread.start()
+
+    t0 = time.monotonic()
+    bytes_sent: int = 0
+    disconnect_reason: str | None = None
+
     try:
         while True:
             chunk = proc.stdout.read(64 * 1024) if proc.stdout else b""
             if not chunk:
                 break
+            _last_chunk[0] = time.monotonic()
+            bytes_sent += len(chunk)
             yield chunk
+    except GeneratorExit:
+        disconnect_reason = "client disconnected"
+        raise
+    except Exception as exc:
+        disconnect_reason = f"{type(exc).__name__}: {str(exc)[:80]}"
+        raise
     finally:
+        _kill_evt.set()
+
         if proc.poll() is None:
-            proc.terminate()
+            if sys.platform != "win32":
+                try:
+                    pgid = os.getpgid(proc.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                except Exception:
+                    pass
+            else:
+                proc.terminate()
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+
+        _stderr_thread.join(timeout=2.0)
+
+        duration_ms = (time.monotonic() - t0) * 1000
+        stderr_tail = " | ".join(_stderr_lines[-5:]) if _stderr_lines else ""
+        print(
+            f"[ffmpeg] rid={rid} done: "
+            f"bytes={bytes_sent:,} duration={duration_ms:.0f}ms "
+            f"rc={proc.returncode} disconnect={disconnect_reason or 'none'}"
+            + (f" stderr={stderr_tail!r}" if stderr_tail else ""),
+            flush=True,
+        )
 
 
 def _resolve_a_records(host: str) -> list[str]:
@@ -745,10 +851,11 @@ def download(
         **(response.get("headers") or {}),
         **_download_headers(referer, cookies, page_url=url),
     }
+    rid = uuid.uuid4().hex[:12]
     kind = response["kind"]
     if kind == "paired":
         return StreamingResponse(
-            _ffmpeg_stream(response["videoUrl"], response["audioUrl"], None, request_headers),
+            _ffmpeg_stream(response["videoUrl"], response["audioUrl"], None, request_headers, request_id=rid),
             media_type="video/mp4", headers=headers,
         )
     if kind == "hls":
@@ -757,7 +864,7 @@ def download(
             **_download_headers(referer, cookies, page_url=url),
         }
         return StreamingResponse(
-            _ffmpeg_stream("", None, response["url"], hls_headers),
+            _ffmpeg_stream("", None, response["url"], hls_headers, request_id=rid),
             media_type="video/mp4", headers=headers,
         )
     if _needs_headered_direct_stream(url, response["url"], request_headers):
@@ -787,10 +894,11 @@ def download_post(request: Request, req: DownloadRequest) -> StreamingResponse:
         **(response.get("headers") or {}),
         **_download_headers(req.referer, req.cookies, page_url=req.pageUrl),
     }
+    rid = uuid.uuid4().hex[:12]
     kind = response["kind"]
     if kind == "paired":
         return StreamingResponse(
-            _ffmpeg_stream(response["videoUrl"], response["audioUrl"], None, request_headers),
+            _ffmpeg_stream(response["videoUrl"], response["audioUrl"], None, request_headers, request_id=rid),
             media_type="video/mp4", headers=headers,
         )
     if kind == "hls":
@@ -799,7 +907,7 @@ def download_post(request: Request, req: DownloadRequest) -> StreamingResponse:
             **_download_headers(req.referer, req.cookies, page_url=req.pageUrl),
         }
         return StreamingResponse(
-            _ffmpeg_stream("", None, response["url"], hls_headers),
+            _ffmpeg_stream("", None, response["url"], hls_headers, request_id=rid),
             media_type="video/mp4", headers=headers,
         )
     return _direct_media_stream(response["url"], request_headers, headers)
@@ -837,19 +945,22 @@ def ytdl_stream_endpoint(
         except (auth.CookieTooLargeError, auth.CookieFormatError) as exc:
             raise HTTPException(400, str(exc))
 
+    rid = uuid.uuid4().hex[:12]
+
     # Block here: download finishes before we return StreamingResponse.
     # This prevents the 0-byte 200 OK race condition.
     tmpdir, filepath, filesize, filename = supervisor.ytdl_download(
-        page_url, cookies_val
+        page_url, cookies_val, request_id=rid,
     )
 
     return StreamingResponse(
-        supervisor.stream_file(tmpdir, filepath),
+        supervisor.stream_file(tmpdir, filepath, request_id=rid),
         media_type="video/mp4",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Length": str(filesize),
             "Cache-Control": "no-cache, no-store",
+            "X-Request-ID": rid,
         },
     )
 

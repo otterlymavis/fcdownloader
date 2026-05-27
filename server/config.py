@@ -104,6 +104,12 @@ MAX_CONCURRENT_STREAMS: int = int(os.environ.get("MAX_CONCURRENT_STREAMS", "4"))
 # Total wall-clock timeout for a /ytdl-stream download (seconds).
 STREAM_DOWNLOAD_TIMEOUT: int = int(os.environ.get("STREAM_DOWNLOAD_TIMEOUT", "300"))
 
+# Stall timeout: maximum seconds without new bytes before the yt-dlp or ffmpeg
+# subprocess is killed.  Much shorter than STREAM_DOWNLOAD_TIMEOUT so a hung
+# download produces a clear error instead of waiting the full 5-minute limit.
+# Catches SABR chunk invalidation mid-download, network stalls, and CDN hangs.
+STREAM_STALL_TIMEOUT: int = int(os.environ.get("STREAM_STALL_TIMEOUT", "90"))
+
 # ── User agent ────────────────────────────────────────────────────────────────
 
 MOBILE_UA: str = (
