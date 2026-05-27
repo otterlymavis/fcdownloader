@@ -69,6 +69,15 @@ android/keystores/
 server/_extract_test*.json
 server/cookies.txt
 server/cookies.b64
+server/srv.log
+server/srv.err
+
+# Local release/test output
+artifacts/
+history_logs/
+pytest-of-*/
+replace.txt
+.claude/
 
 # Companion generated helper binary and PyInstaller work dirs
 desktop-companion/build/helper/
@@ -78,9 +87,5 @@ desktop-companion/build/pyinstaller-venv/
 desktop-companion/build/pyinstaller-work/
 desktop-companion/build/pyinstaller-spec/
 
-#  Code local settings
-./
-
-
-
+# Code local settings
 CLAUDE.md

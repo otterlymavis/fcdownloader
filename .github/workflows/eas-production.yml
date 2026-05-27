@@ -10,7 +10,7 @@ on:
         type: choice
         options: ["all", "android", "ios"]
       submit:
-        description: "Submit finished builds to stores"
+        description: "Reserved for future store submit wiring; currently rejected"
         required: true
         default: false
         type: boolean
@@ -45,11 +45,12 @@ jobs:
             echo "::error::EXPO_TOKEN is required for EAS builds."
             exit 1
           fi
+          if [ "${{ inputs.submit }}" = "true" ]; then
+            echo "::error::Store submission is not wired in this workflow yet. Run a production build first, then submit from EAS/App Store Connect/Play Console after store metadata and credentials are configured."
+            exit 1
+          fi
 
       - name: Build production app
         run: |
           args=(--platform "${{ inputs.platform }}" --profile production --non-interactive --wait)
-          if [ "${{ inputs.submit }}" = "true" ]; then
-            args+=(--auto-submit)
-          fi
           npx eas-cli@latest build "${args[@]}"

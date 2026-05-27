@@ -66,7 +66,6 @@ from the Chrome Web Store, Firefox Add-ons, and any public web page.
 | `cookies` | Read cookies for the current page domain to forward to the configured backend when authenticated access is needed |
 | `storage` | Save backend URL and preferences via `chrome.storage.sync` |
 | `tabs` | Read the active tab URL when the popup opens |
-| `activeTab` | Programmatic invocation on the current tab |
 | `webRequest` | Observe network requests to catch HLS/DASH manifest URLs the DOM does not expose |
 
 No data is sold. No analytics or telemetry are built into the extension.

@@ -7,10 +7,8 @@
     "downloads",
     "notifications",
     "storage",
-    "activeTab",
     "tabs",
     "cookies",
-    "scripting",
     "webRequest"
   ],
   "host_permissions": [

@@ -23,6 +23,9 @@ The numbers do not need to match. The contract versions do.
 - Web: bake the backend and release links into `web/index.html`, then deploy
   `web/` to a static host.
 - Mobile: build production App Store / Play Store binaries with EAS.
+  Store submission is intentionally not automated yet; submit from EAS, App
+  Store Connect, or Play Console after store metadata and credentials are
+  configured.
 
 ## GitHub setup
 
@@ -49,9 +52,10 @@ Repository variables:
 1. Deploy backend: run **Deploy Backend to Fly**.
 2. Tag a bundle release: `v1.5.0`.
 3. Let tag workflows attach companion installers, extension zip, and web zip.
-4. Run **EAS Production Build** for `all`; enable submit when store metadata and
-   credentials are ready.
-5. Publish or update the static `web/` deployment so it points to the latest
+4. Run **EAS Production Build** for `all`.
+5. Submit mobile builds manually from EAS/App Store Connect/Play Console once
+   store metadata, privacy answers, screenshots, and credentials are ready.
+6. Publish or update the static `web/` deployment so it points to the latest
    release links.
 
 ## Local commands
@@ -82,3 +86,9 @@ npm run bake:web
 The workflows are wired for signing and notarization, but they cannot produce
 trusted public installers until the signing secrets above exist. Unsigned builds
 are useful for testing only.
+
+## Health checks
+
+- Public backend: `GET https://fcdownloader-extractor.fly.dev/`
+- Backend version: `GET https://fcdownloader-extractor.fly.dev/version`
+- Local Companion helper: `GET http://127.0.0.1:8765/health`

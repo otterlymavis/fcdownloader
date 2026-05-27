@@ -55,6 +55,12 @@ You should get a JSON response with `videoUrl`, `audioUrl`, and headers. To
 use this from the app, set the Backend URL to `http://<your-LAN-IP>:8080` and
 make sure your phone is on the same network.
 
+Health check:
+
+```bash
+curl http://localhost:8080/
+```
+
 ## Deploy to Fly.io (recommended)
 
 Free tier covers it. ~3 minutes total.
@@ -75,6 +81,7 @@ fly secrets list                           # note the token value here
 fly deploy
 fly status                                 # confirm it's running
 curl https://your-instance.fly.dev/
+curl https://your-instance.fly.dev/version
 ```
 
 The app's Backend URL becomes `https://your-instance.fly.dev`.

@@ -1,8 +1,11 @@
 import { ExpoConfig, ConfigContext } from 'expo/config';
 
-export default ({ config }: ConfigContext): ExpoConfig => ({
-  ...config,
-  name: 'FCDownloader',
+export default ({ config }: ConfigContext): ExpoConfig => {
+  const allowInsecureHttp = process.env.FCDL_ALLOW_INSECURE_HTTP === '1';
+
+  return {
+    ...config,
+    name: 'FCDownloader',
   slug: 'fcdownloader',
   owner: 'mabisuuu',
   version: '1.1.0',
@@ -36,7 +39,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     bundleIdentifier: 'com.mabisuuu.fcdownloader',
     supportsTablet: true,
     infoPlist: {
-      NSAppTransportSecurity: { NSAllowsArbitraryLoads: true },
+      ...(allowInsecureHttp ? { NSAppTransportSecurity: { NSAllowsArbitraryLoads: true } } : {}),
       ITSAppUsesNonExemptEncryption: false,
       // Required for iOS Files app sharing
       UIFileSharingEnabled: true,
@@ -68,10 +71,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         android: {
           newArchEnabled: false,
           minSdkVersion: 24,
-          // Allow HTTP (not just HTTPS) so a self-hosted HD extractor on the
-          // user's LAN — e.g. http://192.168.1.x:8080 — is reachable. Public
-          // deploys use HTTPS so this only affects local-network setups.
-          usesCleartextTraffic: true,
+          // Public releases should use HTTPS. Local/self-hosted LAN builds can
+          // opt into HTTP with FCDL_ALLOW_INSECURE_HTTP=1.
+          usesCleartextTraffic: allowInsecureHttp,
         },
       },
     ],
@@ -97,4 +99,5 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     bundledExtractorUrl:   process.env.EXPO_PUBLIC_EXTRACTOR_URL   ?? '',
     bundledExtractorToken: process.env.EXPO_PUBLIC_EXTRACTOR_TOKEN ?? '',
   },
-});
+  };
+};
