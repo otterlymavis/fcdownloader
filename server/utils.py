@@ -7,6 +7,7 @@ These are safe to import from any module without circular-dependency risk.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import sys
 import unicodedata
@@ -15,7 +16,13 @@ import urllib.parse
 
 # ── UTF-8 runtime setup ───────────────────────────────────────────────────────
 
+# subprocess.Popen(env=...) REPLACES the child process environment entirely.
+# Passing only the encoding vars stripped PATH, so yt-dlp and ffmpeg binaries
+# (installed by pip to /usr/local/bin) could never be found by the OS.
+# Fix: inherit the full parent environment, then overlay the UTF-8 settings so
+# subprocess children see the correct PATH while also being UTF-8 clean.
 UTF8_ENV: dict[str, str] = {
+    **os.environ,
     "PYTHONIOENCODING": "utf-8",
     "LANG": "en_US.UTF-8",
     "LC_ALL": "en_US.UTF-8",
