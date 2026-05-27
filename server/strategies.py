@@ -611,10 +611,46 @@ def run_extraction(
         if d.get("reason") and d.get("reason") not in _SKIP_REASONS
     )
     print(f"[extract] all strategies failed for {page_url}: {reason_str[:800]}")
-    raise HTTPException(
-        502,
-        f"unsupported after all extraction strategies failed: {reason_str[:800]}",
-    )
+
+    # Build an actionable error message based on the failure pattern.
+    reason_lower = reason_str.lower()
+    _has_unsupported = "unsupported url" in reason_lower
+    _has_403 = "403" in reason_lower or "forbidden" in reason_lower
+    _has_auth = any(k in reason_lower for k in ("sign in", "login", "auth", "cookie"))
+    _has_geo = any(k in reason_lower for k in ("geo", "region", "country", "not available"))
+
+    if _has_auth or (_has_403 and not cookies):
+        detail = (
+            "This page requires you to be signed in, or the server's IP is "
+            "blocked by the site. Open the page in your browser, use the "
+            "FCDownload bookmarklet or extension to capture your session "
+            "cookies, and try again."
+        )
+    elif _has_geo:
+        detail = (
+            "This video is geo-restricted and cannot be accessed from the "
+            "server's location. Try using a proxy, or use the FCDownload "
+            "bookmarklet in a browser with VPN access."
+        )
+    elif _has_unsupported and _has_403:
+        detail = (
+            "The page blocked the server's request (HTTP 403). This usually "
+            "means the site requires a browser session or is geo-restricted. "
+            "Use the FCDownload bookmarklet or extension in your browser to "
+            "send your session cookies with the request."
+        )
+    elif _has_unsupported:
+        detail = (
+            f"No extractor found for this URL and the page HTML contained no "
+            f"detectable media. If the video loads in your browser via a "
+            f"JavaScript player, use the FCDownload bookmarklet or extension "
+            f"to capture the stream URL directly. "
+            f"(details: {reason_str[:400]})"
+        )
+    else:
+        detail = f"unsupported after all extraction strategies failed: {reason_str[:800]}"
+
+    raise HTTPException(502, detail)
 
 
 def run_extraction_with_format(

@@ -184,5 +184,9 @@ def is_japanese_domain(url: str) -> bool:
         "mildom.com",
         "pixiv.net", "fanbox.cc",
         "openrec.tv",
+        # Japanese media sites with non-.jp TLDs
+        "wwdjapan.com",
+        "natalie.mu",
+        "oricon.co.jp",
     )
     return any(host == h or host.endswith("." + h) for h in _JA_HOSTS_NON_JP)
