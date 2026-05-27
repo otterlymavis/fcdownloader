@@ -20,6 +20,10 @@ let helperState = {
   runtime: null,
 };
 
+function appIconPath() {
+  return path.join(__dirname, "..", "assets", "icon.png");
+}
+
 function registerProtocol() {
   if (process.defaultApp) {
     app.setAsDefaultProtocolClient(PROTOCOL, process.execPath, [path.resolve(process.argv[1])]);
@@ -217,7 +221,7 @@ function updateTray() {
 }
 
 function createTray() {
-  const icon = nativeImage.createEmpty();
+  const icon = nativeImage.createFromPath(appIconPath());
   tray = new Tray(icon);
   updateTray();
   tray.on("click", () => showWindow());
@@ -236,6 +240,7 @@ function createWindow() {
     minWidth: 380,
     minHeight: 300,
     title: "FCDownloader Companion",
+    icon: appIconPath(),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
     },
