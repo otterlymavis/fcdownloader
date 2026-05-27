@@ -24,6 +24,9 @@ const bookmarklet = $("bookmarklet");
 const releaseVersion = $("release-version");
 const helperChip = $("helper-chip");
 const helperText = $("helper-text");
+const downloadWidget = $("download-widget");
+const downloadToggle = $("download-menu-toggle");
+const downloadMenu = $("download-menu");
 
 const LOCAL_HELPER = "http://127.0.0.1:8765";
 const DIRECT_MEDIA_RE = /\.(?:mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif)(?:[?#]|$)|googlevideo\.com\/videoplayback|(?:video|audio)\.twimg\.com|cdninstagram\.com|fbcdn\.net|v\.redd\.it/i;
@@ -155,6 +158,34 @@ if (bookmarklet) {
 applyReleaseLinks();
 checkCompanion();
 setInterval(checkCompanion, 10000);
+
+function setDownloadMenuOpen(open) {
+  if (!downloadToggle || !downloadMenu) return;
+  downloadMenu.hidden = !open;
+  downloadToggle.setAttribute("aria-expanded", String(open));
+}
+
+if (downloadToggle && downloadMenu) {
+  downloadToggle.addEventListener("click", () => {
+    setDownloadMenuOpen(downloadMenu.hidden);
+  });
+
+  document.addEventListener("click", (event) => {
+    if (downloadMenu.hidden || downloadWidget?.contains(event.target)) return;
+    setDownloadMenuOpen(false);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") setDownloadMenuOpen(false);
+  });
+
+  downloadMenu.addEventListener("click", (event) => {
+    const link = event.target.closest("a");
+    if (link && link.getAttribute("href") === "#cards") {
+      setDownloadMenuOpen(false);
+    }
+  });
+}
 
 // ── Auto-extract URL from messy pastes ───────────────────────────────
 //

@@ -28,58 +28,6 @@
       <img class="mascot" src="./mascot.png" alt="" aria-hidden="true" />
     </header>
 
-    <section class="release-panel" aria-label="FCDownloader downloads">
-      <div class="release-head">
-        <div>
-          <div class="card-eyebrow" id="release-version">Release</div>
-          <h2>Download hub</h2>
-        </div>
-        <div class="helper-chip" id="helper-chip">
-          <span class="helper-dot"></span>
-          <span id="helper-text">Checking companion...</span>
-        </div>
-      </div>
-
-      <div class="download-grid">
-        <a class="download-tile" data-download-link="android" href="#">
-          <strong>Android app</strong>
-          <span>APK build for Android phones and tablets</span>
-        </a>
-        <a class="download-tile" data-download-link="ios" href="#">
-          <strong>iOS app</strong>
-          <span>TestFlight or App Store link</span>
-        </a>
-        <a class="download-tile" data-download-link="extension" href="#">
-          <strong>Browser extension</strong>
-          <span>Chrome, Edge, and Firefox package</span>
-        </a>
-        <a class="download-tile" data-download-link="helper" href="#">
-          <strong>Desktop helper</strong>
-          <span>Companion app for HD and local downloads</span>
-        </a>
-        <a class="download-tile" href="#cards">
-          <strong>Use web downloader</strong>
-          <span>Paste a public media link below</span>
-        </a>
-        <a class="download-tile" data-download-link="self-host" href="#">
-          <strong>Self-host backend</strong>
-          <span>Advanced extractor setup</span>
-        </a>
-        <a class="download-tile" id="open-companion" href="fcdownloader-companion://start">
-          <strong>Open Companion</strong>
-          <span>Start the local helper</span>
-        </a>
-      </div>
-    </section>
-
-    <section class="guide-panel" aria-label="FCDownloader quick guide">
-      <img
-        class="guide-image"
-        src="./quick-guide.png"
-        alt="FCDownloader quick guide: paste a link, fetch media, choose a version, and download only media you own or have permission to access."
-      />
-    </section>
-
     <section class="cards" id="cards" aria-label="Download options">
       <article class="card">
         <header class="card-head">
@@ -139,6 +87,62 @@
 
     <section id="status" hidden aria-live="polite"></section>
   </main>
+
+  <aside class="download-widget" id="download-widget">
+    <button
+      class="download-fab"
+      id="download-menu-toggle"
+      type="button"
+      aria-controls="download-menu"
+      aria-expanded="false"
+    >
+      <span class="download-fab-eyebrow" id="release-version">Release</span>
+      <strong>Download hub</strong>
+    </button>
+
+    <section class="release-panel" id="download-menu" aria-label="FCDownloader downloads" hidden>
+      <div class="release-head">
+        <div>
+          <h2>Download links</h2>
+        </div>
+        <div class="helper-chip" id="helper-chip">
+          <span class="helper-dot"></span>
+          <span id="helper-text">Checking companion...</span>
+        </div>
+      </div>
+
+      <div class="download-grid">
+        <a class="download-tile" data-download-link="android" href="#">
+          <strong>Android app</strong>
+          <span>APK build for Android phones and tablets</span>
+        </a>
+        <a class="download-tile" data-download-link="ios" href="#">
+          <strong>iOS app</strong>
+          <span>TestFlight or App Store link</span>
+        </a>
+        <a class="download-tile" data-download-link="extension" href="#">
+          <strong>Browser extension</strong>
+          <span>Chrome, Edge, and Firefox package</span>
+        </a>
+        <a class="download-tile" data-download-link="helper" href="#">
+          <strong>Desktop helper</strong>
+          <span>Companion app for HD and local downloads</span>
+        </a>
+        <a class="download-tile" href="#cards">
+          <strong>Use web downloader</strong>
+          <span>Paste a public media link below</span>
+        </a>
+        <a class="download-tile" data-download-link="self-host" href="#">
+          <strong>Self-host backend</strong>
+          <span>Advanced extractor setup</span>
+        </a>
+        <a class="download-tile" id="open-companion" href="fcdownloader-companion://start">
+          <strong>Open Companion</strong>
+          <span>Start the local helper</span>
+        </a>
+      </div>
+    </section>
+  </aside>
 
   <footer>
     <p>We do not add analytics or ads. See the <a href="./privacy.html">Privacy Policy</a>.</p>
