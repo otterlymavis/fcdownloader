@@ -192,6 +192,20 @@ h1 {
   line-height: 1.35;
 }
 
+.guide-panel {
+  margin: -16px auto 42px;
+}
+
+.guide-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
 .card {
   min-height: 390px;
   padding: 34px;
