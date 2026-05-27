@@ -63,6 +63,21 @@ react {
     autolinkLibrariesWithApp()
 }
 
+tasks.withType(com.facebook.react.tasks.BundleHermesCTask).configureEach {
+    sources.exclude("artifacts/**/*")
+    sources.exclude("dist/**/*")
+    sources.exclude("desktop-companion/build/**/*")
+    sources.exclude("desktop-companion/dist/**/*")
+    sources.exclude("desktop-companion/node_modules/**/*")
+    sources.exclude("history_logs/**/*")
+    sources.exclude("pytest-of-*")
+    sources.exclude("pytest-of-*/**/*")
+    sources.exclude(".pytest_cache")
+    sources.exclude(".pytest_cache/**/*")
+    sources.exclude("server/.pytest_cache")
+    sources.exclude("server/.pytest_cache/**/*")
+}
+
 /**
  * Set this to true in release builds to optimize the app using [R8](https://developer.android.com/topic/performance/app-optimization/enable-app-optimization).
  */
