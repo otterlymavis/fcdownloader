@@ -336,8 +336,8 @@ def ytdl_download(
                 raise HTTPException(
                     422,
                     "YouTube requires your session cookies to download from a server. "
-                    "Open the video in your browser, use the FCDownload bookmarklet or "
-                    "extension to capture your session, and try again.",
+                    "Log into YouTube in the same browser profile where FCDownloader is "
+                    "installed, open the video there, click Find media again, then download.",
                 )
             # Stall watchdog sends SIGKILL (-9); the process may emit "Killed"
             # via stderr on some Linux kernels.

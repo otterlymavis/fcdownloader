@@ -27,6 +27,43 @@
       .trim();
   }
 
+  const YOUTUBE_LOCALES = {
+    en: { hl: "en", gl: "US" },
+    es: { hl: "es", gl: "ES" },
+    fr: { hl: "fr", gl: "FR" },
+    de: { hl: "de", gl: "DE" },
+    pt: { hl: "pt", gl: "BR" },
+    it: { hl: "it", gl: "IT" },
+    ja: { hl: "ja", gl: "JP" },
+    ko: { hl: "ko", gl: "KR" },
+    zh: { hl: "zh-CN", gl: "CN" },
+    "zh-hant": { hl: "zh-TW", gl: "TW" },
+    hi: { hl: "hi", gl: "IN" },
+    ar: { hl: "ar", gl: "SA" },
+    id: { hl: "id", gl: "ID" },
+    ru: { hl: "ru", gl: "RU" },
+    tr: { hl: "tr", gl: "TR" },
+    vi: { hl: "vi", gl: "VN" },
+    th: { hl: "th", gl: "TH" },
+  };
+
+  function normalizeLanguageTag(tag) {
+    const normalized = String(tag || "").trim().replace(/_/g, "-").toLowerCase();
+    if (!normalized) return "";
+    if (/^zh-(tw|hk|mo|hant)/.test(normalized)) return "zh-hant";
+    const primary = normalized.split("-")[0];
+    return YOUTUBE_LOCALES[primary] ? primary : "";
+  }
+
+  function youtubeLocale() {
+    const languages = Array.isArray(navigator.languages) ? navigator.languages : [];
+    for (const tag of [...languages, navigator.language]) {
+      const code = normalizeLanguageTag(tag);
+      if (code) return YOUTUBE_LOCALES[code];
+    }
+    return YOUTUBE_LOCALES.en;
+  }
+
   const EMBED_HOSTS = [
     "player.vimeo.com",
     "www.youtube.com/embed",
@@ -127,29 +164,71 @@
   // (For HD on YouTube the backend path is required anyway, but this catches
   // the muxed itag-18 URL for instant direct download.)
   function scanYouTube() {
-    const found = [];
-    if (!/youtube\.com\/watch|youtu\.be\//.test(location.href)) return found;
+    return [];
+  }
+
+  function youtubeVideoId() {
+    return location.href.match(/(?:[?&]v=|youtu\.be\/|\/shorts\/)([A-Za-z0-9_-]{11})/)?.[1] || "";
+  }
+
+  async function scanYouTubeInnertube() {
+    const videoId = youtubeVideoId();
+    if (!videoId) return;
     try {
-      const ipr = window.ytInitialPlayerResponse;
-      const sd = ipr?.streamingData;
-      if (sd?.hlsManifestUrl) {
-        found.push({ url: sd.hlsManifestUrl, kind: "hls", source: "yt-player-response", label: "HLS" });
-      }
-      if (Array.isArray(sd?.formats)) {
-        for (const f of sd.formats) {
-          if (f?.url) {
-            found.push({
-              url: f.url,
-              kind: "direct",
-              source: "yt-player-response",
-              label: f.qualityLabel || (f.height ? `${f.height}p` : ""),
-            });
-            break; // only one muxed format exists
-          }
-        }
-      }
+      const clientVersion = "20.10.38";
+      const locale = youtubeLocale();
+      const res = await fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Youtube-Client-Name": "3",
+          "X-Youtube-Client-Version": clientVersion,
+        },
+        referrer: `https://www.youtube.com/watch?v=${videoId}`,
+        body: JSON.stringify({
+          videoId,
+          context: {
+            client: {
+              hl: locale.hl,
+              gl: locale.gl,
+              clientName: "ANDROID",
+              clientVersion,
+              androidSdkVersion: 33,
+              osName: "Android",
+              osVersion: "13",
+              platform: "MOBILE",
+              utcOffsetMinutes: 0,
+            },
+          },
+        }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const formats = data?.streamingData?.formats;
+      if (!Array.isArray(formats)) return;
+      const adaptive = data?.streamingData?.adaptiveFormats;
+      const muxed360 =
+        formats.find((f) => String(f?.itag) === "18" && f?.url) ||
+        formats.find((f) => f?.url && f?.height <= 360 && f?.audioQuality);
+      if (!muxed360?.url) return;
+      const items = [{
+        url: location.href,
+        kind: "embed",
+        source: "youtube-hd-local",
+        label: "HD (local helper)",
+        title: document.title,
+        pageUrl: location.href,
+      }, {
+        url: muxed360.url,
+        kind: "direct",
+        source: "yt-innertube-android",
+        label: muxed360.qualityLabel || "360p",
+        title: document.title,
+        pageUrl: location.href,
+        referer: "https://www.youtube.com/",
+      }];
+      post(items);
     } catch {}
-    return found;
   }
 
   // Bilibili — window.__playinfo__ exposes the actual stream URLs
@@ -195,6 +274,76 @@
     return found;
   }
 
+  const JAPANESE_BACKEND_PLATFORMS = [
+    {
+      label: "Niconico",
+      host: /(?:^|\.)(?:nicovideo\.jp|nico\.ms|niconico\.com|nicochannel\.jp)$/i,
+      path: /\/(?:watch|live|series|mylist|user|channel|channels|video|videos)\//i,
+    },
+    {
+      label: "TVer",
+      host: /(?:^|\.)(?:tver\.jp|tver\.co\.jp)$/i,
+      path: /\/(?:episodes|series|lp|corner|live)\//i,
+    },
+    {
+      label: "ABEMA",
+      host: /(?:^|\.)(?:abema\.tv|abema\.io)$/i,
+      path: /\/(?:video|now-on-air|channels)\//i,
+    },
+    {
+      label: "NHK",
+      host: /(?:^|\.)(?:nhk\.or\.jp|nhk\.jp)$/i,
+      path: /\/(?:video|vod|ondemand|radio|school|archives|news\/html)\//i,
+    },
+    {
+      label: "TwitCasting",
+      host: /(?:^|\.)twitcasting\.tv$/i,
+      path: /\/(?:[^/?#]+\/(?:movie|broadcaster|show|metastream)|[^/?#]+-[0-9]+|movie\/[0-9]+)/i,
+    },
+    {
+      label: "FC2",
+      host: /(?:^|\.)(?:video\.fc2\.com|live\.fc2\.com)$/i,
+      path: /\/(?:content|a|en|ja|tw|cn|live|member|flv2)/i,
+    },
+    {
+      label: "OpenREC",
+      host: /(?:^|\.)openrec\.tv$/i,
+      path: /\/(?:live|movie|capture)\//i,
+    },
+    {
+      label: "TBS",
+      host: /(?:^|\.)(?:cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp)$/i,
+      path: /\/(?:episode|program|douga|tbs-free|free|movie|video)\//i,
+    },
+    {
+      label: "FOD",
+      host: /(?:^|\.)(?:fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp)$/i,
+      path: /\/(?:title|episode|video|ondemand|plus7)\//i,
+    },
+    {
+      label: "Yahoo Japan",
+      host: /(?:^|\.)(?:video\.yahoo\.co\.jp|news\.yahoo\.co\.jp)$/i,
+      path: /\/(?:video|articles|pickup|feature)\//i,
+    },
+  ];
+
+  function scanJapanesePlatforms() {
+    const host = location.hostname;
+    const path = location.pathname + "/";
+    const match = JAPANESE_BACKEND_PLATFORMS.find((site) =>
+      site.host.test(host) && site.path.test(path)
+    );
+    if (!match) return [];
+    return [{
+      url: location.href,
+      pageUrl: location.href,
+      kind: "embed",
+      source: "japanese-page",
+      label: match.label,
+      backendRouted: true,
+    }];
+  }
+
   // ── Run all scans ────────────────────────────────────────────────────────
 
   // Image scanning is only useful on hosts where photo downloads are the
@@ -216,6 +365,7 @@
     out.push(...scanYouTube());
     out.push(...scanBilibili());
     out.push(...scanWeibo());
+    out.push(...scanJapanesePlatforms());
 
     // Page-wide JSON-field scan is noisy: news pages with comments / feeds
     // (AmusePlus, Threads feed pages) contain dozens of "video_url" matches
@@ -253,6 +403,7 @@
   }
 
   maybeScan();
+  scanYouTubeInnertube();
   const earlyTimer = setInterval(() => {
     if (maybeScan()) clearInterval(earlyTimer);
   }, 2000);

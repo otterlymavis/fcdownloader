@@ -125,8 +125,8 @@ export async function downloadViaServer(
 
 // Download a /ytdl-stream?... URL directly. The server ran yt-dlp in download
 // mode, blocks until the file is ready, then streams it back with Content-Length.
-// Cookies are already baked into the URL query string by the server; we still
-// send the bearer token in the Authorization header for endpoint protection.
+// Session cookies are sent in X-FCDL-Cookies so the URL stays short; the bearer
+// token still goes in Authorization for endpoint protection.
 async function _downloadYtdlStream(
   media: DetectedMedia,
   taskId: string,
@@ -138,6 +138,8 @@ async function _downloadYtdlStream(
   const token = await getServerExtractorToken();
   const reqHeaders: Record<string, string> = {};
   if (token) reqHeaders.Authorization = `Bearer ${token}`;
+  const cookies = await extractSessionCookies(media.pageUrl).catch(() => '');
+  if (cookies) reqHeaders['X-FCDL-Cookies'] = cookies;
 
   const res = await expoFetch(media.url, { headers: reqHeaders, signal });
 

@@ -96,6 +96,45 @@ main {
   letter-spacing: 0.02em;
 }
 
+.helper-status {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.helper-status[hidden] {
+  display: none;
+}
+.helper-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  flex: 0 0 auto;
+}
+.helper-status.ready .helper-dot {
+  background: #2f8f5b;
+}
+.helper-status.missing .helper-dot {
+  background: var(--error);
+}
+#helper-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+}
+#helper-open {
+  min-height: 28px;
+  padding: 5px 10px;
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+
 /* ── Primary card ────────────────────────────────────────────────────── */
 
 #primary {
@@ -242,6 +281,9 @@ button, .primary, .ghost {
   font-size: 12px;
 }
 #more-list li:last-child { border-bottom: none; }
+#more-list .best-media-row {
+  align-items: flex-start;
+}
 #more-list .row-meta {
   flex: 1;
   min-width: 0;
@@ -259,6 +301,41 @@ button, .primary, .ghost {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+#more-list .media-select {
+  display: inline-flex;
+  align-items: center;
+  padding-top: 3px;
+}
+#more-list input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+.best-badge {
+  display: inline-flex;
+  margin-left: 5px;
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+.bulk-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.bulk-actions[hidden] {
+  display: none;
+}
+.bulk-actions button {
+  flex: 1;
+  min-height: 32px;
+  padding: 6px 10px;
+  font-size: 12px;
 }
 #more-list button {
   font-size: 11px;

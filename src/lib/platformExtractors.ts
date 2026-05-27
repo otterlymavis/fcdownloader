@@ -40,9 +40,8 @@ export function isJapaneseDomain(url: string): boolean {
 
 /**
  * Fetch HTML with locale-aware Accept-Language.
- * For Japanese sites the Accept-Language is automatically set to ja,en-US
- * so locale-sensitive sites return the correct page content instead of an
- * English stub or a "region not supported" redirect.
+ * Locale-sensitive sites return better markup/manifests when the request
+ * matches their common regional language instead of always asking for English.
  */
 async function fetchHtml(url: string, ua = DESKTOP_UA, acceptLanguage?: string): Promise<string> {
   const lang = acceptLanguage ?? getAcceptLanguage(url);
@@ -505,7 +504,7 @@ async function extractNicoNico(pageUrl: string): Promise<DetectedMedia[]> {
   // Tier 2: on-page JSON. NicoNico embeds video info in window.__INITIAL_WATCH_DATA__
   // or a <script type="application/ld+json"> block.
   try {
-    const html = await fetchHtml(pageUrl, DESKTOP_UA, 'ja,en-US;q=0.9,en;q=0.8');
+    const html = await fetchHtml(pageUrl, DESKTOP_UA, getAcceptLanguage(pageUrl));
     const results: DetectedMedia[] = [];
 
     // Try window.__INITIAL_WATCH_DATA__ (newer layout)
@@ -540,9 +539,9 @@ async function extractAbema(pageUrl: string): Promise<DetectedMedia[]> {
     console.warn('[extractAbema] server extractor errored:', String(e).slice(0, 200));
   }
 
-  // On-page HLS scan with Japanese locale
+  // On-page HLS scan with locale-aware headers
   try {
-    const html = await fetchHtml(pageUrl, DESKTOP_UA, 'ja,en-US;q=0.9,en;q=0.8');
+    const html = await fetchHtml(pageUrl, DESKTOP_UA, getAcceptLanguage(pageUrl));
     const results: DetectedMedia[] = [];
 
     // Abema embeds media URLs in JSON-like structures within script tags
@@ -567,9 +566,9 @@ async function extractAmeba(pageUrl: string): Promise<DetectedMedia[]> {
     console.warn('[extractAmeba] server extractor errored:', String(e).slice(0, 200));
   }
 
-  // On-page scan with Japanese locale
+  // On-page scan with locale-aware headers
   try {
-    const html = await fetchHtml(pageUrl, DESKTOP_UA, 'ja,en-US;q=0.9,en;q=0.8');
+    const html = await fetchHtml(pageUrl, DESKTOP_UA, getAcceptLanguage(pageUrl));
     const results: DetectedMedia[] = [];
 
     extractUrls(html, /(https?:\/\/[^"'\\<>\s]*ameba(?:cdn|video)?[^"'\\<>\s]*\.(?:m3u8|mp4)[^"'\\<>\s]*)/gi)
@@ -587,7 +586,7 @@ async function extractAmeba(pageUrl: string): Promise<DetectedMedia[]> {
 // ── Generic Japanese site ─────────────────────────────────────────────────────
 /**
  * Generic fallback for Japanese streaming sites not covered by a dedicated
- * extractor. Fetches with Accept-Language: ja and scans for HLS/MP4/DASH URLs.
+ * extractor. Fetches with locale-aware headers and scans for HLS/MP4/DASH URLs.
  */
 async function extractJapaneseGeneric(pageUrl: string): Promise<DetectedMedia[]> {
   // Server-first
@@ -597,7 +596,7 @@ async function extractJapaneseGeneric(pageUrl: string): Promise<DetectedMedia[]>
   } catch {}
 
   try {
-    const html = await fetchHtml(pageUrl, DESKTOP_UA, 'ja,en-US;q=0.9,en;q=0.8');
+    const html = await fetchHtml(pageUrl, DESKTOP_UA, getAcceptLanguage(pageUrl));
     const results: DetectedMedia[] = [];
 
     const patterns: RegExp[] = [
@@ -673,8 +672,8 @@ export async function extractFromSocialUrl(pageUrl: string): Promise<DetectedMed
   const strategies: Array<[string, () => Promise<DetectedMedia[]>]> = [
     ['yt-dlp extraction', () => extractViaServer(pageUrl)],
     ['platform-specific extractor', () => platform ? platform.fn(pageUrl) : Promise.resolve([])],
-    // For Japanese URLs without a specific extractor, try the generic Japanese
-    // scraper (Accept-Language: ja + HLS/MP4 scan) before the generic English paths.
+    // For Japanese URLs without a specific extractor, try the generic locale-aware
+    // scraper before the generic English paths.
     ...(japaneseUrl && !platform
       ? [['Japanese generic extractor', () => extractJapaneseGeneric(pageUrl)] as [string, () => Promise<DetectedMedia[]>]]
       : []),

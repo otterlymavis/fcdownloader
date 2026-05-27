@@ -25,6 +25,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Iterator
 
+import languages
 from config import MOBILE_UA
 from utils import (
     cache_key,
@@ -204,7 +205,10 @@ def _weibo_headers(page_url: str, cookies: str | None = None) -> dict[str, str]:
     headers: dict[str, str] = {
         "User-Agent": _WEIBO_DESKTOP_UA,
         "Accept": "application/json,text/plain,*/*",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Language": languages.accept_language_for_url(
+            page_url,
+            "zh-CN,zh;q=0.9,en-US;q=0.6,en;q=0.5",
+        ),
         "Referer": page_url or "https://weibo.com/",
         "Origin": "https://weibo.com",
         "X-Requested-With": "XMLHttpRequest",

@@ -54,6 +54,7 @@ from yt_dlp import YoutubeDL
 from yt_dlp.version import __version__ as YT_DLP_VERSION
 
 import auth
+import languages
 import supervisor
 from config import (
     ALLOWED_ORIGINS,
@@ -128,6 +129,7 @@ app = FastAPI(
     version="3.0",
     default_response_class=UTF8JSONResponse,
 )
+BACKEND_API_VERSION = "v1"
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -137,7 +139,7 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_origin_regex=_extension_origin_regex,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-FCDL-Cookies"],
 )
 
 # ── Cache ─────────────────────────────────────────────────────────────────────
@@ -536,6 +538,113 @@ def _ffmpeg_stream(
         )
 
 
+def _youtube_video_id(page_url: str) -> str | None:
+    m = re.search(r"(?:[?&]v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})", page_url)
+    return m.group(1) if m else None
+
+
+def _cookie_header_from_netscape_file(path: str | None, host_hint: str = "youtube") -> str | None:
+    if not path or not os.path.exists(path):
+        return None
+    pairs: list[str] = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                cols = line.split("\t")
+                if len(cols) < 7:
+                    continue
+                domain, _flag, _path, _secure, _expiry, name, value = cols[:7]
+                if host_hint in domain and name and value:
+                    pairs.append(f"{name}={value}")
+    except Exception:
+        return None
+    return "; ".join(pairs) if pairs else None
+
+
+def _youtube_android_streams(
+    page_url: str,
+    max_height: int = 1080,
+    cookies: str | None = None,
+) -> dict[str, Any]:
+    video_id = _youtube_video_id(page_url)
+    if not video_id:
+        raise HTTPException(400, "invalid YouTube URL")
+
+    client_version = "20.10.38"
+    ua = "com.google.android.youtube/20.10.38 (Linux; U; Android 13) gzip"
+    body = {
+        "videoId": video_id,
+        "context": {
+            "client": {
+                "hl": "en",
+                "gl": "US",
+                "clientName": "ANDROID",
+                "clientVersion": client_version,
+                "androidSdkVersion": 33,
+                "osName": "Android",
+                "osVersion": "13",
+                "platform": "MOBILE",
+                "utcOffsetMinutes": 0,
+            },
+        },
+    }
+    req_headers = {
+        "Content-Type": "application/json",
+        "User-Agent": ua,
+        "X-Youtube-Client-Name": "3",
+        "X-Youtube-Client-Version": client_version,
+        "Origin": "https://www.youtube.com",
+        "Referer": f"https://www.youtube.com/watch?v={video_id}",
+    }
+    if cookies:
+        req_headers["Cookie"] = safe_text(cookies)
+
+    req = urllib.request.Request(
+        "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+        data=json.dumps(body).encode("utf-8"),
+        headers=req_headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"YouTube InnerTube request failed: {safe_text(exc)[:300]}")
+
+    status = (data.get("playabilityStatus") or {}).get("status")
+    if status not in (None, "OK"):
+        reason = (data.get("playabilityStatus") or {}).get("reason") or status
+        raise HTTPException(422, f"YouTube refused playback: {safe_text(reason)[:300]}")
+
+    adaptive = (data.get("streamingData") or {}).get("adaptiveFormats") or []
+    videos = [
+        f for f in adaptive
+        if f.get("url")
+        and str(f.get("mimeType") or "").startswith("video/mp4")
+        and isinstance(f.get("height"), int)
+        and f["height"] <= max_height
+    ]
+    audios = [
+        f for f in adaptive
+        if f.get("url") and str(f.get("mimeType") or "").startswith("audio/mp4")
+    ]
+    if not videos or not audios:
+        raise HTTPException(502, "YouTube InnerTube returned no muxable HD streams")
+
+    videos.sort(key=lambda f: (int(f.get("height") or 0), int(f.get("bitrate") or 0)), reverse=True)
+    audios.sort(key=lambda f: (str(f.get("itag")) == "140", int(f.get("bitrate") or 0)), reverse=True)
+    details = data.get("videoDetails") or {}
+    return {
+        "video": videos[0],
+        "audio": audios[0],
+        "title": details.get("title") or "YouTube Video",
+        "id": video_id,
+    }
+
+
 def _resolve_a_records(host: str) -> list[str]:
     try:
         return [info[4][0] for info in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)]
@@ -721,6 +830,8 @@ def _is_japanese_domain(url: str) -> bool:
 def health() -> dict[str, Any]:
     return {
         "ok":         True,
+        "service":    "fcdownloader-extractor",
+        "apiVersion": BACKEND_API_VERSION,
         "cached":     len(_cache),
         "rate_limit": RATE_LIMIT,
         "cache_ttl":  CACHE_TTL,
@@ -732,6 +843,7 @@ def version() -> dict[str, Any]:
     return {
         "ok":             True,
         "service":        "fcdownloader-extractor",
+        "apiVersion":     BACKEND_API_VERSION,
         "yt_dlp":         YT_DLP_VERSION,
         "ffmpeg":         _ffmpeg_version(),
         "cookies_loaded": bool(COOKIES_FILE and os.path.exists(COOKIES_FILE)),
@@ -867,6 +979,22 @@ def download(
             _ffmpeg_stream("", None, response["url"], hls_headers, request_id=rid),
             media_type="video/mp4", headers=headers,
         )
+    # ytdl-stream short-circuit: extraction resolved to our own /ytdl-stream proxy
+    # (YouTube SABR — yt-dlp skip_download returned HLS, so the HLS guard triggered
+    # and ytdl-stream strategy won). Call the supervisor directly instead of having
+    # /download HTTP-request itself: urllib would forward cookies in the Cookie header,
+    # but /ytdl-stream only reads X-FCDL-Cookies / the cookies query-param, so yt-dlp
+    # would run without cookies and YouTube would block with the bot-challenge 422.
+    if "/ytdl-stream?" in response.get("url", ""):
+        _qs = urllib.parse.parse_qs(urllib.parse.urlparse(response["url"]).query)
+        _yt_url = (_qs.get("page_url") or [""])[0]
+        if _yt_url:
+            _tmpdir, _fp, _fsz, _ = supervisor.ytdl_download(_yt_url, cookies, request_id=rid)
+            return StreamingResponse(
+                supervisor.stream_file(_tmpdir, _fp, request_id=rid),
+                media_type="video/mp4",
+                headers={**headers, "Content-Length": str(_fsz), "X-Request-ID": rid},
+            )
     if _needs_headered_direct_stream(url, response["url"], request_headers):
         return _direct_media_stream(response["url"], request_headers, headers)
     return RedirectResponse(response["url"], status_code=307, headers=headers)
@@ -910,6 +1038,18 @@ def download_post(request: Request, req: DownloadRequest) -> StreamingResponse:
             _ffmpeg_stream("", None, response["url"], hls_headers, request_id=rid),
             media_type="video/mp4", headers=headers,
         )
+    # ytdl-stream short-circuit: same as GET /download — call supervisor directly
+    # so the user's cookies reach yt-dlp (Cookie header ≠ X-FCDL-Cookies).
+    if "/ytdl-stream?" in response.get("url", ""):
+        _qs = urllib.parse.parse_qs(urllib.parse.urlparse(response["url"]).query)
+        _yt_url = (_qs.get("page_url") or [""])[0]
+        if _yt_url:
+            _tmpdir, _fp, _fsz, _ = supervisor.ytdl_download(_yt_url, req.cookies, request_id=rid)
+            return StreamingResponse(
+                supervisor.stream_file(_tmpdir, _fp, request_id=rid),
+                media_type="video/mp4",
+                headers={**headers, "Content-Length": str(_fsz), "X-Request-ID": rid},
+            )
     return _direct_media_stream(response["url"], request_headers, headers)
 
 
@@ -929,6 +1069,7 @@ def ytdl_stream_endpoint(
     request: Request,
     page_url: str = Query(..., description="YouTube page URL to stream"),
     cookies: str | None = Query(None, description="Optional YouTube session cookies"),
+    x_fcdl_cookies: str | None = Header(None, alias="X-FCDL-Cookies"),
 ) -> StreamingResponse:
     page_url = normalize_url(page_url)
     if not page_url:
@@ -936,7 +1077,7 @@ def ytdl_stream_endpoint(
     if not any(x in page_url for x in ("youtube.com/", "youtu.be/", "youtube-nocookie.com/")):
         raise HTTPException(400, "ytdl-stream only supports YouTube URLs")
 
-    cookies_val = safe_text(cookies) if cookies else None
+    cookies_val = safe_text(x_fcdl_cookies or cookies) if (x_fcdl_cookies or cookies) else None
 
     # Cookie size validation before handing off to supervisor.
     if cookies_val:
@@ -966,6 +1107,92 @@ def ytdl_stream_endpoint(
 
 
 # ── /playlist ─────────────────────────────────────────────────────────────────
+
+
+@app.get("/youtube-hd-stream")
+@limiter.limit(RATE_LIMIT)
+def youtube_hd_stream_endpoint(
+    request: Request,
+    page_url: str = Query(..., description="YouTube page URL to stream as muxed HD MP4"),
+    max_height: int = Query(1080, ge=360, le=1080),
+    cookies: str | None = Query(None, description="Optional YouTube session cookies"),
+    x_fcdl_cookies: str | None = Header(None, alias="X-FCDL-Cookies"),
+) -> StreamingResponse:
+    page_url = normalize_url(page_url)
+    if not page_url:
+        raise HTTPException(400, "page_url is required")
+    if not any(x in page_url for x in ("youtube.com/", "youtu.be/", "youtube-nocookie.com/")):
+        raise HTTPException(400, "youtube-hd-stream only supports YouTube URLs")
+
+    rid = uuid.uuid4().hex[:12]
+    cookies_val = safe_text(x_fcdl_cookies or cookies) if (x_fcdl_cookies or cookies) else None
+    if cookies_val:
+        try:
+            auth.validate_cookies(cookies_val)
+        except (auth.CookieTooLargeError, auth.CookieFormatError) as exc:
+            raise HTTPException(400, str(exc))
+    if not cookies_val:
+        cookies_val = _cookie_header_from_netscape_file(COOKIES_FILE, "youtube")
+
+    picked = _youtube_android_streams(page_url, max_height=max_height, cookies=cookies_val)
+    video = picked["video"]
+    audio = picked["audio"]
+    video_id = picked.get("id") or cache_key(page_url)
+    filename = _safe_filename(picked.get("title"), video_id)
+    headers = {
+        "Content-Disposition": content_disposition(filename, video_id),
+        "Cache-Control": "no-cache, no-store",
+        "X-Request-ID": rid,
+        "X-FCDL-Video-Height": str(video.get("height") or ""),
+        "X-FCDL-Video-Itag": str(video.get("itag") or ""),
+        "X-FCDL-Audio-Itag": str(audio.get("itag") or ""),
+    }
+    print(
+        f"[youtube-hd] rid={rid} video_itag={video.get('itag')} "
+        f"height={video.get('height')} audio_itag={audio.get('itag')}"
+    )
+    return StreamingResponse(
+        _ffmpeg_stream(
+            video["url"],
+            audio["url"],
+            None,
+            {"Cookie": cookies_val} if cookies_val else None,
+            request_id=rid,
+        ),
+        media_type="video/mp4",
+        headers=headers,
+    )
+
+
+@app.get("/youtube-mux-stream")
+@limiter.limit(RATE_LIMIT)
+def youtube_mux_stream_endpoint(
+    request: Request,
+    video_url: str = Query(..., description="YouTube googlevideo video-only URL"),
+    audio_url: str = Query(..., description="YouTube googlevideo audio-only URL"),
+    title: str | None = Query(None),
+    video_id: str | None = Query(None),
+) -> StreamingResponse:
+    video_url = normalize_url(video_url)
+    audio_url = normalize_url(audio_url)
+    if "googlevideo.com/" not in video_url or "googlevideo.com/" not in audio_url:
+        raise HTTPException(400, "youtube-mux-stream only accepts googlevideo URLs")
+    if "/videoplayback" not in video_url or "/videoplayback" not in audio_url:
+        raise HTTPException(400, "youtube-mux-stream only accepts YouTube videoplayback URLs")
+
+    rid = uuid.uuid4().hex[:12]
+    safe_id = safe_text(video_id or cache_key(video_url))[:80]
+    filename = _safe_filename(title or "YouTube HD", safe_id)
+    print(f"[youtube-mux] rid={rid} browser-provided googlevideo URLs")
+    return StreamingResponse(
+        _ffmpeg_stream(video_url, audio_url, None, None, request_id=rid),
+        media_type="video/mp4",
+        headers={
+            "Content-Disposition": content_disposition(filename, safe_id),
+            "Cache-Control": "no-cache, no-store",
+            "X-Request-ID": rid,
+        },
+    )
 
 
 @app.post("/playlist")
@@ -1054,7 +1281,7 @@ def _default_proxy_headers(target_url: str, referer: str | None) -> dict[str, st
     h: dict[str, str] = {
         "User-Agent":      MOBILE_UA,
         "Accept":          "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Language": languages.accept_language_for_url(target_url, "en-US,en;q=0.9"),
     }
     if referer:
         h["Referer"] = referer

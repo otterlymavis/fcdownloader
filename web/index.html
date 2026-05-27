@@ -6,6 +6,11 @@
   <meta name="color-scheme" content="light" />
   <meta name="description" content="Save videos, photos, audio, and galleries that you own, control, or have permission to access." />
   <meta name="extractor-url" content="https://fcdownloader-extractor.fly.dev" />
+  <meta name="release-version" content="1.5.0" />
+  <meta name="mobile-download-url" content="https://github.com/otterlymavis/fcdownloader/releases/latest" />
+  <meta name="extension-download-url" content="https://github.com/otterlymavis/fcdownloader/releases/latest" />
+  <meta name="companion-download-url" content="https://github.com/otterlymavis/fcdownloader/releases/latest" />
+  <meta name="self-host-url" content="https://github.com/otterlymavis/fcdownloader/blob/main/server/README.md" />
   <title>FCDownloader</title>
   <link rel="icon" href="./favicon.ico?v=2" sizes="any" />
   <link rel="icon" href="./favicon-32.png?v=2" type="image/png" sizes="32x32" />
@@ -16,11 +21,51 @@
   <main>
     <header class="intro">
       <div class="intro-copy">
-        <h1>Save media you can access</h1>
-        <p class="subtitle">Download videos, photos, audio, and galleries that you own, control, or have permission to access with the app, extension, or bookmarklet.</p>
+        <h1>FCDownloader</h1>
+        <p class="subtitle">Save videos, photos, audio, and galleries that you own, control, or have permission to access.</p>
       </div>
       <img class="mascot" src="./mascot.png" alt="" aria-hidden="true" />
     </header>
+
+    <section class="release-panel" aria-label="FCDownloader downloads">
+      <div class="release-head">
+        <div>
+          <div class="card-eyebrow" id="release-version">Release</div>
+          <h2>Download hub</h2>
+        </div>
+        <div class="helper-chip" id="helper-chip">
+          <span class="helper-dot"></span>
+          <span id="helper-text">Checking companion...</span>
+        </div>
+      </div>
+
+      <div class="download-grid">
+        <a class="download-tile" data-download-link="mobile" href="#">
+          <strong>Install mobile app</strong>
+          <span>iOS and Android builds</span>
+        </a>
+        <a class="download-tile" data-download-link="extension" href="#">
+          <strong>Install browser extension</strong>
+          <span>Chrome, Edge, and Firefox package</span>
+        </a>
+        <a class="download-tile" data-download-link="companion" href="#">
+          <strong>Install Companion</strong>
+          <span>Optional for HD and local downloads</span>
+        </a>
+        <a class="download-tile" href="#cards">
+          <strong>Use web downloader</strong>
+          <span>Paste a public media link below</span>
+        </a>
+        <a class="download-tile" data-download-link="self-host" href="#">
+          <strong>Self-host backend</strong>
+          <span>Advanced extractor setup</span>
+        </a>
+        <a class="download-tile" id="open-companion" href="fcdownloader-companion://start">
+          <strong>Open Companion</strong>
+          <span>Start the local helper</span>
+        </a>
+      </div>
+    </section>
 
     <section class="cards" id="cards" aria-label="Download options">
       <article class="card">

@@ -26,6 +26,7 @@ from yt_dlp import YoutubeDL
 import auth
 import classifier
 import extractors
+import languages
 import registry
 from config import COOKIES_FILE, FORMAT_SPEC, SERVER_BASE_URL, MOBILE_UA
 from telemetry import RequestContext
@@ -35,6 +36,12 @@ from utils import (
     safe_headers,
     safe_text,
     guess_ext_from_url,
+)
+
+_DESKTOP_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/125.0.0.0 Safari/537.36"
 )
 
 
@@ -226,7 +233,10 @@ def _strategy_html_detector(
         req_headers = safe_headers({
             "User-Agent": http_headers.get("User-Agent") or MOBILE_UA,
             "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-            "Accept-Language": "ja,en-US;q=0.8,en;q=0.6",
+            "Accept-Language": (
+                http_headers.get("Accept-Language")
+                or languages.accept_language_for_url(page_url, "en-US,en;q=0.9")
+            ),
             **({"Referer": http_headers["Referer"]} if http_headers.get("Referer") else {}),
             **({"Origin": http_headers["Origin"]} if http_headers.get("Origin") else {}),
             **({"Cookie": cookies} if cookies else {}),
@@ -260,7 +270,8 @@ def _strategy_ytdl_stream_url(
 
     For YouTube SABR videos where skip_download=True cannot resolve format
     URLs, the /ytdl-stream endpoint runs yt-dlp in actual download mode and
-    streams the result.  Cookies are forwarded so the endpoint can authenticate.
+    streams the result.  Clients forward cookies in X-FCDL-Cookies so the
+    download URL stays short and does not expose session data.
     """
     name = "ytdl-stream"
     if not registry.is_youtube(page_url):
@@ -293,8 +304,6 @@ def _strategy_ytdl_stream_url(
         f"{SERVER_BASE_URL}/ytdl-stream"
         f"?page_url={urllib.parse.quote(page_url, safe='')}"
     )
-    if cookies:
-        stream_url += f"&cookies={urllib.parse.quote(cookies, safe='')}"
 
     print(
         f"[extract] ytdl-stream fallback: "
@@ -347,8 +356,14 @@ def _scan_media_urls(html_text: str, mode: str) -> list[str]:
     if mode in {"generic"}:
         patterns.append(r'https?:\\?/\\?/[^"\'<>\s\\]+?\.(?:mp4|m4v|webm|mov)[^"\'<>\s\\]*')
     if mode == "og":
+        _vt = r'(?:og:video(?::url)?|og:video:secure_url|twitter:player:stream)'
+        # property=… then content=… (most common ordering)
         patterns.append(
-            r'<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["\'](?:og:video(?::url)?|og:video:secure_url|twitter:player:stream)["\'][^>]+content\s*=\s*["\']([^"\']+)["\']'
+            r'<meta\s[^>]*?(?:property|name)\s*=\s*["\']' + _vt + r'["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']'
+        )
+        # content=… then property=… (some sites reverse the attribute order)
+        patterns.append(
+            r'<meta\s[^>]*?content\s*=\s*["\']([^"\']+)["\'][^>]*?(?:property|name)\s*=\s*["\']' + _vt + r'["\']'
         )
     found: list[str] = []
     variants = [
@@ -363,6 +378,99 @@ def _scan_media_urls(html_text: str, mode: str) -> list[str]:
                 if raw.startswith(("http://", "https://")) and raw not in found:
                     found.append(raw)
     return found
+
+
+def _strategy_page_embeds(
+    page_url: str,
+    http_headers: dict[str, str],
+    cookies: str | None,
+    ydl_opts: dict[str, Any],
+) -> dict[str, Any]:
+    """Detect embedded video players (Brightcove, JW Player, iframe) in page HTML.
+
+    Many sites don't put direct MP4/HLS URLs in their HTML but do include static
+    embed parameters — Brightcove data-account/data-video-id attributes, a
+    jwplayer().setup({file:…}) call, or an <iframe> pointing to a supported
+    player.  This strategy extracts those and passes them directly to yt-dlp.
+    """
+    import html as html_mod
+    import re
+    import urllib.error
+    import urllib.request
+
+    name = "embedded player detector"
+
+    req_headers = safe_headers({
+        "User-Agent": http_headers.get("User-Agent") or MOBILE_UA,
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Language": (
+            http_headers.get("Accept-Language")
+            or languages.accept_language_for_url(page_url, "en-US,en;q=0.9")
+        ),
+        **({"Referer": http_headers["Referer"]} if http_headers.get("Referer") else {}),
+        **({"Cookie": cookies} if cookies else {}),
+    })
+    try:
+        req = urllib.request.Request(page_url, headers=req_headers)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            html_text = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as exc:
+        return _result(name, False, reason=f"fetch: {safe_text(exc)[:200]}")
+    except Exception as exc:  # noqa: BLE001
+        return _result(name, False, reason=safe_text(exc)[:300])
+
+    embed_urls: list[str] = []
+
+    # ── Brightcove: data-account + data-video-id ──────────────────────────────
+    bc_acc = re.search(r'data-account=["\'](\d{7,})["\']', html_text)
+    bc_vid = re.search(r'data-video-id=["\'](\d{7,})["\']', html_text)
+    if bc_acc and bc_vid:
+        bc_plr = re.search(r'data-player=["\']([A-Za-z0-9_-]+)["\']', html_text)
+        pid = bc_plr.group(1) if bc_plr else "default"
+        embed_urls.append(
+            f"https://players.brightcove.net/{bc_acc.group(1)}"
+            f"/{pid}_default/index.html?videoId={bc_vid.group(1)}"
+        )
+
+    # ── JW Player: jwplayer().setup({ file: "URL" }) ──────────────────────────
+    jw = re.search(
+        r'jwplayer\s*\([^)]*\)\s*\.setup\s*\(\s*\{'
+        r'[^}]{0,1200}?["\']file["\']\s*:\s*["\']([^"\']{10,})["\']',
+        html_text, re.IGNORECASE | re.DOTALL,
+    )
+    if jw:
+        fu = html_mod.unescape(jw.group(1).replace("\\/", "/"))
+        if fu.startswith(("http://", "https://")):
+            embed_urls.append(fu)
+
+    # ── iframe embeds: YouTube, Vimeo, Brightcove, Dailymotion ───────────────
+    for m in re.finditer(
+        r'<iframe\b[^>]+?src=["\']'
+        r'((?:https?:)?//(?:www\.)?'
+        r'(?:youtube\.com/embed/|youtu\.be/|player\.vimeo\.com/video/'
+        r'|vimeo\.com/\d|players\.brightcove\.net/'
+        r'|dai\.ly/|dailymotion\.com/embed/video/)[^"\']{4,})["\']',
+        html_text, re.IGNORECASE,
+    ):
+        u = html_mod.unescape(m.group(1))
+        if u.startswith("//"):
+            u = "https:" + u
+        embed_urls.append(u)
+
+    if not embed_urls:
+        return _result(name, False, reason="no embedded player signatures found in page HTML")
+
+    last_err: str = "no info returned"
+    for embed_url in embed_urls:
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(embed_url, download=False)
+            if info:
+                return _result(name, True, media=info)
+        except Exception as exc:  # noqa: BLE001
+            last_err = safe_text(exc)[:200]
+
+    return _result(name, False, reason=f"embed extraction failed: {last_err}")
 
 
 # ── Engine ────────────────────────────────────────────────────────────────────
@@ -453,25 +561,58 @@ def run_extraction(
     elif "bilivideo.com" in page_url or "bilibili.com" in page_url:
         http_headers["Referer"]    = "https://www.bilibili.com/"
         http_headers["Origin"]     = "https://www.bilibili.com"
-        http_headers["User-Agent"] = (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/125.0.0.0 Safari/537.36"
-        )
+        http_headers["User-Agent"] = _DESKTOP_UA
     elif any(h in page_url for h in ("weibo.com", "weibo.cn", "weibocdn.com")):
         http_headers["Referer"]    = "https://weibo.com/"
         http_headers["Origin"]     = "https://weibo.com"
-        http_headers["User-Agent"] = (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/125.0.0.0 Safari/537.36"
-        )
+        http_headers["User-Agent"] = _DESKTOP_UA
     elif any(h in page_url for h in ("xiaohongshu.com", "xhslink.com", "xhscdn.com")):
         http_headers["Referer"]    = "https://www.xiaohongshu.com/"
         http_headers["Origin"]     = "https://www.xiaohongshu.com"
         http_headers["User-Agent"] = MOBILE_UA
-    if profile.is_japanese and "Accept-Language" not in http_headers:
-        http_headers["Accept-Language"] = "ja,en-US;q=0.9,en;q=0.8"
+    elif any(h in page_url for h in ("nicovideo.jp", "nico.ms", "niconico.com", "nicochannel.jp")):
+        http_headers["Referer"]    = "https://www.nicovideo.jp/"
+        http_headers["Origin"]     = "https://www.nicovideo.jp"
+        http_headers["User-Agent"] = _DESKTOP_UA
+    elif any(h in page_url for h in ("tver.jp", "tver.co.jp")):
+        http_headers["Referer"]    = "https://tver.jp/"
+        http_headers["Origin"]     = "https://tver.jp"
+        http_headers["User-Agent"] = _DESKTOP_UA
+    elif any(h in page_url for h in ("abema.tv", "abema.io")):
+        http_headers["Referer"]    = "https://abema.tv/"
+        http_headers["Origin"]     = "https://abema.tv"
+        http_headers["User-Agent"] = _DESKTOP_UA
+    elif "twitcasting.tv" in page_url:
+        http_headers["Referer"]    = "https://twitcasting.tv/"
+        http_headers["Origin"]     = "https://twitcasting.tv"
+        http_headers["User-Agent"] = _DESKTOP_UA
+    elif "openrec.tv" in page_url:
+        http_headers["Referer"]    = "https://www.openrec.tv/"
+        http_headers["Origin"]     = "https://www.openrec.tv"
+        http_headers["User-Agent"] = _DESKTOP_UA
+    elif any(h in page_url for h in ("video.fc2.com", "fc2.com/video", "live.fc2.com")):
+        http_headers["Referer"]    = "https://video.fc2.com/"
+        http_headers["Origin"]     = "https://video.fc2.com"
+        http_headers["User-Agent"] = _DESKTOP_UA
+    elif any(h in page_url for h in ("nhk.or.jp", "nhk.jp")):
+        http_headers["Referer"]    = "https://www.nhk.or.jp/"
+        http_headers["Origin"]     = "https://www.nhk.or.jp"
+        http_headers["User-Agent"] = _DESKTOP_UA
+    elif any(h in page_url for h in ("cu.tbs.co.jp", "tbs.co.jp", "tbs.jp")):
+        http_headers["Referer"]    = "https://www.tbs.co.jp/"
+        http_headers["Origin"]     = "https://www.tbs.co.jp"
+        http_headers["User-Agent"] = _DESKTOP_UA
+    elif any(h in page_url for h in ("fod.fujitv.co.jp", "fod-sp.fujitv.co.jp", "fujitv.co.jp")):
+        http_headers["Referer"]    = "https://fod.fujitv.co.jp/"
+        http_headers["Origin"]     = "https://fod.fujitv.co.jp"
+        http_headers["User-Agent"] = _DESKTOP_UA
+    elif any(h in page_url for h in ("video.yahoo.co.jp", "news.yahoo.co.jp", "gyao.yahoo.co.jp")):
+        http_headers["Referer"]    = "https://video.yahoo.co.jp/"
+        http_headers["Origin"]     = "https://video.yahoo.co.jp"
+        http_headers["User-Agent"] = _DESKTOP_UA
+    locale_accept_language = languages.accept_language_for_url(page_url)
+    if locale_accept_language and "Accept-Language" not in http_headers:
+        http_headers["Accept-Language"] = locale_accept_language
     if cookies:
         http_headers["Cookie"] = cookies
 
@@ -553,6 +694,7 @@ def run_extraction(
             ("DASH manifest detector",   lambda: _strategy_html_detector(page_url, http_headers, cookies, "dash")),
             ("OG/meta tag extractor",    lambda: _strategy_html_detector(page_url, http_headers, cookies, "og")),
             ("generic media detector",   lambda: _strategy_html_detector(page_url, http_headers, cookies, "generic")),
+            ("embedded player detector", lambda: _strategy_page_embeds(page_url, http_headers, cookies, ydl_opts)),
             ("generic yt-dlp extractor", lambda: _strategy_ydl(page_url, ydl_opts, True)),
             ("ytdl-stream",              lambda: _strategy_ytdl_stream_url(page_url, ydl_opts, cookies)),
             ("browser playback fallback", lambda: _strategy_skip(
@@ -641,11 +783,14 @@ def run_extraction(
         )
     elif _has_unsupported:
         detail = (
-            f"No extractor found for this URL and the page HTML contained no "
-            f"detectable media. If the video loads in your browser via a "
-            f"JavaScript player, use the FCDownload bookmarklet or extension "
-            f"to capture the stream URL directly. "
-            f"(details: {reason_str[:400]})"
+            "No extractor found for this URL and the page HTML contained no "
+            "detectable media. This usually means the video is loaded by a "
+            "JavaScript player that the server cannot run. "
+            "If you are using the FCDownloader browser extension, check the "
+            "extension popup — it may have already detected the video "
+            "automatically as the page loaded in your browser. "
+            "Otherwise use the FCDownload bookmarklet to capture the stream "
+            f"URL directly. (details: {reason_str[:400]})"
         )
     else:
         detail = f"unsupported after all extraction strategies failed: {reason_str[:800]}"
@@ -693,6 +838,9 @@ def run_extraction_with_format(
     http_headers: dict[str, str] = {}
     if referer:
         http_headers["Referer"] = referer
+    locale_accept_language = languages.accept_language_for_url(page_url)
+    if locale_accept_language:
+        http_headers["Accept-Language"] = locale_accept_language
     if cookies:
         http_headers["Cookie"] = cookies
 

@@ -5,6 +5,12 @@ Static frontend for the fcdownloader extractor backend. Three files —
 to any static host (Vercel, Cloudflare Pages, GitHub Pages, your own
 nginx, …).
 
+The web page is also the public download hub. It links to mobile builds,
+browser extension packages, the FCDownloader Companion installer, the web
+downloader, and self-hosting docs. It checks
+`http://127.0.0.1:8765/health` so desktop users can see whether the optional
+Companion helper is ready for local downloads.
+
 ## Configure the backend URL
 
 The frontend needs to know where your Fly extractor lives. Order of
@@ -22,6 +28,14 @@ For your own deploy, the cleanest path is option 3 — edit `index.html`:
 
 ```html
 <meta name="extractor-url" content="https://your-app.fly.dev">
+```
+
+Or bake release metadata with:
+
+```powershell
+$env:EXTRACTOR_URL='https://your-app.fly.dev'
+$env:COMPANION_DOWNLOAD_URL='https://github.com/you/fcdownloader/releases/latest'
+npm run bake:web
 ```
 
 ## Deploy to Vercel (1 minute)
@@ -70,12 +84,13 @@ Comma-separate multiple origins:
 
 ## What the page does
 
-1. User pastes a YouTube URL → clicks **Fetch**
-2. Frontend `POST /extract` → gets `{title, thumbnail, duration, kind, label, …}`
-3. Preview card shows thumbnail + title + quality
-4. **Download** button navigates the browser to
-   `GET /download?url=...`
-5. Backend runs yt-dlp + ffmpeg, streams the muxed mp4 back, browser saves it.
+1. User pastes a URL and clicks **Fetch**.
+2. If it is already a direct media URL, the browser downloads it directly.
+3. If Companion is running, the page tries local `/formats` and prepares a
+   local `/download?url=...&max_height=1080` link.
+4. If the helper is absent or cannot extract that URL, the frontend falls back
+   to the configured backend `POST /extract` and `GET /download?url=...`.
+5. The preview card shows the best available route, title, duration, and kind.
 
 ## Privacy policy
 

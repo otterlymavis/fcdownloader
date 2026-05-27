@@ -99,9 +99,13 @@ signing.
   user action, but tab state may be cleared between sessions.
 - **`chrome.cookies` reads only the current tab's site cookies**. Cross-domain
   auth does not automatically carry across unrelated sites.
-- **HD YouTube still needs the backend**. The extension can forward the user's
-  current-site cookies to the configured backend when needed, giving the
-  backend access to content available to that session.
+- **FCDownloader Companion is optional**. Without it, the extension still uses
+  direct browser downloads, backend extraction, page playback capture, and the
+  YouTube 360p browser stream when available. With Companion running, YouTube
+  HD downloads are routed through local yt-dlp + ffmpeg instead of a datacenter
+  backend that may be blocked by YouTube. The popup checks
+  `http://127.0.0.1:8765/health` and can open
+  `fcdownloader-companion://start` on request.
 - **Direct browser downloads from cross-origin CDNs** work for many mp4 CDNs.
   Restricted CDNs may require backend proxying.
 - **Firefox Android** can use custom collections, but it is not officially

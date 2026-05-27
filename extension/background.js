@@ -19,7 +19,7 @@ import { FCDL_DEFAULT_BACKEND } from "./config.js";
 const DEFAULT_BACKEND = (FCDL_DEFAULT_BACKEND || "").trim().replace(/\/+$/, "");
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i;
 const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i;
-const SERVER_ONLY_RE = /youtube\.com|youtu\.be|googlevideo\.com|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.com|bilibili\.com|weibo\.com|weibo\.cn|weibocdn\.com|xiaohongshu\.com|xhslink\.com|xhscdn\.com/;
+const SERVER_ONLY_RE = /youtube\.com|youtu\.be|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.com|bilibili\.com|weibo\.com|weibo\.cn|weibocdn\.com|xiaohongshu\.com|xhslink\.com|xhscdn\.com|nicovideo\.jp|nico\.ms|niconico\.com|nicochannel\.jp|tver\.jp|tver\.co\.jp|abema\.tv|abema\.io|twitcasting\.tv|openrec\.tv|video\.fc2\.com|live\.fc2\.com|nhk\.or\.jp|nhk\.jp|cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp|fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp|video\.yahoo\.co\.jp|news\.yahoo\.co\.jp/;
 const PREFLIGHT_MEDIA_TYPES = [
   "video/",
   "image/",
@@ -59,7 +59,7 @@ const tabState = new Map(); // tabId -> { url, pageUrl, items: [{url, kind, sour
 function ensureTab(tabId, pageUrl) {
   let s = tabState.get(tabId);
   if (!s || s.pageUrl !== pageUrl) {
-    s = { tabId, pageUrl, items: [], updatedAt: Date.now() };
+    s = { tabId, pageUrl, items: [], preferCapturedMedia: false, updatedAt: Date.now() };
     tabState.set(tabId, s);
   }
   return s;
@@ -68,13 +68,26 @@ function ensureTab(tabId, pageUrl) {
 // Higher = more likely to be "the" video the user wants. Pages that scoop
 // up every video_url JSON field (Threads feeds, AmusePlus news pages with
 // comments) would otherwise drown the actual embed in noise.
-function itemPriority(item) {
+function isCapturedVideoItem(item) {
+  if (!item || item.kind === "image" || item.kind === "audio" || item.kind === "embed") return false;
+  return item.source === "network" ||
+    item.source === "video-tag" ||
+    item.kind === "hls" ||
+    item.kind === "dash";
+}
+
+function itemPriority(item, preferCapturedMedia = false) {
+  if (preferCapturedMedia && isCapturedVideoItem(item)) return 110;
+  if (item.source === "youtube-hd-local") return 104;
   if (item.source === "iframe" || item.kind === "embed") return 100;
   if (item.source === "video-tag") return 80;
   if (item.kind === "hls" || item.kind === "dash") return 60;
+  if (item.source === "yt-innertube-android") return 94;
+  if (item.source === "youtube-hd-server") return 89;
   if (item.source === "yt-player-response") return 90;
   if (item.source === "bili-playinfo") return 90;
   if (item.source === "weibo-page") return 95;
+  if (item.source === "japanese-page") return 92;
   if (item.source === "backend") return 95;
   if (item.source === "network") return 40;
   if (item.source === "meta-json") return 30;  // common on Meta feeds; usually noise
@@ -85,6 +98,50 @@ function itemPriority(item) {
   // is usually the iframe/video at priority 100; images sit below it.
   if (item.kind === "image") return 25;
   return 50;
+}
+
+function helperAbsentFallbackScore(item) {
+  if (!item || item.source === "youtube-hd-local" || item.source === "youtube-hd-server") return -1;
+  if (item.source === "yt-innertube-android") return 100;
+  if (item.source === "video-tag" && item.kind === "direct") return 90;
+  if (item.kind === "direct" && /\.(?:mp4|m4v|webm|mov)(?:[?#]|$)/i.test(item.url || "")) return 85;
+  if (item.source === "network" && item.kind === "direct") return 80;
+  if (item.kind === "hls" || item.kind === "dash" || item.kind === "paired") return 70;
+  if (item.backendRouted || item.source === "backend") return 60;
+  if (item.kind === "embed" || item.source === "iframe") return 50;
+  if (item.kind === "audio") return 30;
+  if (item.kind === "image") return 20;
+  return 40;
+}
+
+function bestHelperAbsentFallback(tabId) {
+  const state = tabState.get(tabId);
+  const candidates = (state?.items || [])
+    .map((item) => ({ item, score: helperAbsentFallbackScore(item) }))
+    .filter((entry) => entry.score >= 0)
+    .sort((a, b) => (b.score - a.score) || ((b.item.priority || 0) - (a.item.priority || 0)) || ((b.item.capturedAt || 0) - (a.item.capturedAt || 0)));
+  return candidates[0]?.item || null;
+}
+
+function backendStrategyForItem(item, urlForBackend) {
+  if (item.backendRouted) return "backend-extract";
+  if (item.kind === "hls") return "backend-hls";
+  if (item.kind === "dash") return "backend-dash";
+  if (item.kind === "paired") return "backend-paired";
+  if (item.kind === "embed") return "backend-embed";
+  if (SERVER_ONLY_RE.test(item.url || urlForBackend)) return "backend-site-extractor";
+  return "";
+}
+
+function preferRuntimeCapturedMedia(tabId, pageUrl) {
+  if (tabId == null || !pageUrl) return;
+  const s = ensureTab(tabId, pageUrl);
+  s.preferCapturedMedia = true;
+  s.items = s.items.map((item) => ({
+    ...item,
+    priority: itemPriority(item, true),
+  }));
+  s.items.sort((a, b) => (b.priority - a.priority) || (b.capturedAt - a.capturedAt));
 }
 
 function mediaKindForUrl(url) {
@@ -98,14 +155,14 @@ function mediaKindForUrl(url) {
 function addItem(tabId, pageUrl, item) {
   const s = ensureTab(tabId, pageUrl);
   if (!item || !item.url) return;
-  if (item.source === "weibo-page" || /(?:^|\.)weibo\.(?:com|cn)\//i.test(item.url)) {
+  if (item.source === "weibo-page" || item.source === "japanese-page" || /(?:^|\.)weibo\.(?:com|cn)\//i.test(item.url)) {
     s.items = s.items.filter((i) => !(i.kind === "image" || i.source === "network" || i.source === "image-tag"));
   }
   // De-dupe by URL (strip range / rn so byte-segment requests collapse onto
   // their master URL).
   const baseUrl = item.url.replace(/[?&]range=[^&]*/g, "").replace(/[?&]rn=[^&]*/g, "");
   if (s.items.find((i) => i.url === baseUrl || i.url === item.url)) return;
-  const enriched = { ...item, url: baseUrl, capturedAt: Date.now(), priority: itemPriority(item) };
+  const enriched = { ...item, url: baseUrl, capturedAt: Date.now(), priority: itemPriority(item, s.preferCapturedMedia) };
   s.items.push(enriched);
   // Sort by priority desc, then by recency desc. Cap so feed-noise sites
   // don't fill the popup with dozens of low-relevance URLs.
@@ -164,9 +221,10 @@ function isLikelyMedia(url) {
   if (u.endsWith(".mp4") || u.endsWith(".webm") || u.endsWith(".mov")) return true;
   if (IMAGE_EXT_RE.test(u) || AUDIO_EXT_RE.test(u)) return true;
   // Known video CDNs (no extension)
-  if (/(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|v\.redd\.it|tiktokcdn\.com|v\d+-webapp\.tiktok\.com|bilivideo\.com|weibocdn\.com|xhscdn\.com|dmcdn\.net|pinimg\.com\/(?:videos|originals|736x|1200x|564x)|vimeocdn\.com)/.test(url)) {
-    // Skip byte-range YouTube segments (will dedupe to the parent URL)
-    if (/googlevideo\.com\/videoplayback/.test(url) && /[?&]range=/.test(url)) return false;
+  if (/googlevideo\.com\/videoplayback/.test(url)) {
+    return false;
+  }
+  if (/(?:video\.twimg\.com|cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|v\.redd\.it|tiktokcdn\.com|v\d+-webapp\.tiktok\.com|bilivideo\.com|weibocdn\.com|xhscdn\.com|dmcdn\.net|pinimg\.com\/(?:videos|originals|736x|1200x|564x)|vimeocdn\.com|nicovideo\.cdn\.nimg\.jp|dmc\.nico|nimg\.jp|abema(?:tv)?\.akamaized\.net|linear-abematv\.akamaized\.net|vod-abematv\.akamaized\.net|brightcove\.net|boltdns\.net|bcovlive-a\.akamaihd\.net)/.test(url)) {
     return true;
   }
   return false;
@@ -176,10 +234,34 @@ function isLikelyMedia(url) {
 
 async function cookieHeaderFor(url) {
   try {
+    if (/(?:youtube\.com|youtu\.be|googlevideo\.com)/i.test(url || "")) {
+      return youtubeCookieHeader();
+    }
     const cookies = await chrome.cookies.getAll({ url });
     if (!cookies || !cookies.length) return "";
     // Format as Cookie: name=value; name=value
     return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  } catch {
+    return "";
+  }
+}
+
+async function youtubeCookieHeader() {
+  try {
+    const byName = new Map();
+    for (const url of ["https://www.youtube.com/", "https://youtube.com/"]) {
+      const cookies = await chrome.cookies.getAll({ url }).catch(() => []);
+      for (const c of cookies || []) {
+        byName.set(c.name, c.value);
+      }
+    }
+    for (const domain of ["youtube.com", ".youtube.com"]) {
+      const cookies = await chrome.cookies.getAll({ domain }).catch(() => []);
+      for (const c of cookies || []) {
+        byName.set(c.name, c.value);
+      }
+    }
+    return Array.from(byName, ([name, value]) => `${name}=${value}`).join("; ");
   } catch {
     return "";
   }
@@ -247,15 +329,41 @@ function backendDownloadUrl(backend, pageUrl, referer, cookies) {
 // Preflight a backend /download URL: fetch the headers, abort the body. If
 // the server is going to respond with JSON (its error format), we return the
 // error text instead of saving garbage as a .mp4.
-async function preflightBackendUrl(url) {
+function backendErrorMessage(body, fallback = "") {
+  const text = String(body || "").trim();
+  if (!text) return fallback;
+  try {
+    const parsed = JSON.parse(text);
+    const detail = parsed?.detail ?? parsed?.error;
+    if (typeof detail === "string" && detail.trim()) return detail.trim().slice(0, 240);
+  } catch {}
+  return text.slice(0, 240);
+}
+
+function fetchHeadersFromChromeHeaders(headers = []) {
+  const out = new Headers();
+  const forbidden = /^(cookie|host|origin|referer|user-agent|content-length)$/i;
+  for (const h of headers) {
+    if (h?.name && typeof h.value === "string" && !forbidden.test(h.name)) {
+      out.set(h.name, h.value);
+    }
+  }
+  return out;
+}
+
+async function preflightBackendUrl(url, headers = []) {
   const ac = new AbortController();
   try {
-    const r = await fetch(url, { method: "GET", signal: ac.signal });
+    const r = await fetch(url, {
+      method: "GET",
+      headers: fetchHeadersFromChromeHeaders(headers),
+      signal: ac.signal,
+    });
     const ct = r.headers.get("content-type") || "";
     if (!r.ok) {
       const body = await r.text().catch(() => "");
       ac.abort();
-      return { ok: false, error: `${r.status}: ${body.slice(0, 240)}` };
+      return { ok: false, error: backendErrorMessage(body, `HTTP ${r.status}`) };
     }
     if (PREFLIGHT_MEDIA_TYPES.some((type) => ct.startsWith(type))) {
       ac.abort();  // abort the body; chrome.downloads will fetch fresh
@@ -264,10 +372,68 @@ async function preflightBackendUrl(url) {
     // It's some other content-type — almost certainly the error JSON FastAPI
     // returns when yt-dlp fails. Read it so we can show the message.
     const body = await r.text().catch(() => "");
-    return { ok: false, error: body.slice(0, 240) };
+    return { ok: false, error: backendErrorMessage(body, ct || "Unexpected response") };
   } catch (e) {
     if (e.name === "AbortError") return { ok: true };  // we aborted on success
     return { ok: false, error: String(e.message || e) };
+  }
+}
+
+async function preflightDirectUrl(url, headers = []) {
+  const ac = new AbortController();
+  try {
+    const r = await fetch(url, {
+      method: "GET",
+      headers: fetchHeadersFromChromeHeaders(headers),
+      signal: ac.signal,
+    });
+    const ct = r.headers.get("content-type") || "";
+    const len = Number(r.headers.get("content-length") || "0");
+    ac.abort();
+    if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+    if (/^(video|audio|image)\//i.test(ct) || len > 1024) return { ok: true };
+    return { ok: false, error: ct || "not a media response" };
+  } catch (e) {
+    if (e.name === "AbortError") return { ok: true };
+    return { ok: false, error: String(e.message || e) };
+  }
+}
+
+async function fetchLocalHelperHealth(timeoutMs = 2500) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const health = await fetch("http://127.0.0.1:8765/health", {
+      method: "GET",
+      signal: ac.signal,
+    });
+    return health.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function waitForLocalHelper(timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await fetchLocalHelperHealth(1500)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 750));
+  }
+  return false;
+}
+
+async function launchLocalCompanion() {
+  try {
+    await chrome.tabs.create({
+      url: "fcdownloader-companion://start",
+      active: false,
+    });
+    return true;
+  } catch (e) {
+    console.warn("[fcdl] companion launch failed:", e?.message || e);
+    return false;
   }
 }
 
@@ -324,9 +490,16 @@ async function downloadItem(tabId, item) {
   // path + content-type as the filename ("ytdl-stream.json"), ignoring our hint.
   // _watchYtdlStreamDownload detects this and removes the garbage file.
   if ((item.url || "").includes("/ytdl-stream?")) {
-    // Do not log the full URL — it contains page_url + session cookies as query params.
+    // Do not log the full URL — it contains page_url, and older server builds
+    // may include session cookies as query params.
     console.log("[fcdl] → ytdl-stream direct download");
-    const dlId = await chromeDownload(item.url, suggestedFilename(item, item.url, tabTitle));
+    const headers = cookies ? [{ name: "X-FCDL-Cookies", value: cookies }] : [];
+    const check = await preflightBackendUrl(item.url, headers);
+    if (!check.ok) {
+      _notifyYtdlError("YouTube download failed", check.error);
+      throw new Error(`YouTube: ${check.error}`);
+    }
+    const dlId = await chromeDownload(item.url, suggestedFilename(item, item.url, tabTitle), headers);
     // Fire-and-forget monitor — does not block the popup response.
     _watchYtdlStreamDownload(dlId).catch((e) =>
       console.warn("[fcdl] ytdl-stream watcher error:", e?.message || e)
@@ -334,24 +507,48 @@ async function downloadItem(tabId, item) {
     return dlId;
   }
 
-  if (item.backendRouted) {
-    return viaBackend(urlForBackend);
+  if (item.source === "youtube-hd-local") {
+    const page = item.pageUrl || tabPageUrl || item.url;
+    const localUrl = `http://127.0.0.1:8765/youtube-hd?${new URLSearchParams({ url: page }).toString()}`;
+    console.log("[fcdl] → local youtube helper");
+    if (!await fetchLocalHelperHealth()) {
+      const standalone = bestHelperAbsentFallback(tabId);
+      if (standalone) {
+        console.log("[fcdl] → Companion absent; using best standalone candidate", standalone.source, standalone.kind);
+        return downloadItem(tabId, standalone);
+      }
+      throw new Error("Companion is not running. Start playback to detect the 360p download, or open Companion for HD.");
+    }
+    return chromeDownload(localUrl, suggestedFilename({ ...item, ext: "mp4" }, page, tabTitle));
   }
 
-  // HLS / DASH / paired adaptive / known-server-only sites need backend muxing.
-  const needsMux =
-    item.kind === "hls" || item.kind === "dash" || item.kind === "paired" || item.kind === "embed" ||
-    SERVER_ONLY_RE.test(item.url || urlForBackend);
+  if (item.source === "youtube-hd-server") {
+    const message = "YouTube HD must be downloaded locally with yt-dlp + ffmpeg; server muxing returns empty files because Googlevideo URLs are IP-bound.";
+    _notifyYtdlError("YouTube HD unavailable in extension", message);
+    throw new Error(message);
+  }
 
-  if (needsMux) {
+  const backendStrategy = backendStrategyForItem(item, urlForBackend);
+  if (backendStrategy) {
+    console.log("[fcdl] →", backendStrategy);
     return viaBackend(urlForBackend);
   }
 
   // Plain mp4/webm CDN URLs that don't require auth — direct download.
   console.log("[fcdl] → direct CDN");
   try {
-    return await chromeDownload(item.url, suggestedFilename(item, downloadPageUrl, tabTitle));
+    const directHeaders = [];
+    if (/googlevideo\.com/i.test(item.url || "")) {
+      const check = await preflightDirectUrl(item.url, directHeaders);
+      if (!check.ok) {
+        throw new Error(`YouTube direct 360p was refused by YouTube (${check.error})`);
+      }
+    }
+    return await chromeDownload(item.url, suggestedFilename(item, downloadPageUrl, tabTitle), directHeaders);
   } catch (e) {
+    if (/googlevideo\.com/i.test(item.url || "")) {
+      throw e;
+    }
     console.warn("[fcdl] direct failed, falling back to backend:", e?.message || e);
     const dlUrl = backendDownloadUrl(backend, item.url, referer, cookies);
     return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl, tabTitle));
@@ -447,13 +644,25 @@ function _notifyYtdlError(title, message) {
   }
 }
 
-function chromeDownload(url, filename) {
+function safeDownloadHeaders(headers = []) {
+  const forbidden = /^(cookie|host|origin|referer|user-agent|content-length)$/i;
+  return (headers || []).filter((h) =>
+    h?.name &&
+    typeof h.value === "string" &&
+    !forbidden.test(h.name)
+  );
+}
+
+function chromeDownload(url, filename, headers = []) {
   return new Promise((resolve, reject) => {
-    chrome.downloads.download({
+    const safeHeaders = safeDownloadHeaders(headers);
+    const opts = {
       url,
       filename: filename || undefined,
       saveAs: false,
-    }, (downloadId) => {
+    };
+    if (safeHeaders.length) opts.headers = safeHeaders;
+    chrome.downloads.download(opts, (downloadId) => {
       if (chrome.runtime.lastError) return reject(chrome.runtime.lastError);
       resolve(downloadId);
     });
@@ -547,6 +756,25 @@ async function downloadGallery(tabId, pageUrl, title, items) {
   return { started, failed };
 }
 
+async function downloadMany(tabId, items) {
+  let started = 0;
+  let failed = 0;
+  const errors = [];
+  for (let i = 0; i < Math.min(items.length, 10); i++) {
+    try {
+      await downloadItem(tabId, items[i]);
+      started++;
+    } catch (e) {
+      failed++;
+      const error = String(e?.message || e);
+      errors.push({ index: i, error });
+      console.warn(`[fcdl] selected item ${i} failed:`, e);
+    }
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  return { started, failed, errors };
+}
+
 function hostname(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); }
   catch { return ""; }
@@ -565,6 +793,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const tab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : null;
       const s = tabId != null ? tabState.get(tabId) : null;
       sendResponse({ pageUrl: tab?.url || "", items: s?.items || [], settings: await getSettings() });
+      return;
+    }
+    if (msg.type === "fcdl:helper_status") {
+      sendResponse({ ok: true, ready: await fetchLocalHelperHealth(1200) });
+      return;
+    }
+    if (msg.type === "fcdl:helper_start") {
+      await launchLocalCompanion();
+      sendResponse({ ok: true, ready: await waitForLocalHelper(10000) });
       return;
     }
     if (msg.type === "fcdl:detected") {
@@ -589,7 +826,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       } catch (e) {
         const elapsed = Date.now() - t0;
         console.warn("[fcdl] extract failed in", elapsed, "ms:", e);
-        sendResponse({ ok: false, error: String(e.message || e) });
+        const error = String(e.message || e);
+        if (/No extractor found for this URL and the page HTML contained no detectable media/i.test(error)) {
+          preferRuntimeCapturedMedia(msg.tabId, msg.pageUrl);
+        }
+        sendResponse({ ok: false, error });
       }
       return;
     }
@@ -600,6 +841,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       } catch (e) {
         sendResponse({ ok: false, error: String(e.message || e) });
       }
+      return;
+    }
+    if (msg.type === "fcdl:download_many") {
+      const items = Array.isArray(msg.items) ? msg.items : [];
+      const r = await downloadMany(msg.tabId, items);
+      sendResponse({ ok: true, ...r });
       return;
     }
     if (msg.type === "fcdl:download_gallery") {

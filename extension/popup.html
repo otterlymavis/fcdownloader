@@ -18,8 +18,13 @@
 
   <main>
     <p id="page-info" class="page"></p>
+    <section id="helper-status" class="helper-status" hidden>
+      <span class="helper-dot"></span>
+      <span id="helper-text">Checking companion...</span>
+      <button id="helper-open" type="button">Open</button>
+    </section>
 
-    <!-- Primary card — the single best detection -->
+    <!-- Primary card â€” the single best detection -->
     <section id="primary" hidden>
       <h2 id="primary-title">Media</h2>
       <p id="primary-meta" class="meta"></p>
@@ -28,15 +33,19 @@
 
     <!-- Empty / fallback state -->
     <section id="empty">
-      <p class="empty-text">Looking for media on this page...��</p>
+      <p class="empty-text">Looking for media on this page...€¦</p>
       <button id="extract-btn" class="ghost" type="button">Find media</button>
     </section>
 
     <div id="status" hidden></div>
 
-    <!-- "More media" — collapsed by default, only shown when extras exist -->
+    <!-- "More media" â€” collapsed by default, only shown when extras exist -->
     <details id="more" hidden>
       <summary>Show other media</summary>
+      <div id="bulk-actions" class="bulk-actions" hidden>
+        <button id="select-all" class="ghost" type="button">Select all</button>
+        <button id="download-selected" class="primary" type="button">Download selected</button>
+      </div>
       <ul id="more-list"></ul>
     </details>
   </main>

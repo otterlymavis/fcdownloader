@@ -70,6 +70,14 @@ server/_extract_test*.json
 server/cookies.txt
 server/cookies.b64
 
+# Companion generated helper binary and PyInstaller work dirs
+desktop-companion/build/helper/
+desktop-companion/build/electron-cache/
+desktop-companion/build/electron-builder-cache/
+desktop-companion/build/pyinstaller-venv/
+desktop-companion/build/pyinstaller-work/
+desktop-companion/build/pyinstaller-spec/
+
 #  Code local settings
 ./
 

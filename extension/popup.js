@@ -5,6 +5,9 @@
 const $ = (id) => document.getElementById(id);
 const settingsBtn = $("settings-btn");
 const pageInfo    = $("page-info");
+const helperEl    = $("helper-status");
+const helperText  = $("helper-text");
+const helperOpen  = $("helper-open");
 const primaryEl   = $("primary");
 const primaryTitle= $("primary-title");
 const primaryMeta = $("primary-meta");
@@ -14,9 +17,18 @@ const extractBtn  = $("extract-btn");
 const statusEl    = $("status");
 const moreEl      = $("more");
 const moreList    = $("more-list");
+const bulkActions = $("bulk-actions");
+const selectAllBtn = $("select-all");
+const downloadSelectedBtn = $("download-selected");
 
 let currentTabId   = null;
 let currentPageUrl = "";
+let helperTimer = null;
+let helperIsReady = false;
+let preferCapturedMedia = false;
+let waitingForCapturedMedia = false;
+let currentVisibleItems = [];
+let selectedItemKeys = new Set();
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -82,15 +94,103 @@ function titleOf(item, fallback) {
   return item.title || fallback || describeItem(item) || "Media";
 }
 
+function itemKey(item) {
+  return item?.url || "";
+}
+
+function isCapturedVideo(item) {
+  if (!item || item.kind === "image" || item.kind === "audio" || item.kind === "embed") return false;
+  return item.source === "network" ||
+    item.source === "video-tag" ||
+    item.kind === "hls" ||
+    item.kind === "dash";
+}
+
+function capturedVideoScore(item) {
+  if (!isCapturedVideo(item)) return -1;
+  if (item.source === "video-tag" && item.kind === "direct") return 50;
+  if (item.kind === "direct" && /\.(?:mp4|m4v|webm|mov)(?:[?#]|$)/i.test(item.url || "")) return 45;
+  if (item.kind === "hls" || item.kind === "dash") return 40;
+  return 30;
+}
+
+function isCompanionHdItem(item) {
+  return item?.source === "youtube-hd-local";
+}
+
+function companionReadyOrder(items) {
+  const companionItems = items.filter(isCompanionHdItem);
+  if (!companionItems.length) return items;
+  return [...companionItems, ...items.filter((item) => !isCompanionHdItem(item))];
+}
+
+function standaloneOrder(items) {
+  const standaloneItems = items.filter((item) => !isCompanionHdItem(item));
+  const companionItems = items.filter(isCompanionHdItem);
+  return standaloneItems.length ? [...standaloneItems, ...companionItems] : items;
+}
+
+function capturedOrder(items) {
+  const preferred = items
+    .filter(isCapturedVideo)
+    .sort((a, b) => capturedVideoScore(b) - capturedVideoScore(a));
+  if (!preferred.length) return items;
+  const primary = preferred[0];
+  return [primary, ...items.filter((item) => item.url !== primary.url)];
+}
+
+function displayedItems(items) {
+  if (helperIsReady) return companionReadyOrder(items);
+  const visibleItems = standaloneOrder(items);
+  return preferCapturedMedia ? capturedOrder(visibleItems) : visibleItems;
+}
+
+function isRuntimeOnlyExtractFailure(error) {
+  return /No extractor found for this URL and the page HTML contained no detectable media/i.test(String(error || ""));
+}
+
+function needsCompanion(url, items = []) {
+  if (/youtube\.com\/(?:watch|shorts)|youtu\.be\//i.test(url || "")) return true;
+  return items.some((item) => item.source === "youtube-hd-local");
+}
+
+async function renderHelperStatus(show) {
+  if (!helperEl) return;
+  if (!show) {
+    helperEl.hidden = true;
+    if (helperTimer) {
+      clearInterval(helperTimer);
+      helperTimer = null;
+    }
+    return;
+  }
+  helperEl.hidden = false;
+  const resp = await sendMessage({ type: "fcdl:helper_status" }, 2500);
+  const ready = Boolean(resp?.ok && resp.ready);
+  const changed = helperIsReady !== ready;
+  helperIsReady = ready;
+  helperEl.classList.toggle("ready", ready);
+  helperEl.classList.toggle("missing", !ready);
+  helperText.textContent = ready ? "Companion ready: HD enabled" : "Companion optional: 360p works";
+  helperOpen.hidden = ready;
+  if (changed && currentTabId != null) {
+    lastItemsKey = "";
+    refresh();
+  }
+}
+
 // ── Rendering ──────────────────────────────────────────────────────────
 
 let lastItemsKey = "";
 
 function render(items) {
+  currentVisibleItems = items || [];
   if (!items || !items.length) {
     primaryEl.hidden = true;
     emptyEl.hidden   = false;
     moreEl.hidden    = true;
+    if (bulkActions) bulkActions.hidden = true;
+    selectedItemKeys = new Set();
     return;
   }
 
@@ -99,6 +199,8 @@ function render(items) {
   // Primary card
   primaryTitle.textContent = titleOf(first, hostname(currentPageUrl));
   primaryMeta.textContent  = describeItem(first);
+  primaryBtn.textContent   = "Download";
+  primaryBtn.disabled      = false;
   primaryBtn.onclick       = () => downloadItem(first);
   primaryEl.hidden = false;
   emptyEl.hidden   = true;
@@ -107,22 +209,62 @@ function render(items) {
   // up to 5 extras so it never feels like a developer list.
   if (rest.length === 0) {
     moreEl.hidden = true;
+    if (bulkActions) bulkActions.hidden = true;
     return;
   }
   moreEl.hidden = false;
+  const summary = moreEl.querySelector("summary");
+  if (summary) summary.textContent = `Select media (${items.length})`;
+  reconcileSelection(items);
+  if (bulkActions) bulkActions.hidden = false;
   moreList.innerHTML = "";
-  for (const item of rest.slice(0, 5)) {
+  items.forEach((item, idx) => {
+    const key = itemKey(item);
     const li = document.createElement("li");
+    li.className = idx === 0 ? "best-media-row" : "";
     li.innerHTML = `
+      <label class="media-select">
+        <input type="checkbox" ${selectedItemKeys.has(key) ? "checked" : ""}>
+      </label>
       <div class="row-meta">
-        <div class="row-title">${escapeHtml(titleOf(item, hostname(item.url)))}</div>
+        <div class="row-title">${escapeHtml(titleOf(item, hostname(item.url)))}${idx === 0 ? ' <span class="best-badge">Best</span>' : ""}</div>
         <div class="row-sub">${escapeHtml(describeItem(item))}</div>
       </div>
       <button type="button">Save</button>
     `;
+    const checkbox = li.querySelector('input[type="checkbox"]');
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedItemKeys.add(key);
+      else selectedItemKeys.delete(key);
+      updateBulkControls();
+    });
     li.querySelector("button").addEventListener("click", () => downloadItem(item));
     moreList.appendChild(li);
-  }
+  });
+  updateBulkControls();
+}
+
+function reconcileSelection(items) {
+  const validKeys = new Set(items.map(itemKey).filter(Boolean));
+  selectedItemKeys = new Set([...selectedItemKeys].filter((key) => validKeys.has(key)));
+  if (!selectedItemKeys.size && items[0]) selectedItemKeys.add(itemKey(items[0]));
+}
+
+function updateBulkControls() {
+  if (!downloadSelectedBtn || !selectAllBtn) return;
+  const selectedCount = currentVisibleItems.filter((item) => selectedItemKeys.has(itemKey(item))).length;
+  downloadSelectedBtn.disabled = selectedCount === 0;
+  downloadSelectedBtn.textContent = selectedCount <= 1 ? "Download selected" : `Download ${selectedCount} selected`;
+  selectAllBtn.textContent = selectedCount === currentVisibleItems.length ? "Clear" : "Select all";
+}
+
+function refreshSelectionUI() {
+  moreList.querySelectorAll("li").forEach((li, idx) => {
+    const checkbox = li.querySelector('input[type="checkbox"]');
+    const item = currentVisibleItems[idx];
+    if (checkbox && item) checkbox.checked = selectedItemKeys.has(itemKey(item));
+  });
+  updateBulkControls();
 }
 
 function refresh() {
@@ -130,10 +272,17 @@ function refresh() {
   chrome.runtime.sendMessage({ type: "fcdl:list", tabId: currentTabId }, (resp) => {
     if (!resp) return;
     const items = resp.items || [];
-    const key = items.map((i) => i.url).join("|");
+    renderHelperStatus(needsCompanion(currentPageUrl, items));
+    if (waitingForCapturedMedia && items.some(isCapturedVideo)) {
+      waitingForCapturedMedia = false;
+      preferCapturedMedia = true;
+      setStatus("Media found from page playback.", "success");
+    }
+    const visibleItems = displayedItems(items);
+    const key = `${helperIsReady ? "helper:" : "standalone:"}${preferCapturedMedia ? "capture:" : ""}${visibleItems.map((i) => i.url).join("|")}`;
     if (key !== lastItemsKey) {
       lastItemsKey = key;
-      render(items);
+      render(visibleItems);
     }
   });
 }
@@ -149,6 +298,7 @@ function refresh() {
   currentTabId   = tab.id;
   currentPageUrl = tab.url || "";
   pageInfo.textContent = hostname(currentPageUrl) || currentPageUrl;
+  renderHelperStatus(needsCompanion(currentPageUrl));
 
   const pong = await sendMessage({ type: "fcdl:ping" }, 3000);
   if (!pong?.ok) {
@@ -187,7 +337,36 @@ function refresh() {
   setInterval(refresh, 1500);
 })();
 
+if (helperOpen) {
+  helperOpen.addEventListener("click", async () => {
+    helperOpen.disabled = true;
+    helperText.textContent = "Opening companion...";
+    const resp = await sendMessage({ type: "fcdl:helper_start" }, 12000);
+    helperOpen.disabled = false;
+    renderHelperStatus(true);
+    if (!resp?.ready) {
+      setStatus("Install or start FCDownloader Companion, then try again.", "error");
+    }
+  });
+}
+
 // ── "Find media" fallback — only shown in empty state ─────────────────
+
+if (selectAllBtn) {
+  selectAllBtn.addEventListener("click", () => {
+    const selectable = currentVisibleItems.map(itemKey).filter(Boolean);
+    if (selectedItemKeys.size === selectable.length) {
+      selectedItemKeys = new Set();
+    } else {
+      selectedItemKeys = new Set(selectable);
+    }
+    refreshSelectionUI();
+  });
+}
+
+if (downloadSelectedBtn) {
+  downloadSelectedBtn.addEventListener("click", downloadSelectedItems);
+}
 
 extractBtn.addEventListener("click", async () => {
   extractBtn.disabled = true;
@@ -195,9 +374,17 @@ extractBtn.addEventListener("click", async () => {
   try {
     const resp = await sendMessage({
       type: "fcdl:extract",
+      tabId: currentTabId,
       pageUrl: currentPageUrl,
     }, 35000);
     if (!resp?.ok) {
+      if (isRuntimeOnlyExtractFailure(resp?.error)) {
+        preferCapturedMedia = true;
+        waitingForCapturedMedia = true;
+        setStatus("The server cannot read this player. Start playback and captured media will appear here.");
+        refresh();
+        return;
+      }
       setStatus(resp?.error || "Couldn't find media on this page.", "error");
       return;
     }
@@ -218,14 +405,23 @@ extractBtn.addEventListener("click", async () => {
     // Tag the item so background.js can download it directly without re-routing
     // through /download (which would throw the URL away and double-extract).
     const isYtdlStream = typeof info.url === "string" && info.url.includes("/ytdl-stream?");
+    if (isYtdlStream && !helperIsReady) {
+      const helperResp = await sendMessage({ type: "fcdl:helper_status" }, 2500);
+      helperIsReady = Boolean(helperResp?.ok && helperResp.ready);
+      if (!helperIsReady) {
+        setStatus("Companion is optional: play this video for a detected 360p download, or open Companion for HD.");
+        refresh();
+        return;
+      }
+    }
     const item = {
-      url: info.kind === "paired" ? info.videoUrl : info.url,
+      url: isYtdlStream ? currentPageUrl : (info.kind === "paired" ? info.videoUrl : info.url),
       title: info.title,
-      label: isYtdlStream ? "Server download (mp4)" : info.label,
-      ext: isYtdlStream ? "mp4" : undefined,
-      kind: info.kind,
-      source: "backend",
-      backendRouted: true,
+      label: isYtdlStream ? "HD (local helper)" : info.label,
+      ext: "mp4",
+      kind: isYtdlStream ? "embed" : info.kind,
+      source: isYtdlStream ? "youtube-hd-local" : "backend",
+      backendRouted: !isYtdlStream,
       pageUrl: currentPageUrl,
     };
     await sendMessage({
@@ -294,6 +490,8 @@ function renderGallery(info) {
 
   // Per-item list — collapsed by default
   moreEl.hidden = false;
+  if (bulkActions) bulkActions.hidden = true;
+  selectedItemKeys = new Set();
   moreEl.querySelector("summary").textContent = `Show individual items (${items.length})`;
   moreList.innerHTML = "";
   items.forEach((it, idx) => {
@@ -338,6 +536,35 @@ async function downloadItem(item) {
 }
 
 // ── Settings ───────────────────────────────────────────────────────────
+
+async function downloadSelectedItems() {
+  const items = currentVisibleItems
+    .filter((item) => selectedItemKeys.has(itemKey(item)))
+    .map((item) => ({ pageUrl: currentPageUrl, ...item }));
+  if (!items.length) {
+    setStatus("Select at least one media item.", "error");
+    return;
+  }
+
+  downloadSelectedBtn.disabled = true;
+  setStatus(`Starting ${items.length} download${items.length === 1 ? "" : "s"}...`);
+  const resp = await sendMessage(
+    { type: "fcdl:download_many", tabId: currentTabId, items },
+    Math.max(60_000, items.length * 35_000),
+  );
+  downloadSelectedBtn.disabled = false;
+  updateBulkControls();
+  if (!resp?.ok) {
+    setStatus(resp?.error || "Selected downloads failed.", "error");
+    return;
+  }
+  const { started = 0, failed = 0 } = resp;
+  if (failed === 0) {
+    setStatus(`Started ${started} download${started === 1 ? "" : "s"}. Check your browser's Downloads.`, "success");
+  } else {
+    setStatus(`Started ${started}, ${failed} failed. Check the extension console for details.`, "error");
+  }
+}
 
 settingsBtn.addEventListener("click", () => {
   if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();

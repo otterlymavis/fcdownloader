@@ -84,23 +84,38 @@ _REGISTRY: list[ExtractorCapabilities] = [
         requires_referer=True,
     ),
     ExtractorCapabilities(
-        hosts=("nicovideo.jp", "nico.ms"),
+        hosts=("nicovideo.jp", "nico.ms", "niconico.com", "nicochannel.jp"),
         requires_ja_locale=True,
+        hls_common=True,
     ),
     ExtractorCapabilities(
-        hosts=("video.fc2.com", "fc2.com/video"),
+        hosts=("tver.jp", "tver.co.jp"),
         requires_ja_locale=True,
+        hls_common=True,
+        requires_referer=True,
+    ),
+    ExtractorCapabilities(
+        hosts=("video.fc2.com", "fc2.com/video", "live.fc2.com"),
+        requires_ja_locale=True,
+        hls_common=True,
     ),
     ExtractorCapabilities(
         hosts=("dmm.co.jp", "dmm.com"),
         requires_ja_locale=True,
     ),
     ExtractorCapabilities(
-        hosts=("gyao.yahoo.co.jp", "video.yahoo.co.jp"),
+        hosts=("video.yahoo.co.jp", "news.yahoo.co.jp", "gyao.yahoo.co.jp"),
         requires_ja_locale=True,
+        hls_common=True,
+        requires_referer=True,
     ),
     ExtractorCapabilities(
         hosts=("twitcasting.tv",),
+        requires_ja_locale=True,
+        hls_common=True,
+    ),
+    ExtractorCapabilities(
+        hosts=("openrec.tv",),
         requires_ja_locale=True,
         hls_common=True,
     ),
@@ -113,6 +128,18 @@ _REGISTRY: list[ExtractorCapabilities] = [
         hosts=("nhk.or.jp", "nhk.jp"),
         requires_ja_locale=True,
         hls_common=True,
+    ),
+    ExtractorCapabilities(
+        hosts=("cu.tbs.co.jp", "tbs.co.jp", "tbs.jp"),
+        requires_ja_locale=True,
+        hls_common=True,
+        requires_referer=True,
+    ),
+    ExtractorCapabilities(
+        hosts=("fod.fujitv.co.jp", "fod-sp.fujitv.co.jp", "fujitv.co.jp"),
+        requires_ja_locale=True,
+        hls_common=True,
+        requires_referer=True,
     ),
     ExtractorCapabilities(
         hosts=("vimeo.com",),
@@ -181,12 +208,14 @@ def is_japanese_domain(url: str) -> bool:
         "video.fc2.com", "fc2.com",
         "twitcasting.tv",
         "abema.tv", "abema.io",
+        "openrec.tv",
         "mildom.com",
         "pixiv.net", "fanbox.cc",
-        "openrec.tv",
         # Japanese media sites with non-.jp TLDs
         "wwdjapan.com",
         "natalie.mu",
         "oricon.co.jp",
+        "nico.ms",
+        "nicochannel.jp",
     )
     return any(host == h or host.endswith("." + h) for h in _JA_HOSTS_NON_JP)

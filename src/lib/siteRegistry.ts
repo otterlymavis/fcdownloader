@@ -13,6 +13,7 @@
  * pipeline continues with its default order.
  */
 import { DownloadStrategy } from '../types';
+import { acceptLanguageForUrl } from './languageProfiles';
 
 export interface SiteCapabilities {
   /** Preferred download strategy order (first = highest priority). */
@@ -163,11 +164,11 @@ export function getSiteCapabilities(url: string): SiteCapabilities | undefined {
 }
 
 /**
- * Returns the preferred Accept-Language value for a URL, or the provided
- * fallback (defaults to 'en-US,en;q=0.9').
+ * Returns the preferred Accept-Language value for a URL. Site registry
+ * overrides win first, then common regional profiles, then the fallback.
  */
 export function getAcceptLanguage(url: string, fallback = 'en-US,en;q=0.9'): string {
-  return getSiteCapabilities(url)?.acceptLanguage ?? fallback;
+  return getSiteCapabilities(url)?.acceptLanguage ?? acceptLanguageForUrl(url, fallback);
 }
 
 /**

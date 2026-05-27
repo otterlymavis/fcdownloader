@@ -182,6 +182,22 @@ class TestRegistry:
         assert cap.has_platform_extractor
         assert cap.requires_referer
 
+    def test_japanese_platform_lookup(self):
+        samples = [
+            "https://www.nicovideo.jp/watch/sm9",
+            "https://tver.jp/episodes/ep123",
+            "https://abema.tv/video/episode/123",
+            "https://twitcasting.tv/example/movie/123",
+            "https://www.openrec.tv/live/abc",
+            "https://cu.tbs.co.jp/episode/123",
+            "https://fod.fujitv.co.jp/title/123",
+            "https://video.yahoo.co.jp/c/123",
+        ]
+        for url in samples:
+            cap = registry.lookup(url)
+            assert cap.requires_ja_locale
+            assert cap.hls_common
+
     def test_unknown_returns_generic(self):
         cap = registry.lookup("https://example.com/video")
         assert cap.hosts == ()
@@ -195,6 +211,8 @@ class TestRegistry:
         assert registry.is_japanese_domain("https://www.nicovideo.jp/watch/sm123")
         assert registry.is_japanese_domain("https://tver.jp/episodes/ep1")
         assert registry.is_japanese_domain("https://abema.tv/video/test")
+        assert registry.is_japanese_domain("https://www.openrec.tv/live/test")
+        assert registry.is_japanese_domain("https://nico.ms/sm9")
         assert not registry.is_japanese_domain("https://youtube.com/watch?v=test")
 
 
@@ -396,6 +414,24 @@ class TestYouTubeHlsGuard:
         )
         result = _strategy_ydl_client(self._YT_URL, {"quiet": True, "skip_download": True}, "ios")
         assert result["success"]
+
+    def test_ytdl_stream_url_does_not_embed_cookies(self, monkeypatch):
+        from strategies import _strategy_ytdl_stream_url
+        monkeypatch.setattr(
+            "strategies.YoutubeDL",
+            self._make_fake_ydl("https", "https://r4.googlevideo.com/video.mp4"),
+        )
+        result = _strategy_ytdl_stream_url(
+            self._YT_URL,
+            {"quiet": True, "skip_download": True},
+            "SID=secret; HSID=secret2",
+        )
+
+        assert result["success"]
+        assert "/ytdl-stream?" in result["media"]["url"]
+        assert "page_url=" in result["media"]["url"]
+        assert "cookies=" not in result["media"]["url"]
+        assert "SID=" not in result["media"]["url"]
 
 
 # ── supervisor PID tracking ───────────────────────────────────────────────────

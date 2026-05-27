@@ -1,0 +1,55 @@
+name: EAS Production Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform to build"
+        required: true
+        default: "all"
+        type: choice
+        options: ["all", "android", "ios"]
+      submit:
+        description: "Submit finished builds to stores"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  build:
+    name: EAS production (${{ inputs.platform }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EXPO_PUBLIC_EXTRACTOR_URL: ${{ secrets.EXPO_PUBLIC_EXTRACTOR_URL }}
+      EXPO_PUBLIC_EXTRACTOR_TOKEN: ${{ secrets.EXPO_PUBLIC_EXTRACTOR_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Verify Expo token
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::EXPO_TOKEN is required for EAS builds."
+            exit 1
+          fi
+
+      - name: Build production app
+        run: |
+          args=(--platform "${{ inputs.platform }}" --profile production --non-interactive --wait)
+          if [ "${{ inputs.submit }}" = "true" ]; then
+            args+=(--auto-submit)
+          fi
+          npx eas-cli@latest build "${args[@]}"

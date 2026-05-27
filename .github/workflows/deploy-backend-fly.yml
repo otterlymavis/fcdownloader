@@ -1,0 +1,35 @@
+name: Deploy Backend to Fly
+
+on:
+  push:
+    branches: [master, backend-version, plus-version]
+    paths:
+      - "server/**"
+      - ".github/workflows/deploy-backend-fly.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Fly deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Verify Fly token
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::error::FLY_API_TOKEN is required to deploy the extractor backend."
+            exit 1
+          fi
+
+      - name: Deploy
+        working-directory: server
+        run: flyctl deploy --remote-only

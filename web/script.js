@@ -21,9 +21,16 @@ const metaEl = $("meta");
 const downloadLink = $("download");
 const reset = $("reset");
 const bookmarklet = $("bookmarklet");
+const releaseVersion = $("release-version");
+const helperChip = $("helper-chip");
+const helperText = $("helper-text");
+
+const LOCAL_HELPER = "http://127.0.0.1:8765";
+const DIRECT_MEDIA_RE = /\.(?:mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif)(?:[?#]|$)|googlevideo\.com\/videoplayback|(?:video|audio)\.twimg\.com|cdninstagram\.com|fbcdn\.net|v\.redd\.it/i;
 
 let sharedReferer = "";
 let sharedCookies = "";
+let companionReady = false;
 
 function getBackend() {
   const qs = new URLSearchParams(location.search).get("api");
@@ -39,6 +46,55 @@ function getBackend() {
 
 function clean(url) {
   return String(url).trim().replace(/\/+$/, "");
+}
+
+function metaContent(name) {
+  return document.querySelector(`meta[name="${name}"]`)?.content?.trim() || "";
+}
+
+function applyReleaseLinks() {
+  const release = metaContent("release-version");
+  if (releaseVersion && release) releaseVersion.textContent = `Release ${release}`;
+
+  const links = {
+    mobile: metaContent("mobile-download-url"),
+    extension: metaContent("extension-download-url"),
+    companion: metaContent("companion-download-url"),
+    "self-host": metaContent("self-host-url"),
+  };
+  for (const [key, href] of Object.entries(links)) {
+    const anchor = document.querySelector(`[data-download-link="${key}"]`);
+    if (anchor && href) anchor.href = href;
+  }
+}
+
+async function checkCompanion() {
+  if (!helperChip || !helperText) return companionReady;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1600);
+  try {
+    const response = await fetch(`${LOCAL_HELPER}/health`, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && data?.ok !== false) {
+      companionReady = true;
+      helperChip.classList.remove("missing");
+      helperChip.classList.add("ready");
+      helperText.textContent = "Companion ready: local downloads enabled";
+      return true;
+    }
+    throw new Error("not ready");
+  } catch {
+    companionReady = false;
+    helperChip.classList.remove("ready");
+    helperChip.classList.add("missing");
+    helperText.textContent = "Companion optional: server/direct downloads still work";
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function buildBookmarklet() {
@@ -83,6 +139,10 @@ function buildBookmarklet() {
 if (bookmarklet) {
   bookmarklet.href = buildBookmarklet();
 }
+
+applyReleaseLinks();
+checkCompanion();
+setInterval(checkCompanion, 10000);
 
 // ── Auto-extract URL from messy pastes ───────────────────────────────
 //
@@ -178,6 +238,106 @@ function buildDownloadUrl(pageUrl, referer, cookies) {
   return `${getBackend()}/download?${params.toString()}`;
 }
 
+function buildCompanionDownloadUrl(pageUrl) {
+  const params = new URLSearchParams({ url: pageUrl, max_height: "1080" });
+  return `${LOCAL_HELPER}/download?${params.toString()}`;
+}
+
+function directInfo(pageUrl) {
+  if (!DIRECT_MEDIA_RE.test(pageUrl)) return null;
+  let parsed;
+  try {
+    parsed = new URL(pageUrl);
+  } catch {
+    return null;
+  }
+  const lower = pageUrl.toLowerCase();
+  let kind = "direct";
+  if (/\.(?:jpe?g|png|webp|gif|avif)(?:[?#]|$)/i.test(lower)) kind = "image";
+  if (/\.(?:mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i.test(lower)) kind = "audio";
+  const host = parsed.hostname.replace(/^www\./, "");
+  return {
+    info: {
+      title: host || "Direct media",
+      label: kind === "direct" ? "Direct browser download" : kind,
+      kind,
+    },
+    downloadUrl: pageUrl,
+    downloadLabel: "Download Direct",
+    notice: "Using the direct media URL. No Companion or backend needed.",
+  };
+}
+
+function chooseWebStrategy(pageUrl, referer, cookies) {
+  const direct = directInfo(pageUrl);
+  if (direct) return { type: "direct", direct };
+  if (companionReady && !referer && !cookies) return { type: "companion" };
+  return { type: "backend" };
+}
+
+function companionLabel(data) {
+  const heights = (data.formats || [])
+    .map((fmt) => Number(fmt.height || 0))
+    .filter((height) => height > 0);
+  const bestHeight = Math.min(1080, Math.max(0, ...heights));
+  return bestHeight ? `Companion local download - up to ${bestHeight}p` : "Companion local download";
+}
+
+async function extractWithCompanion(pageUrl) {
+  const params = new URLSearchParams({ url: pageUrl });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 120000);
+  try {
+    const response = await fetch(`${LOCAL_HELPER}/formats?${params.toString()}`, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.ok === false) {
+      throw new Error(data?.error || response.statusText || "Companion extraction failed");
+    }
+    return {
+      info: {
+        title: data.title || pageUrl,
+        thumbnail: data.thumbnail || "",
+        duration: data.duration,
+        kind: "video",
+        label: companionLabel(data),
+      },
+      downloadUrl: buildCompanionDownloadUrl(pageUrl),
+      downloadLabel: "Download with Companion",
+      notice: "Using Companion for local yt-dlp/ffmpeg download.",
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function resolveMedia(pageUrl, referer, cookies) {
+  let strategy = chooseWebStrategy(pageUrl, referer, cookies);
+  if (strategy.type === "direct") return strategy.direct;
+
+  await checkCompanion();
+  strategy = chooseWebStrategy(pageUrl, referer, cookies);
+  if (strategy.type === "companion") {
+    try {
+      return await extractWithCompanion(pageUrl);
+    } catch (error) {
+      console.info("Companion route failed, falling back to backend:", error?.message || error);
+    }
+  }
+
+  const info = await extract(pageUrl, referer, cookies);
+  return {
+    info,
+    downloadUrl: buildDownloadUrl(pageUrl, referer, cookies),
+    downloadLabel: "Download Media",
+    notice: companionReady
+      ? "Using the backend for this link because the local helper could not extract it."
+      : "",
+  };
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
@@ -189,7 +349,8 @@ form.addEventListener("submit", async (event) => {
   setStatus("Finding your media...");
 
   try {
-    const info = await extract(url, sharedReferer || null, sharedCookies || null);
+    const resolved = await resolveMedia(url, sharedReferer || null, sharedCookies || null);
+    const info = resolved.info || {};
 
     thumb.src = info.thumbnail ?? "";
     thumb.style.display = info.thumbnail ? "" : "none";
@@ -201,9 +362,10 @@ form.addEventListener("submit", async (event) => {
     if (info.kind) details.push(info.kind);
     metaEl.textContent = details.join(" - ");
 
-    downloadLink.href = buildDownloadUrl(url, sharedReferer || null, sharedCookies || null);
+    downloadLink.href = resolved.downloadUrl;
+    downloadLink.textContent = resolved.downloadLabel || "Download Media";
     result.hidden = false;
-    setStatus("");
+    setStatus(resolved.notice || "");
   } catch (error) {
     setStatus("We could not fetch this media. Check the link and try again.", true);
   } finally {
@@ -214,6 +376,7 @@ form.addEventListener("submit", async (event) => {
 reset.addEventListener("click", () => {
   result.hidden = true;
   setStatus("");
+  downloadLink.textContent = "Download Media";
   urlIn.value = "";
   sharedReferer = "";
   sharedCookies = "";
