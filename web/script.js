@@ -57,14 +57,26 @@ function applyReleaseLinks() {
   if (releaseVersion && release) releaseVersion.textContent = `Release ${release}`;
 
   const links = {
-    mobile: metaContent("mobile-download-url"),
+    android: metaContent("android-download-url") || metaContent("mobile-download-url"),
+    ios: metaContent("ios-download-url"),
     extension: metaContent("extension-download-url"),
-    companion: metaContent("companion-download-url"),
+    helper: metaContent("helper-download-url") || metaContent("companion-download-url"),
     "self-host": metaContent("self-host-url"),
   };
   for (const [key, href] of Object.entries(links)) {
     const anchor = document.querySelector(`[data-download-link="${key}"]`);
-    if (anchor && href) anchor.href = href;
+    if (!anchor) continue;
+    if (href) {
+      anchor.href = href;
+      anchor.removeAttribute("aria-disabled");
+      anchor.classList.remove("download-tile-disabled");
+      continue;
+    }
+    anchor.removeAttribute("href");
+    anchor.setAttribute("aria-disabled", "true");
+    anchor.classList.add("download-tile-disabled");
+    const detail = anchor.querySelector("span");
+    if (detail) detail.textContent = "Coming soon";
   }
 }
 

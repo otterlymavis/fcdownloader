@@ -165,8 +165,20 @@ h1 {
   background: #fbfbfc;
 }
 
+.download-tile-disabled,
+.download-tile-disabled:hover {
+  cursor: not-allowed;
+  opacity: 0.58;
+  border-color: var(--border);
+  background: var(--surface);
+}
+
 .download-tile:active {
   transform: translateY(1px);
+}
+
+.download-tile-disabled:active {
+  transform: none;
 }
 
 .download-tile strong {

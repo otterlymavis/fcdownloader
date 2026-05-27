@@ -34,7 +34,10 @@ Or bake release metadata with:
 
 ```powershell
 $env:EXTRACTOR_URL='https://your-app.fly.dev'
-$env:COMPANION_DOWNLOAD_URL='https://github.com/you/fcdownloader/releases/latest'
+$env:ANDROID_DOWNLOAD_URL='https://github.com/you/fcdownloader/releases/latest/download/fcdownloader-v1.1.0.apk'
+$env:IOS_DOWNLOAD_URL='https://testflight.apple.com/join/your-code'
+$env:EXTENSION_DOWNLOAD_URL='https://github.com/you/fcdownloader/releases/latest/download/fcdownloader-extension-v1.4.2.zip'
+$env:HELPER_DOWNLOAD_URL='https://github.com/you/fcdownloader/releases/latest/download/FCDownloader%20Companion%20Setup%200.2.0.exe'
 npm run bake:web
 ```
 

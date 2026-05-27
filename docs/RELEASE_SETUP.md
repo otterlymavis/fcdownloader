@@ -42,9 +42,10 @@ Repository secrets:
 
 Repository variables:
 
-- `MOBILE_DOWNLOAD_URL`
+- `ANDROID_DOWNLOAD_URL`
+- `IOS_DOWNLOAD_URL`
 - `EXTENSION_DOWNLOAD_URL`
-- `COMPANION_DOWNLOAD_URL`
+- `HELPER_DOWNLOAD_URL`
 - `SELF_HOST_URL`
 
 ## Release order
@@ -77,7 +78,10 @@ For the web hub:
 
 ```powershell
 $env:EXTRACTOR_URL = "https://fcdownloader-extractor.fly.dev"
-$env:COMPANION_DOWNLOAD_URL = "https://github.com/otterlymavis/fcdownloader/releases/latest"
+$env:ANDROID_DOWNLOAD_URL = "https://github.com/otterlymavis/fcdownloader/releases/latest/download/fcdownloader-v1.1.0.apk"
+$env:IOS_DOWNLOAD_URL = "https://testflight.apple.com/join/your-code"
+$env:EXTENSION_DOWNLOAD_URL = "https://github.com/otterlymavis/fcdownloader/releases/latest/download/fcdownloader-extension-v1.4.2.zip"
+$env:HELPER_DOWNLOAD_URL = "https://github.com/otterlymavis/fcdownloader/releases/latest/download/FCDownloader%20Companion%20Setup%200.2.0.exe"
 npm run bake:web
 ```
 
