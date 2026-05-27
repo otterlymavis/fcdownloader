@@ -1,0 +1,13 @@
+artifacts
+dist
+desktop-companion/build
+desktop-companion/dist
+desktop-companion/node_modules
+history_logs
+pytest-of-*
+.pytest_cache
+server/.pytest_cache
+android/app/build
+android/build
+android/.gradle
+node_modules

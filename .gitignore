@@ -89,3 +89,5 @@ desktop-companion/build/pyinstaller-spec/
 
 # Code local settings
 CLAUDE.md
+
+.vercel
