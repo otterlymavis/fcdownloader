@@ -20,6 +20,7 @@ import pytest
 
 import auth
 import classifier
+import extractors
 import registry
 import telemetry
 import models
@@ -189,6 +190,7 @@ class TestRegistry:
             "https://abema.tv/video/episode/123",
             "https://twitcasting.tv/example/movie/123",
             "https://www.openrec.tv/live/abc",
+            "https://mdpr.jp/news/detail/1234567",
             "https://cu.tbs.co.jp/episode/123",
             "https://fod.fujitv.co.jp/title/123",
             "https://video.yahoo.co.jp/c/123",
@@ -201,6 +203,33 @@ class TestRegistry:
     def test_unknown_returns_generic(self):
         cap = registry.lookup("https://example.com/video")
         assert cap.hosts == ()
+
+    def test_naver_lookup(self):
+        cap = registry.lookup("https://tv.naver.com/v/123456")
+        assert cap.requires_referer
+        assert cap.hls_common
+        assert not cap.requires_ja_locale
+
+    def test_naver_blog_has_platform_extractor(self):
+        cap = registry.lookup("https://blog.naver.com/jalee3228/224297926556")
+        assert cap.has_platform_extractor
+        assert cap.requires_referer
+
+    def test_modelpress_has_platform_extractor(self):
+        cap = registry.lookup("https://mdpr.jp/news/4690888")
+        assert cap.has_platform_extractor
+        assert cap.requires_ja_locale
+
+    def test_curated_japanese_magazine_has_platform_extractor(self):
+        cap = registry.lookup("https://natalie.mu/music/news/123456")
+        assert cap.has_platform_extractor
+        assert cap.requires_referer
+        assert cap.requires_ja_locale
+
+    def test_naver_news_has_platform_extractor(self):
+        cap = registry.lookup("https://n.news.naver.com/article/001/0012345678")
+        assert cap.has_platform_extractor
+        assert cap.requires_referer
 
     def test_is_youtube(self):
         assert registry.is_youtube("https://www.youtube.com/watch?v=abc")
@@ -331,6 +360,191 @@ class TestUtils:
         quoted = url_quote("https://example.com/path?key=val&foo=bar")
         assert ":" not in quoted
         assert "/" not in quoted
+
+    def test_naver_cdn_uses_backend_streaming(self):
+        from main import _needs_headered_direct_stream, _download_headers, _DOH_CDN_SUFFIXES
+        page_url = "https://tv.naver.com/v/5118291"
+        media_url = "http://b01-kr-cdn.vod.naver.net/navertv/video.mp4"
+        headers = _download_headers(None, None, page_url=page_url)
+
+        assert headers["Referer"] == "https://tv.naver.com/"
+        assert _needs_headered_direct_stream(page_url, media_url, headers)
+        assert "naver.net" in _DOH_CDN_SUFFIXES
+
+
+class TestModelpressExtractor:
+    def test_extracts_gzip_article_images(self, monkeypatch):
+        import gzip
+
+        html = """
+        <html><head>
+          <meta property="og:title" content="Sample Modelpress Article">
+          <meta property="og:image" content="https://img-mdpr.freetls.fastly.net/article/abcd/nm/main.jpg?width=700&amp;auto=webp">
+        </head><body>
+          <img src="https://img-mdpr.freetls.fastly.net/article/abcd/nm/main.jpg?width=700&amp;auto=webp">
+          <img src="https://img-mdpr.freetls.fastly.net/article/efgh/nm/second.jpg?width=496&amp;crop=496:400&amp;auto=webp">
+        </body></html>
+        """.encode()
+
+        class FakeResponse:
+            headers = {"Content-Encoding": "gzip"}
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return gzip.compress(html)
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: FakeResponse())
+
+        info = extractors.extract_modelpress("https://mdpr.jp/news/4690888", None)
+        assert info is not None
+        assert info["_type"] == "playlist"
+        assert info["title"] == "Sample Modelpress Article"
+        assert len(info["entries"]) == 1
+        assert info["entries"][0]["url"].startswith("https://img-mdpr.freetls.fastly.net/article/")
+
+    def test_expands_photo_detail_gallery(self, monkeypatch):
+        import gzip
+        import re
+
+        pages = {
+            "https://mdpr.jp/photo/detail/20095232": """
+                <meta property="og:title" content="(画像1/3) Sample - モデルプレス">
+                <meta property="og:image" content="https://img-mdpr.freetls.fastly.net/article/a/nm/one.jpg">
+                <a href="/photo/detail/20095232">1</a>
+                <a href="/photo/detail/20095233">2</a>
+                <a href="/photo/detail/20095234">3</a>
+            """,
+            "https://mdpr.jp/photo/detail/20095233": """
+                <meta property="og:title" content="(画像2/3) Sample - モデルプレス">
+                <meta property="og:image" content="https://img-mdpr.freetls.fastly.net/article/b/nm/two.jpg">
+            """,
+            "https://mdpr.jp/photo/detail/20095234": """
+                <meta property="og:title" content="(画像3/3) Sample - モデルプレス">
+                <meta property="og:image" content="https://img-mdpr.freetls.fastly.net/article/c/nm/three.jpg">
+            """,
+        }
+
+        class FakeResponse:
+            headers = {"Content-Encoding": "gzip"}
+            def __init__(self, body: str): self.body = body.encode()
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return gzip.compress(self.body)
+
+        def fake_urlopen(req, *args, **kwargs):
+            url = getattr(req, "full_url", str(req))
+            return FakeResponse(pages[re.sub(r"/$", "", url)])
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        info = extractors.extract_modelpress("https://mdpr.jp/photo/detail/20095232", None)
+        assert info is not None
+        assert [entry["url"] for entry in info["entries"]] == [
+            "https://img-mdpr.freetls.fastly.net/article/a/nm/one.jpg",
+            "https://img-mdpr.freetls.fastly.net/article/b/nm/two.jpg",
+            "https://img-mdpr.freetls.fastly.net/article/c/nm/three.jpg",
+        ]
+
+
+class TestNaverBlogExtractor:
+    def test_extracts_postview_gallery_images(self, monkeypatch):
+        pages = {
+            "https://blog.naver.com/jalee3228/224297926556": """
+                <html><body>
+                  <iframe id="mainFrame" src="/PostView.naver?blogId=jalee3228&amp;logNo=224297926556"></iframe>
+                </body></html>
+            """,
+            "https://blog.naver.com/PostView.naver?blogId=jalee3228&logNo=224297926556": """
+                <html><head>
+                  <meta property="og:title" content="Sample Naver Blog">
+                </head><body>
+                  <img class="se-image-resource" data-lazy-src="https://postfiles.pstatic.net/MjAyNjA1/test-one.jpg?type=w966">
+                  <img class="se-image-resource" src="https://postfiles.pstatic.net/MjAyNjA1/test-two.jpg?type=w80_blur">
+                  <img src="https://postfiles.pstatic.net/MjAyNjA1/ignored.jpg?type=w966">
+                </body></html>
+            """,
+        }
+
+        class FakeResponse:
+            headers = {}
+            def __init__(self, body: str): self.body = body.encode()
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return self.body
+
+        def fake_urlopen(req, *args, **kwargs):
+            url = getattr(req, "full_url", str(req))
+            return FakeResponse(pages[url])
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        info = extractors.extract_naver_blog("https://blog.naver.com/jalee3228/224297926556", None)
+        assert info is not None
+        assert info["_type"] == "playlist"
+        assert info["title"] == "Sample Naver Blog"
+        assert [entry["url"] for entry in info["entries"]] == [
+            "https://postfiles.pstatic.net/MjAyNjA1/test-one.jpg?type=w966",
+            "https://postfiles.pstatic.net/MjAyNjA1/test-two.jpg",
+        ]
+        assert info["entries"][0]["http_headers"]["Referer"].startswith(
+            "https://blog.naver.com/PostView.naver?"
+        )
+
+
+class TestCuratedSiteExtractor:
+    def test_extracts_japanese_article_gallery(self, monkeypatch):
+        html = """
+        <html><head>
+          <meta property="og:title" content="Sample Natalie Gallery">
+          <meta property="og:image" content="https://ogre.natalie.mu/media/news/music/sample-main.jpg">
+        </head><body>
+          <img src="https://ogre.natalie.mu/media/news/music/sample-main.jpg?impolicy=hq">
+          <img data-src="https://ogre.natalie.mu/media/news/music/sample-second.webp">
+          <img src="https://ogre.natalie.mu/media/news/music/icon-logo.png">
+        </body></html>
+        """
+
+        class FakeResponse:
+            headers = {}
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return html.encode()
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: FakeResponse())
+
+        info = extractors.extract_curated_site("https://natalie.mu/music/news/123456", None)
+        assert info is not None
+        assert info["_type"] == "playlist"
+        assert info["title"] == "Sample Natalie Gallery"
+        assert [entry["url"] for entry in info["entries"]] == [
+            "https://ogre.natalie.mu/media/news/music/sample-main.jpg",
+            "https://ogre.natalie.mu/media/news/music/sample-second.webp",
+        ]
+        assert info["entries"][0]["http_headers"]["Referer"] == "https://natalie.mu/music/news/123456"
+
+    def test_naver_article_ignores_header_png(self, monkeypatch):
+        html = """
+        <html><head>
+          <meta property="og:title" content="Sample Naver News">
+          <meta property="og:image" content="https://ssl.pstatic.net/static.news/image/news/ogtag/navernews_200x200.png">
+        </head><body>
+          <img src="https://ssl.pstatic.net/static.news/image/news/ogtag/navernews_200x200.png">
+          <img src="https://imgnews.pstatic.net/image/001/2026/05/28/article_photo.jpg?type=w647">
+        </body></html>
+        """
+
+        class FakeResponse:
+            headers = {}
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return html.encode()
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: FakeResponse())
+
+        info = extractors.extract_curated_site("https://n.news.naver.com/article/001/0012345678", None)
+        assert info is not None
+        assert [entry["url"] for entry in info["entries"]] == [
+            "https://imgnews.pstatic.net/image/001/2026/05/28/article_photo.jpg?type=w647",
+        ]
 
 
 # ── YouTube HLS guard (strategies._strategy_ydl / _strategy_ydl_client) ──────

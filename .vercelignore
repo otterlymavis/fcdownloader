@@ -2,7 +2,9 @@ artifacts
 dist
 desktop-companion/build
 desktop-companion/dist
+desktop-companion/dist-*
 desktop-companion/node_modules
+.vercel/output
 history_logs
 pytest-of-*
 .pytest_cache

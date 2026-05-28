@@ -32,25 +32,26 @@ import { isAria2Eligible, downloadWithBestTransport, TransportOptions } from './
 import { USE_ARIA2_ANDROID, USE_ARIA2_FALLBACK } from './featureFlags';
 import { getSiteCapabilities } from './siteRegistry';
 import * as FileSystem from 'expo-file-system/legacy';
+import { debugLog, debugWarn } from './releaseLogger';
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 
 function logDownloaderSelected(strategy: DownloadStrategy, media: DetectedMedia) {
-  console.log(
+  debugLog(
     `[DownloadEngine] strategy=${strategy} url=${media.url.slice(0, 80)} aria2Eligible=${isAria2Eligible(media)}`,
   );
 }
 
 function logFallback(from: string, to: string, reason: string) {
-  console.warn(`[DownloadEngine] fallback ${from} → ${to}: ${reason}`);
+  debugWarn(`[DownloadEngine] fallback ${from} → ${to}: ${reason}`);
 }
 
 function logAria2Activation(url: string) {
-  console.log(`[DownloadEngine] aria2c transport activated for: ${url.slice(0, 80)}`);
+  debugLog(`[DownloadEngine] aria2c transport activated for: ${url.slice(0, 80)}`);
 }
 
 function logAria2Fallback(reason: string) {
-  console.warn(`[DownloadEngine] aria2c failed, using native: ${reason}`);
+  debugWarn(`[DownloadEngine] aria2c failed, using native: ${reason}`);
 }
 
 // ── Large-file threshold ──────────────────────────────────────────────────────
@@ -122,7 +123,7 @@ export class DownloadEngine {
             connections: 4,
             splits: 4,
           });
-          console.log(`[DownloadEngine] aria2c complete: ${result.filePath} via ${result.transport}`);
+          debugLog(`[DownloadEngine] aria2c complete: ${result.filePath} via ${result.transport}`);
           opts.onStatus?.('completed');
           return result.filePath;
         }

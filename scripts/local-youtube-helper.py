@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
+import os
+import platform
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -19,20 +23,130 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FORMAT = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/best[ext=mp4]/best"
 YOUTUBE_FORMAT = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/137+140/136+140/18"
 MAX_URL_LENGTH = 4096
-SERVICE_VERSION = "0.2.0"
+SERVICE_VERSION = "0.2.1"
 LOCAL_HELPER_API_VERSION = "v1"
 YTDLP_DELEGATE_FLAG = "--fcdl-run-yt-dlp"
+FFMPEG_BASE_URL = "https://raw.githubusercontent.com/imageio/imageio-binaries/master/ffmpeg"
+FFMPEG_FILENAMES = {
+    "windows-x86_64": "ffmpeg-win-x86_64-v7.1.exe",
+    "windows-i686": "ffmpeg-win32-v4.2.2.exe",
+    "macos-aarch64": "ffmpeg-macos-aarch64-v7.1",
+    "macos-x86_64": "ffmpeg-macos-x86_64-v7.1",
+    "linux-aarch64": "ffmpeg-linux-aarch64-v7.0.2",
+    "linux-x86_64": "ffmpeg-linux-x86_64-v7.0.2",
+}
+FFMPEG_SHA256 = {
+    "ffmpeg-win-x86_64-v7.1.exe": "2ce797a0f88d7f067180338fb227f7b1928ea727bd9a4d7a1d022f7c52af71a3",
+}
 
 
 def _ffmpeg_path() -> str:
-    try:
-        import imageio_ffmpeg
+    explicit = os.environ.get("FCDL_FFMPEG_EXE") or os.environ.get("IMAGEIO_FFMPEG_EXE")
+    if explicit:
+        return explicit
 
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(
-            "imageio-ffmpeg is missing. Install it with: python -m pip install imageio-ffmpeg"
-        ) from exc
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg and _is_valid_ffmpeg(system_ffmpeg):
+        return system_ffmpeg
+
+    cached = _cached_ffmpeg_path()
+    if cached.exists() and _is_valid_ffmpeg(str(cached)):
+        return str(cached)
+
+    return str(_download_ffmpeg(cached))
+
+
+def _platform_key() -> str:
+    if sys.platform.startswith("win"):
+        os_name = "windows"
+    elif sys.platform.startswith("darwin"):
+        os_name = "macos"
+    elif sys.platform.startswith("linux"):
+        os_name = "linux"
+    else:
+        os_name = sys.platform
+
+    is_64_bit = sys.maxsize > 2**32
+    machine = platform.machine().lower()
+    if machine == "armv7l":
+        arch = "armv7"
+    elif is_64_bit and machine.startswith(("arm", "aarch64")):
+        arch = "aarch64"
+    elif is_64_bit:
+        arch = "x86_64"
+    else:
+        arch = "i686"
+    return f"{os_name}-{arch}"
+
+
+def _cache_root() -> Path:
+    override = os.environ.get("FCDL_FFMPEG_DIR")
+    if override:
+        return Path(override).expanduser()
+    if sys.platform.startswith("win"):
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "FCDownloader" / "ffmpeg"
+    if sys.platform.startswith("darwin"):
+        return Path.home() / "Library" / "Caches" / "FCDownloader" / "ffmpeg"
+    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "fcdownloader" / "ffmpeg"
+
+
+def _cached_ffmpeg_path() -> Path:
+    filename = FFMPEG_FILENAMES.get(_platform_key())
+    if not filename:
+        raise RuntimeError(f"No bundled ffmpeg download is configured for {_platform_key()}")
+    return _cache_root() / filename
+
+
+def _is_valid_ffmpeg(exe: str) -> bool:
+    try:
+        subprocess.run(
+            [exe, "-version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=True,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _download_ffmpeg(target: Path) -> Path:
+    filename = target.name
+    base_url = os.environ.get("FCDL_FFMPEG_BASE_URL", FFMPEG_BASE_URL).rstrip("/")
+    url = f"{base_url}/{filename}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".download")
+
+    print(f"[local-helper] downloading ffmpeg: {url}", flush=True)
+    try:
+        with urllib.request.urlopen(url, timeout=120) as response, tmp.open("wb") as fh:
+            shutil.copyfileobj(response, fh, length=1024 * 1024)
+
+        expected = FFMPEG_SHA256.get(filename)
+        if expected and _sha256(tmp).lower() != expected:
+            raise RuntimeError("Downloaded ffmpeg checksum did not match the expected hash")
+
+        if not sys.platform.startswith("win"):
+            tmp.chmod(tmp.stat().st_mode | 0o755)
+        os.replace(tmp, target)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+    if not _is_valid_ffmpeg(str(target)):
+        target.unlink(missing_ok=True)
+        raise RuntimeError("Downloaded ffmpeg could not be executed")
+    return target
 
 
 def _python_path() -> str:

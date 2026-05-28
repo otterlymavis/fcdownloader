@@ -10,8 +10,14 @@ const releasePath = path.join(root, "release.json");
 const backend = (process.env.EXTRACTOR_URL || process.env.EXPO_PUBLIC_EXTRACTOR_URL || "").trim().replace(/\/+$/, "");
 const androidUrl = (process.env.ANDROID_DOWNLOAD_URL || process.env.MOBILE_DOWNLOAD_URL || "").trim();
 const iosUrl = (process.env.IOS_DOWNLOAD_URL || "").trim();
-const helperUrl = (process.env.HELPER_DOWNLOAD_URL || process.env.COMPANION_DOWNLOAD_URL || "").trim();
+const helperUrl = (
+  process.env.HELPER_NOBROWSER_GO_DOWNLOAD_URL ||
+  process.env.HELPER_DOWNLOAD_URL ||
+  process.env.COMPANION_DOWNLOAD_URL ||
+  ""
+).trim();
 const extensionUrl = (process.env.EXTENSION_DOWNLOAD_URL || "").trim();
+const helperChecksumsUrl = (process.env.HELPER_CHECKSUMS_URL || process.env.COMPANION_CHECKSUMS_URL || "").trim();
 const selfHostUrl = (process.env.SELF_HOST_URL || "").trim();
 
 function replaceMeta(html, name, value) {
@@ -33,6 +39,7 @@ html = replaceMeta(html, "android-download-url", androidUrl);
 html = replaceMeta(html, "ios-download-url", iosUrl);
 html = replaceMeta(html, "extension-download-url", extensionUrl);
 html = replaceMeta(html, "helper-download-url", helperUrl);
+html = replaceMeta(html, "helper-checksums-url", helperChecksumsUrl);
 html = replaceMeta(html, "self-host-url", selfHostUrl);
 
 fs.writeFileSync(indexPath, html);

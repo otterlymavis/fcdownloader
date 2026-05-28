@@ -83,7 +83,7 @@ function main() {
 
   const python = ensureBuildVenv(findPython());
   run(python.command, [...python.args, "-m", "pip", "install", "--upgrade", "-r", REQUIREMENTS]);
-  run(python.command, [
+  const pyinstallerArgs = [
     ...python.args,
     "-m",
     "PyInstaller",
@@ -100,10 +100,20 @@ function main() {
     PYI_SPEC,
     "--collect-all",
     "yt_dlp",
-    "--collect-all",
-    "imageio_ffmpeg",
+    "--exclude-module",
+    "tkinter",
+    "--exclude-module",
+    "unittest",
+    "--exclude-module",
+    "pydoc",
+    "--exclude-module",
+    "doctest",
     HELPER_SOURCE,
-  ]);
+  ];
+  if (process.env.FCDL_PYI_UPX_DIR) {
+    pyinstallerArgs.splice(pyinstallerArgs.length - 1, 0, "--upx-dir", process.env.FCDL_PYI_UPX_DIR);
+  }
+  run(python.command, pyinstallerArgs);
 
   const output = path.join(HELPER_DIST, HELPER_NAME);
   if (!fs.existsSync(output)) {

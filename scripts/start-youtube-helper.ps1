@@ -6,9 +6,9 @@ if (!(Test-Path $python)) {
   $python = "python"
 }
 
-& $python -c "import imageio_ffmpeg" 2>$null
+& $python -c "import yt_dlp" 2>$null
 if ($LASTEXITCODE -ne 0) {
-  & $python -m pip install imageio-ffmpeg
+  & $python -m pip install yt-dlp
 }
 
 & $python (Join-Path $PSScriptRoot "local-youtube-helper.py")

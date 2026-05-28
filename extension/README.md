@@ -18,6 +18,22 @@ The same backend (`https://your-instance.fly.dev`) is used for cases that
 need server-side muxing, authenticated header replay, or extraction. Configure
 a different backend in extension Settings.
 
+Supported backend routes include major video/social sites such as YouTube,
+Bilibili, Vimeo, TikTok, Instagram, Threads, X/Twitter, Facebook, Pinterest,
+Dailymotion, Reddit, Weibo, Xiaohongshu, TVer, Niconico, ABEMA, Naver, NHK,
+TBS, FOD/Fuji TV, TwitCasting, OpenREC, FC2, and Yahoo Japan. Article/gallery
+support includes many Japanese and Korean news, magazine, and blog sites such
+as Modelpress, Naver Blog/News, Ameblo, Natalie, Oricon, Kstyle, Daum/Tistory,
+Kakao TV, Livedoor Blog, Yahoo Japan galleries, Pixiv/Fanbox, Bilibili dynamic
+posts, Bunshun, Daily Shincho, News Post Seven, FRIDAY/Kodansha, Fashion Press,
+Fashionsnap, WWD Japan, Real Sound, JPrime, Smart Flash, major newspapers,
+sports papers, and Japanese tech/news sites.
+
+The extension uses a hybrid download path. Backend extraction finds the real
+media URLs and headers. The extension downloads safe headerless files directly
+with `chrome.downloads`; gallery items that need cookies, referer replay, or a
+known restricted CDN are routed through the backend `/proxy` endpoint.
+
 ## Load it for testing
 
 ### Chrome / Edge / Brave

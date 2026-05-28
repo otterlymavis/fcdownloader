@@ -22,6 +22,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const SRC  = path.join(ROOT, "extension");
 const OUT  = path.join(ROOT, "dist", "extension");
+const DIST = path.join(ROOT, "dist");
 
 const backend = (process.env.EXTENSION_DEFAULT_BACKEND ?? "").trim().replace(/\/+$/, "");
 if (!backend) {
@@ -76,6 +77,12 @@ const version  = manifest.version || "0.0.0";
 // else fall back to a system command.
 let zipPath = path.join(ROOT, "dist", `fcdownloader-extension-v${version}.zip`);
 try {
+  await fs.mkdir(DIST, { recursive: true });
+  for (const entry of await fs.readdir(DIST, { withFileTypes: true })) {
+    if (entry.isFile() && /^fcdownloader-extension-v.*\.zip$/i.test(entry.name)) {
+      await fs.rm(path.join(DIST, entry.name), { force: true });
+    }
+  }
   const { default: AdmZip } = await import("adm-zip");
   const zip = new AdmZip();
   zip.addLocalFolder(OUT);

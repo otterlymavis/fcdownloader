@@ -34,10 +34,11 @@ Or bake release metadata with:
 
 ```powershell
 $env:EXTRACTOR_URL='https://your-app.fly.dev'
-$env:ANDROID_DOWNLOAD_URL='https://github.com/you/fcdownloader/releases/latest/download/fcdownloader-v1.1.0.apk'
+$env:ANDROID_DOWNLOAD_URL='https://github.com/you/fcdownloader/releases/latest/download/fcdownloader-v1.5.5.apk'
 $env:IOS_DOWNLOAD_URL='https://testflight.apple.com/join/your-code'
-$env:EXTENSION_DOWNLOAD_URL='https://github.com/you/fcdownloader/releases/latest/download/fcdownloader-extension-v1.4.2.zip'
-$env:HELPER_DOWNLOAD_URL='https://github.com/you/fcdownloader/releases/latest/download/FCDownloader.Companion.Setup.0.2.0.exe'
+$env:EXTENSION_DOWNLOAD_URL='https://github.com/you/fcdownloader/releases/latest/download/fcdownloader-extension-v1.5.5.zip'
+$env:HELPER_NOBROWSER_GO_DOWNLOAD_URL='https://github.com/you/fcdownloader/releases/latest/download/FCDownloader%20Companion%20NoBrowser%20Go%20Setup%200.2.1.exe'
+$env:HELPER_CHECKSUMS_URL='https://github.com/you/fcdownloader/releases/latest/download/companion-artifacts.sha256'
 npm run bake:web
 ```
 
@@ -94,6 +95,26 @@ Comma-separate multiple origins:
 4. If the helper is absent or cannot extract that URL, the frontend falls back
    to the configured backend `POST /extract` and `GET /download?url=...`.
 5. The preview card shows the best available route, title, duration, and kind.
+
+## Supported routes
+
+The configured backend supports major video/social sites such as YouTube,
+Bilibili, Vimeo, TikTok, Instagram, Threads, X/Twitter, Facebook, Pinterest,
+Dailymotion, Reddit, Weibo, Xiaohongshu, TVer, Niconico, ABEMA, Naver, NHK,
+TBS, FOD/Fuji TV, TwitCasting, OpenREC, FC2, and Yahoo Japan.
+
+It also supports article/gallery extraction for many Japanese and Korean news,
+magazine, and blog sites, including Modelpress, Naver Blog/News, Ameblo,
+Natalie, Oricon, Kstyle, Daum/Tistory, Kakao TV, Livedoor Blog, Yahoo Japan
+galleries, Pixiv/Fanbox, Bilibili dynamic posts, Bunshun, Daily Shincho, News
+Post Seven, FRIDAY/Kodansha, Fashion Press, Fashionsnap, WWD Japan, Real Sound,
+JPrime, Smart Flash, major newspapers, sports papers, and Japanese tech/news
+sites.
+
+Downloads use a hybrid path: the backend extracts the real media URLs and
+required headers, while the web page downloads safe headerless files directly
+and uses `/proxy` only for cookies, referer-protected CDNs, or restricted
+gallery items.
 
 ## Privacy policy
 

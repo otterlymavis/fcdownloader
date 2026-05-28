@@ -128,7 +128,33 @@ const REGISTRY: SiteEntry[] = [
       notes: 'DRM-free streams use HLS; yt-dlp with Japanese headers handles most content',
     },
   },
+  // Naver
+  {
+    pattern: /(?:naver\.com\/|naver\.me\/)/i,
+    caps: {
+      preferredStrategies: ['server-download', 'hls-segments'],
+      acceptLanguage: 'ko-KR,ko;q=0.9,en-US;q=0.6,en;q=0.5',
+      notes: 'Naver video is supported by yt-dlp; some clips need page referer or logged-in cookies',
+    },
+  },
+  // Modelpress
+  {
+    pattern: /(?:mdpr\.jp\/|modelpress\.jp\/)/i,
+    caps: {
+      preferredStrategies: ['server-download', 'hls-segments', 'direct'],
+      acceptLanguage: 'ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5',
+      notes: 'Modelpress usually embeds third-party players; server extraction and runtime capture are preferred',
+    },
+  },
   // ── NHK ───────────────────────────────────────────────────────────────────
+  {
+    pattern: /(?:ameblo\.jp|ameba\.jp|natalie\.mu|oricon\.co\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|t\.bilibili\.com|bilibili\.com\/(?:opus|read)|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net)/i,
+    caps: {
+      preferredStrategies: ['server-download', 'direct'],
+      acceptLanguage: 'ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5',
+      notes: 'Article/gallery images often need Referer and proxy download handling',
+    },
+  },
   {
     pattern: /nhk\.(?:or\.jp|jp)\//i,
     caps: {

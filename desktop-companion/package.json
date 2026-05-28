@@ -1,6 +1,6 @@
 {
   "name": "fcdownloader-companion",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "FCDownloader desktop companion for local YouTube HD downloads.",
   "author": "FCDownloader",
   "main": "src/main.cjs",
@@ -8,6 +8,15 @@
   "scripts": {
     "start": "electron .",
     "helper:build": "node scripts/build-helper.cjs",
+    "helper:audit-size": "node scripts/audit-helper-size.cjs",
+    "helper:audit-summary": "node scripts/summarize-helper-audit.cjs",
+    "lite:audit-size": "node scripts/audit-lite-size.cjs",
+    "release:hash-artifacts": "node scripts/hash-release-artifacts.cjs",
+    "release:verify-artifacts": "node scripts/verify-release-artifacts.cjs",
+    "variants": "node scripts/build-variants.cjs",
+    "variants:nobrowser-go": "node scripts/build-variants.cjs nobrowser-go",
+    "test:nobrowser-go": "powershell.exe -ExecutionPolicy Bypass -File scripts/test-nobrowser-go-helper.ps1",
+    "test:nobrowser-go:installer": "powershell.exe -ExecutionPolicy Bypass -File scripts/test-nobrowser-go-installer.ps1",
     "pack": "npm run helper:build && node scripts/build-electron.cjs --dir",
     "dist": "npm run helper:build && node scripts/build-electron.cjs"
   },

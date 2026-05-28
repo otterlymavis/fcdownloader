@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { WebViewMessageEvent } from 'react-native-webview';
 import { DetectedMedia, MediaType, Provenance } from '../types';
+import { debugLog } from '../lib/releaseLogger';
 
 let _seq = 0;
 const genId = () => `media_${Date.now()}_${_seq++}`;
@@ -155,18 +156,16 @@ export function useMediaDetection() {
       if (data.event === 'YT_DETECTED') {
         // Telemetry from the injected script's YouTube extractor.
         // Useful for debugging; no state change needed.
-        if (__DEV__) {
-          console.log('[YT]', {
-            videoId:      data.videoId,
-            formats:      data.formatsCount,
-            adaptive:     data.adaptiveCount,
-            hasDirect:    data.hasDirect,
-            hasDash:      data.hasDash,
-            hasHls:       data.hasHls,
-            isIOS:        data.isIOS,
-            emitted:      data.emitted,
-          });
-        }
+        debugLog('[YT]', {
+          videoId:      data.videoId,
+          formats:      data.formatsCount,
+          adaptive:     data.adaptiveCount,
+          hasDirect:    data.hasDirect,
+          hasDash:      data.hasDash,
+          hasHls:       data.hasHls,
+          isIOS:        data.isIOS,
+          emitted:      data.emitted,
+        });
         return;
       }
 

@@ -128,11 +128,15 @@ main {
   min-width: 0;
   font-size: 12px;
 }
-#helper-open {
+#helper-open,
+#helper-tools {
   min-height: 28px;
   padding: 5px 10px;
   font-size: 11px;
   flex: 0 0 auto;
+}
+#helper-tools[hidden] {
+  display: none;
 }
 
 /* ── Primary card ────────────────────────────────────────────────────── */

@@ -31,6 +31,7 @@ import * as FileSystem from 'expo-file-system';
 import { DetectedMedia } from '../types';
 import { USE_ARIA2_ANDROID, USE_ARIA2_FALLBACK } from './featureFlags';
 import { DownloadOptions } from './hlsDownloader';
+import { debugLog, debugWarn } from './releaseLogger';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -115,11 +116,11 @@ async function downloadViaAndroidAria2(
   }
 
   if (!FcAria2) {
-    console.warn('[aria2Transport] FcAria2 native module not available; falling back to expo-fs');
+    debugWarn('[aria2Transport] FcAria2 native module not available; falling back to expo-fs');
     return downloadViaExpoFs(url, opts);
   }
 
-  console.log('[aria2Transport] Android aria2c RPC download:', url);
+  debugLog('[aria2Transport] Android aria2c RPC download:', url);
 
   let gid: string | null = null;
   try {
@@ -199,7 +200,7 @@ async function downloadViaIosNative(
   url: string,
   opts: TransportOptions,
 ): Promise<TransportResult> {
-  console.log('[aria2Transport] iOS NSURLSession download:', url);
+  debugLog('[aria2Transport] iOS NSURLSession download:', url);
 
   const resumable = FileSystem.createDownloadResumable(
     url,
@@ -236,7 +237,7 @@ async function downloadViaExpoFs(
   url: string,
   opts: TransportOptions,
 ): Promise<TransportResult> {
-  console.log('[aria2Transport] expo-fs download (fallback):', url);
+  debugLog('[aria2Transport] expo-fs download (fallback):', url);
 
   const download = FileSystem.createDownloadResumable(
     url,
@@ -292,7 +293,7 @@ export async function downloadWithBestTransport(
       return await downloadViaAndroidAria2(url, { ...opts, headers });
     } catch (e) {
       if (opts.signal?.aborted) throw e;
-      console.warn('[aria2Transport] Android aria2c failed, falling back to expo-fs:', String(e).slice(0, 200));
+      debugWarn('[aria2Transport] Android aria2c failed, falling back to expo-fs:', String(e).slice(0, 200));
       if (!USE_ARIA2_FALLBACK) throw e;
       return downloadViaExpoFs(url, { ...opts, headers });
     }

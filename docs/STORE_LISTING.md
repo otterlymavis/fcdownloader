@@ -12,6 +12,8 @@ FCDownloader helps you save videos, images, audio, and galleries from supported 
 
 The app and extension can detect media on pages you choose, start downloads, and use an optional extractor backend for formats that need server-side extraction, muxing, or authenticated header replay. For signed-in pages, FCDownloader can forward the current site's session cookies or request headers to the configured backend so it can access media available to your session.
 
+Supported routes include major video/social sites such as YouTube, Bilibili, Vimeo, TikTok, Instagram, Threads, X/Twitter, Facebook, Pinterest, Dailymotion, Reddit, Weibo, Xiaohongshu, TVer, Niconico, ABEMA, Naver, NHK, TBS, FOD/Fuji TV, TwitCasting, OpenREC, FC2, and Yahoo Japan, plus article/gallery support for many Japanese and Korean news, magazine, and blog sites such as Modelpress, Naver Blog/News, Ameblo, Natalie, Oricon, Kstyle, Daum/Tistory, Kakao TV, Livedoor Blog, Yahoo Japan galleries, Pixiv/Fanbox, Bilibili dynamic posts, Bunshun, Daily Shincho, News Post Seven, FRIDAY/Kodansha, Fashion Press, Fashionsnap, WWD Japan, Real Sound, JPrime, Smart Flash, major newspapers, sports papers, and Japanese tech/news sites.
+
 FCDownloader does not include ads, analytics, or telemetry. It does not sell personal information. Review the privacy policy before publishing and link it from every store listing.
 
 ## Permissions Explanation

@@ -1,6 +1,6 @@
 # FCDownloader Privacy Policy
 
-Last updated: May 25, 2026
+Last updated: May 28, 2026
 
 FCDownloader helps you save media that you own, control, or have permission to access. This policy covers the FCDownloader mobile app, browser extension, static web page, and optional extractor backend.
 
@@ -65,9 +65,11 @@ Cookies are used only to access media from sessions where you are already signed
 You can:
 
 - Change or clear the backend URL in extension settings.
-- Clear app data or extension storage through your device or browser settings.
+- Clear mobile app data through Android or iOS settings.
+- Clear extension storage through your browser's extension settings, or remove and reinstall the extension.
 - Sign out of source websites to invalidate source-site sessions.
 - Rotate or remove backend cookies if you operate the backend.
+- Ask the hosted backend operator to delete server logs associated with your requests when logs are still retained.
 - Delete downloaded files from your device or Downloads folder.
 
 ## Children's Privacy
@@ -80,4 +82,4 @@ This policy may be updated as FCDownloader changes. The latest version should be
 
 ## Contact
 
-For privacy questions, open an issue on the FCDownloader project repository or contact the publisher listed on the store page.
+For privacy questions, email mavisssz@gmail.com or contact the publisher listed on the store page.

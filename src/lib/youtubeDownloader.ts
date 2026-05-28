@@ -28,6 +28,7 @@ import { downloadDASH } from './dashDownloader';
 import { downloadViaServer } from './serverDownloader';
 import { extractYouTubeStreams } from './ytExtractor';
 import { extractViaServer } from './serverExtractor';
+import { debugLog } from './releaseLogger';
 
 const YT_CDN_HEADERS: Record<string, string> = {
   'User-Agent':
@@ -53,10 +54,10 @@ async function streamToDisk(
 
   await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
 
-  console.log('[ytDlp] GET', url.slice(0, 120));
+  debugLog('[ytDlp] GET', url.slice(0, 120));
 
   const res = await expoFetch(url, { signal, headers });
-  console.log('[ytDlp] response status:', res.status, 'content-length:', res.headers.get('content-length'));
+  debugLog('[ytDlp] response status:', res.status, 'content-length:', res.headers.get('content-length'));
 
   if (!res.ok) throw new Error(`YouTube ${res.status}`);
   if (!res.body) throw new Error('Empty response body');
@@ -98,7 +99,7 @@ export async function downloadYouTube(
 
   // Always re-extract — browser-captured URLs typically reflect whatever
   // low-res variant the WebView player happened to be streaming.
-  console.log('[ytDlp] re-extracting from page:', media.pageUrl);
+  debugLog('[ytDlp] re-extracting from page:', media.pageUrl);
   let items = await extractViaServer(media.pageUrl);
   if (items.length === 0) items = await extractYouTubeStreams(media.pageUrl);
 
@@ -115,7 +116,7 @@ export async function downloadYouTube(
     items.find((f) => f.hasAudio && f.hasVideo) ??
     items[0];
 
-  console.log('[ytDlp] best:',
+  debugLog('[ytDlp] best:',
     'mediaType=', best.mediaType,
     'paired=', !!best.audioTrackUrl,
     'label=', best.label,

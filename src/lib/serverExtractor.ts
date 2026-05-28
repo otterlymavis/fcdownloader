@@ -34,6 +34,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { DetectedMedia, FormatOption } from '../types';
 import { extractSessionCookies } from './cookieManager';
+import { debugLog, debugWarn } from './releaseLogger';
 
 const STORAGE_KEY = '@fcdownloader/server_extractor_url';
 const TOKEN_STORAGE_KEY = '@fcdownloader/server_extractor_token';
@@ -131,13 +132,13 @@ export async function extractViaServer(pageUrl: string): Promise<DetectedMedia[]
     try {
       cookies = await extractSessionCookies(pageUrl);
     } catch (e) {
-      console.warn('[serverExtractor] cookie read failed:', String(e).slice(0, 120));
+      debugWarn('[serverExtractor] cookie read failed:', String(e).slice(0, 120));
     }
     const body: Record<string, unknown> = { pageUrl };
     if (cookies) body.cookies = cookies;
 
     const fullUrl = `${base}/extract`;
-    console.log('[serverExtractor] POST', fullUrl, 'token?', !!token, 'cookies?', cookies.length, 'chars');
+    debugLog('[serverExtractor] POST', fullUrl, 'token?', !!token, 'cookies?', cookies.length, 'chars');
     const res = await fetch(fullUrl, {
       method: 'POST',
       headers,
@@ -145,13 +146,13 @@ export async function extractViaServer(pageUrl: string): Promise<DetectedMedia[]
       signal: ac.signal,
     });
     if (!res.ok) {
-      console.warn('[serverExtractor] HTTP', res.status);
+      debugWarn('[serverExtractor] HTTP', res.status);
       return [];
     }
     const data = (await res.json()) as ServerExtractResponse;
     return toDetectedMedia(data, pageUrl);
   } catch (e) {
-    console.warn('[serverExtractor] request failed:', String(e).slice(0, 200));
+    debugWarn('[serverExtractor] request failed:', String(e).slice(0, 200));
     return [];
   } finally {
     clearTimeout(timer);

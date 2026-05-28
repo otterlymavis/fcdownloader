@@ -37,7 +37,7 @@ export async function downloadViaServer(
   onStatus?.('fetching_manifest');
 
   // ytdl-stream proxy URL: the server already did the extraction and returned
-  // a /ytdl-stream?page_url=...&cookies=... URL. Download it directly using
+  // a /ytdl-stream?page_url=... URL. Download it directly using
   // the streaming download path — do NOT re-route through /download, which
   // would discard this URL and re-extract (double download, wrong path).
   if (media.url.includes('/ytdl-stream?')) {

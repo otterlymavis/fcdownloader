@@ -62,8 +62,9 @@ jobs:
       - name: Capture pack output paths
         id: pack
         run: |
-          ZIP=$(ls dist/fcdownloader-extension-v*.zip | head -1)
           VERSION=$(node -p "require('./extension/manifest.json').version")
+          ZIP="dist/fcdownloader-extension-v${VERSION}.zip"
+          test -f "$ZIP" || { echo "::error::Expected packed extension not found at $ZIP"; exit 1; }
           echo "zip=$ZIP"        >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Packed $ZIP (manifest version $VERSION)"

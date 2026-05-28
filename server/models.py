@@ -90,6 +90,13 @@ class DownloadRequest(BaseModel):
     proxy: str | None = None
 
 
+class ProxyRequest(BaseModel):
+    url: str
+    referer: str | None = None
+    cookies: str | None = None
+    filename: str | None = None
+
+
 class PlaylistRequest(BaseModel):
     pageUrl: str
     referer: str | None = None

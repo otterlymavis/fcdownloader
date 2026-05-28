@@ -15,6 +15,7 @@ import { extractFromSocialUrl, isSocialPageUrl } from './platformExtractors';
 import { extractViaServer } from './serverExtractor';
 import { getSiteCapabilities } from './siteRegistry';
 import { pickStrategy } from './downloadStrategies';
+import { debugLog, debugWarn } from './releaseLogger';
 
 // ── Result types ─────────────────────────────────────────────────────────────
 
@@ -113,7 +114,7 @@ export class ExtractionManager {
     {
       const attempt = await runAttempt('server-extraction', () => extractViaServer(pageUrl));
       if (attempt.success && attempt.media) {
-        console.log('[ExtractionManager] success via server-extraction for', pageUrl);
+        debugLog('[ExtractionManager] success via server-extraction for', pageUrl);
         return {
           success: true,
           fatal: false,
@@ -123,7 +124,7 @@ export class ExtractionManager {
         };
       }
       diagnostics['server-extraction'] = attempt.reason ?? 'no media';
-      console.log('[ExtractionManager] server-extraction failed:', attempt.reason);
+      debugLog('[ExtractionManager] server-extraction failed:', attempt.reason);
     }
 
     // ── Tier 2: platform-specific + HTML detection pipeline ───────────────
@@ -134,7 +135,7 @@ export class ExtractionManager {
       const attempt = await runAttempt('platform-extractors', () => extractFromSocialUrl(pageUrl));
       if (attempt.success && attempt.media) {
         const best = pickBestMedia(attempt.media);
-        console.log('[ExtractionManager] success via platform-extractors, best:', best?.mediaType, best?.label);
+        debugLog('[ExtractionManager] success via platform-extractors, best:', best?.mediaType, best?.label);
         return {
           success: true,
           fatal: false,
@@ -167,7 +168,7 @@ export class ExtractionManager {
     const summary = Object.entries(diagnostics)
       .map(([k, v]) => `${k}: ${v}`)
       .join('; ');
-    console.warn('[ExtractionManager] all extraction tiers failed for', pageUrl, '—', summary);
+    debugWarn('[ExtractionManager] all extraction tiers failed for', pageUrl, '—', summary);
     return {
       success: false,
       fatal: false,

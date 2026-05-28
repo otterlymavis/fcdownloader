@@ -12,6 +12,11 @@ name: Build Android APK
 #                                  [Convert]::ToBase64String([IO.File]::ReadAllBytes(
 #                                    "android\app\fcdownloader.keystore")) | Set-Clipboard
 #
+#   MYAPP_UPLOAD_STORE_FILE      (optional, defaults to fcdownloader.keystore)
+#   MYAPP_UPLOAD_KEY_ALIAS       (required)
+#   MYAPP_UPLOAD_STORE_PASSWORD  (required)
+#   MYAPP_UPLOAD_KEY_PASSWORD    (required)
+#
 #   EXPO_PUBLIC_EXTRACTOR_URL    (optional)
 #                                Fly.io backend URL for the HD extractor. Only used
 #                                when building the `backend-version` or `plus-version`
@@ -92,13 +97,28 @@ jobs:
       - name: Restore release keystore
         env:
           KS: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.MYAPP_UPLOAD_KEY_ALIAS }}
+          STORE_PASSWORD: ${{ secrets.MYAPP_UPLOAD_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.MYAPP_UPLOAD_KEY_PASSWORD }}
         run: |
           if [ -z "$KS" ]; then
             echo "::error::RELEASE_KEYSTORE_BASE64 secret is not set. See README/workflow header for setup."
             exit 1
           fi
-          echo "$KS" | base64 -d > android/app/fcdownloader.keystore
-          ls -l android/app/fcdownloader.keystore
+          if [ -z "$KEY_ALIAS" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "::error::MYAPP_UPLOAD_KEY_ALIAS, MYAPP_UPLOAD_STORE_PASSWORD, and MYAPP_UPLOAD_KEY_PASSWORD secrets are required."
+            exit 1
+          fi
+          store_file="${{ secrets.MYAPP_UPLOAD_STORE_FILE }}"
+          if [ -z "$store_file" ]; then store_file="fcdownloader.keystore"; fi
+          echo "$KS" | base64 -d > "android/app/$store_file"
+          {
+            echo "MYAPP_UPLOAD_STORE_FILE=$store_file"
+            echo "MYAPP_UPLOAD_KEY_ALIAS=$KEY_ALIAS"
+            echo "MYAPP_UPLOAD_STORE_PASSWORD=$STORE_PASSWORD"
+            echo "MYAPP_UPLOAD_KEY_PASSWORD=$KEY_PASSWORD"
+          } > android/gradle.release.properties
+          ls -l "android/app/$store_file"
 
       - name: Inline server URL into .env.local (backend-version and plus-version)
         if: github.ref_name == 'backend-version' || github.ref_name == 'plus-version'

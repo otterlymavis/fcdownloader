@@ -137,11 +137,13 @@ POST /extract  { "pageUrl": "...", "referer"?: "...", "cookies"?: "..." }
                   "url"?, "videoUrl"?, "audioUrl"?,
                   "headers": {...}, "title", "thumbnail", "duration", ... }
 
-GET /download?url=...&referer=...&cookies=...
+GET /download?url=...&referer=...
               → streams muxed mp4 to the browser (Content-Disposition: attachment)
 ```
 
 `/extract` is used by the mobile app; `/download` is used by the web frontend.
+When session cookies are needed, clients send them in the request body or
+`X-FCDL-Cookies` header, not in the URL.
 
 ### Stack
 
@@ -258,8 +260,9 @@ Static HTML/CSS/JS, no build step. Three files: `index.html`, `style.css`,
 ### Features
 
 - Paste URL → Fetch → preview card (thumbnail + title + quality)
-- **Download** button navigates to `${BACKEND}/download?url=...&referer=...&cookies=...`
-  — browser handles the file save via Content-Disposition
+- **Download** button navigates to `${BACKEND}/download?url=...&referer=...`
+  for public media, or uses `fetch` with `X-FCDL-Cookies` and a blob save when
+  authenticated cookies are needed.
 - Optional Referer + Cookies fields for paywalled / domain-restricted embeds
 - Bookmarklet (desktop only) that:
   1. Scans the current page for embed iframes (Vimeo, YouTube, Twitch, Wistia,

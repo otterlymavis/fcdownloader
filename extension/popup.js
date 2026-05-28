@@ -8,6 +8,7 @@ const pageInfo    = $("page-info");
 const helperEl    = $("helper-status");
 const helperText  = $("helper-text");
 const helperOpen  = $("helper-open");
+const helperTools = $("helper-tools");
 const primaryEl   = $("primary");
 const primaryTitle= $("primary-title");
 const primaryMeta = $("primary-meta");
@@ -20,11 +21,13 @@ const moreList    = $("more-list");
 const bulkActions = $("bulk-actions");
 const selectAllBtn = $("select-all");
 const downloadSelectedBtn = $("download-selected");
+const EXPECTED_HELPER_VERSION = "0.3.0-go";
 
 let currentTabId   = null;
 let currentPageUrl = "";
 let helperTimer = null;
 let helperIsReady = false;
+let helperNeedsSetup = false;
 let preferCapturedMedia = false;
 let waitingForCapturedMedia = false;
 let currentVisibleItems = [];
@@ -167,16 +170,30 @@ async function renderHelperStatus(show) {
   helperEl.hidden = false;
   const resp = await sendMessage({ type: "fcdl:helper_status" }, 2500);
   const ready = Boolean(resp?.ok && resp.ready);
+  const health = resp?.health || null;
+  const needsSetup = Boolean(health?.needsSetup);
   const changed = helperIsReady !== ready;
   helperIsReady = ready;
+  helperNeedsSetup = ready && needsSetup;
   helperEl.classList.toggle("ready", ready);
   helperEl.classList.toggle("missing", !ready);
-  helperText.textContent = ready ? "Companion ready: HD enabled" : "Companion optional: 360p works";
+  helperText.textContent = helperStatusText(ready, health);
   helperOpen.hidden = ready;
+  if (helperTools) helperTools.hidden = !helperNeedsSetup;
   if (changed && currentTabId != null) {
     lastItemsKey = "";
     refresh();
   }
+}
+
+function helperStatusText(ready, health) {
+  if (!ready) return "Companion optional: 360p works";
+  if (health?.version && health.version !== EXPECTED_HELPER_VERSION) return "Companion outdated: update recommended";
+  if (health?.needsSetup) return "Companion ready: install tools for HD";
+  const toolBits = Array.isArray(health?.tools)
+    ? health.tools.filter((tool) => tool.installed).length + "/" + health.tools.length
+    : "";
+  return toolBits ? `Companion ready: HD enabled (${toolBits} tools)` : "Companion ready: HD enabled";
 }
 
 // ── Rendering ──────────────────────────────────────────────────────────
@@ -347,6 +364,21 @@ if (helperOpen) {
     if (!resp?.ready) {
       setStatus("Install or start FCDownloader Companion, then try again.", "error");
     }
+  });
+}
+
+if (helperTools) {
+  helperTools.addEventListener("click", async () => {
+    helperTools.disabled = true;
+    helperText.textContent = "Installing video tools...";
+    const resp = await sendMessage({ type: "fcdl:helper_ensure_tools" }, 10 * 60 * 1000);
+    helperTools.disabled = false;
+    await renderHelperStatus(true);
+    if (!resp?.ok) {
+      setStatus(resp?.error || "Could not install Companion video tools.", "error");
+      return;
+    }
+    setStatus("Companion video tools are ready.", "success");
   });
 }
 

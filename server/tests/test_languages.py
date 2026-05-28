@@ -10,6 +10,8 @@ import languages
 
 def test_accept_language_for_common_regional_domains():
     assert languages.accept_language_for_url("https://www.wwdjapan.com/articles/2323517").startswith("ja")
+    assert languages.accept_language_for_url("https://tv.naver.com/v/123456").startswith("ko")
+    assert languages.accept_language_for_url("https://mdpr.jp/news/detail/1234567").startswith("ja")
     assert languages.accept_language_for_url("https://www.bilibili.com/video/BV123").startswith("zh")
     assert languages.accept_language_for_url("https://example.fr/watch/1").startswith("fr")
     assert languages.accept_language_for_url("https://example.de/watch/1").startswith("de")

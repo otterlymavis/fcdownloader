@@ -292,7 +292,7 @@ export default function App() {
 
   const handleGallery = useCallback(async (task: DownloadTask) => {
     if (!task.localPlaylistPath) return;
-    const { status } = await MediaLibrary.requestPermissionsAsync();
+    const { status } = await MediaLibrary.requestPermissionsAsync(true, ['photo', 'video']);
     if (status !== 'granted') { showToast('Gallery permission denied', 'error'); return; }
     try {
       await MediaLibrary.saveToLibraryAsync(task.localPlaylistPath);

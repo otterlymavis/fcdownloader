@@ -172,6 +172,22 @@ def _strategy_platform_extractors(
                 return _result(name, True, media=info)
             return _result(name, False, reason="Instagram extractor found no media")
 
+        if any(h in page_url for h in ("mdpr.jp", "modelpress.jp")):
+            info = extractors.extract_modelpress(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            return _result(name, False, reason="Modelpress extractor found no media")
+
+        if "blog.naver.com" in page_url:
+            info = extractors.extract_naver_blog(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            return _result(name, False, reason="Naver Blog extractor found no media")
+
+        info = extractors.extract_curated_site(page_url, cookies)
+        if info:
+            return _result(name, True, media=info)
+
         if registry.is_japanese_domain(page_url):
             return _result(
                 name, False,
@@ -581,6 +597,18 @@ def run_extraction(
     elif any(h in page_url for h in ("abema.tv", "abema.io")):
         http_headers["Referer"]    = "https://abema.tv/"
         http_headers["Origin"]     = "https://abema.tv"
+        http_headers["User-Agent"] = _DESKTOP_UA
+    elif "blog.naver.com" in page_url:
+        http_headers["Referer"]    = "https://blog.naver.com/"
+        http_headers["Origin"]     = "https://blog.naver.com"
+        http_headers["User-Agent"] = _DESKTOP_UA
+    elif any(h in page_url for h in ("naver.com", "naver.me")):
+        http_headers["Referer"]    = "https://tv.naver.com/"
+        http_headers["Origin"]     = "https://tv.naver.com"
+        http_headers["User-Agent"] = _DESKTOP_UA
+    elif any(h in page_url for h in ("mdpr.jp", "modelpress.jp")):
+        http_headers["Referer"]    = "https://mdpr.jp/"
+        http_headers["Origin"]     = "https://mdpr.jp"
         http_headers["User-Agent"] = _DESKTOP_UA
     elif "twitcasting.tv" in page_url:
         http_headers["Referer"]    = "https://twitcasting.tv/"

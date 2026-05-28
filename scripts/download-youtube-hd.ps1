@@ -14,9 +14,10 @@ if (!(Test-Path $python)) {
   $python = "python"
 }
 
-$ffmpeg = & python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"
+$helper = Join-Path $PSScriptRoot "local-youtube-helper.py"
+$ffmpeg = & $python -c "import importlib.util; spec=importlib.util.spec_from_file_location('fcdl_helper', r'$helper'); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); print(m._ffmpeg_path())"
 if (!$ffmpeg -or !(Test-Path $ffmpeg)) {
-  throw "imageio-ffmpeg is not installed. Run: python -m pip install imageio-ffmpeg"
+  throw "ffmpeg could not be resolved"
 }
 
 $out = Join-Path $root $OutputDir

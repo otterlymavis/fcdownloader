@@ -45,6 +45,134 @@ _WEIBO_DESKTOP_UA = (
     "Chrome/125.0.0.0 Safari/537.36"
 )
 
+_MODELPRESS_REFERER = "https://mdpr.jp/"
+_NAVER_BLOG_REFERER = "https://blog.naver.com/"
+_CURATED_SITE_PROFILES: tuple[dict[str, Any], ...] = (
+    {
+        "label": "Ameblo",
+        "hosts": ("ameblo.jp", "ameba.jp"),
+        "referer": "https://ameblo.jp/",
+        "language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("stat.ameba.jp", "ameblo.jp", "ameba.jp"),
+    },
+    {
+        "label": "Natalie",
+        "hosts": ("natalie.mu",),
+        "referer": "https://natalie.mu/",
+        "language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("ogre.natalie.mu", "natalie.mu"),
+    },
+    {
+        "label": "Oricon",
+        "hosts": ("oricon.co.jp",),
+        "referer": "https://www.oricon.co.jp/",
+        "language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("contents.oricon.co.jp", "oricon.co.jp"),
+    },
+    {
+        "label": "Kstyle",
+        "hosts": ("kstyle.com",),
+        "referer": "https://kstyle.com/",
+        "language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("kstyle.com", "kstyle-img"),
+    },
+    {
+        "label": "Daum/Tistory",
+        "hosts": ("tistory.com", "daum.net"),
+        "referer": "https://www.daum.net/",
+        "language": "ko-KR,ko;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("tistory.com", "daumcdn.net", "kakaocdn.net", "blog.kakaocdn.net"),
+    },
+    {
+        "label": "Naver Article",
+        "hosts": (
+            "news.naver.com", "n.news.naver.com", "m.news.naver.com",
+            "entertain.naver.com", "m.entertain.naver.com",
+            "sports.news.naver.com", "m.sports.naver.com",
+        ),
+        "referer": "https://news.naver.com/",
+        "language": "ko-KR,ko;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("imgnews.pstatic.net", "mimgnews.pstatic.net", "ssl.pstatic.net", "phinf.pstatic.net"),
+    },
+    {
+        "label": "Kakao TV",
+        "hosts": ("tv.kakao.com", "kakao.com"),
+        "referer": "https://tv.kakao.com/",
+        "language": "ko-KR,ko;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("kakaocdn.net", "kakao.com"),
+    },
+    {
+        "label": "Livedoor Blog",
+        "hosts": ("blog.livedoor.jp", "livedoor.blog", "livedoor.jp"),
+        "referer": "https://blog.livedoor.jp/",
+        "language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("livedoor.blogimg.jp", "livedoor.jp"),
+    },
+    {
+        "label": "Yahoo Japan",
+        "hosts": ("news.yahoo.co.jp", "video.yahoo.co.jp", "yahoo.co.jp"),
+        "referer": "https://news.yahoo.co.jp/",
+        "language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("yimg.jp", "yahoo.co.jp"),
+    },
+    {
+        "label": "Bilibili Dynamic",
+        "hosts": ("t.bilibili.com", "space.bilibili.com", "bilibili.com/opus", "bilibili.com/read"),
+        "referer": "https://www.bilibili.com/",
+        "language": "zh-CN,zh;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("hdslb.com", "biliimg.com", "bilivideo.com"),
+    },
+    {
+        "label": "Pixiv/Fanbox",
+        "hosts": ("pixiv.net", "fanbox.cc"),
+        "referer": "https://www.pixiv.net/",
+        "language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("pximg.net", "pixiv.net", "fanbox.cc"),
+    },
+    {
+        "label": "Japanese News/Magazine",
+        "hosts": (
+            "bunshun.jp", "dailyshincho.jp", "news-postseven.com", "josei7.com",
+            "friday.kodansha.co.jp", "gendai.media", "withonline.jp", "vivi.tv",
+            "cancam.jp", "classy-online.jp", "classyonline.jp", "jj-jj.net",
+            "gingerweb.jp", "ar-mag.jp", "bisweb.jp", "ray-web.jp",
+            "nonno.hpplus.jp", "spur.hpplus.jp", "maquia.hpplus.jp",
+            "lee.hpplus.jp", "baila.hpplus.jp", "more.hpplus.jp",
+            "ananweb.jp", "croissant-online.jp", "frau.tokyo", "mi-mollet.com",
+            "fashion-press.net", "fashionsnap.com", "wwdjapan.com",
+            "thetv.jp", "mantan-web.jp", "crank-in.net", "cinematoday.jp",
+            "eiga.com", "realsound.jp", "spice.eplus.jp", "jprime.jp",
+            "smart-flash.jp", "flash.jp", "nikkan-gendai.com", "asagei.com",
+            "entamenext.com", "girlsnews.tv", "tokyo-sports.co.jp",
+            "hochi.news", "sponichi.co.jp", "nikkansports.com", "sanspo.com",
+            "mainichi.jp", "asahi.com", "yomiuri.co.jp", "sankei.com",
+            "tokyo-np.co.jp", "kyodo.co.jp", "47news.jp", "jiji.com",
+            "itmedia.co.jp", "impress.co.jp", "watch.impress.co.jp",
+            "news.mynavi.jp", "ascii.jp", "gigazine.net",
+        ),
+        "referer": "https://www.google.com/",
+        "language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": (
+            "bunshun.jp", "dailyshincho.jp", "news-postseven.com", "josei7.com",
+            "kodansha.co.jp", "gendai.media", "withonline.jp", "vivi.tv",
+            "cancam.jp", "classy-online.jp", "classyonline.jp", "jj-jj.net",
+            "gingerweb.jp", "ar-mag.jp", "bisweb.jp", "ray-web.jp", "hpplus.jp",
+            "ananweb.jp", "croissant-online.jp", "frau.tokyo", "mi-mollet.com",
+            "fashion-press.net", "fashionsnap.com", "wwdjapan.com",
+            "thetv.jp", "mantan-web.jp", "crank-in.net", "cinematoday.jp",
+            "eiga.com", "realsound.jp", "spice.eplus.jp", "jprime.jp",
+            "smart-flash.jp", "flash.jp", "nikkan-gendai.com", "asagei.com",
+            "entamenext.com", "girlsnews.tv", "tokyo-sports.co.jp",
+            "hochi.news", "sponichi.co.jp", "nikkansports.com", "sanspo.com",
+            "mainichi.jp", "asahi.com", "yomiuri.co.jp", "sankei.com",
+            "tokyo-np.co.jp", "kyodo.co.jp", "47news.jp", "jiji.com",
+            "itmedia.co.jp", "impress.co.jp", "mynavi.jp", "ascii.jp",
+            "gigazine.net", "images.microcms-assets.io", "cdn-ak.f.st-hatena.com",
+            "cloudfront.net", "imgix.net", "akamaized.net", "yimg.jp",
+        ),
+    },
+)
+
 
 # ── Meta family (Instagram / Threads) ────────────────────────────────────────
 
@@ -70,7 +198,11 @@ def extract_meta_page(
             }),
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
-            html_text = resp.read().decode("utf-8", errors="replace")
+            body = resp.read()
+            if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+                import gzip
+                body = gzip.decompress(body)
+            html_text = body.decode("utf-8", errors="replace")
     except Exception as exc:  # noqa: BLE001
         print(f"[{label}] fetch failed for {page_url}: {str(exc)[:200]}")
         return None
@@ -198,7 +330,499 @@ def extract_instagram(page_url: str, cookies: str | None) -> dict[str, Any] | No
     return extract_meta_page(page_url, cookies, "instagram")
 
 
+# ── Modelpress ───────────────────────────────────────────────────────────────
+
+
+def extract_modelpress(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """Extract downloadable article images from Modelpress pages.
+
+    Modelpress articles usually do not expose video manifests in static HTML,
+    but they do expose first-party article photos on img-mdpr.freetls.fastly.net.
+    Treat those as a gallery so the web app has useful media instead of an
+    unsupported-url error.
+    """
+    page_url = normalize_url(page_url)
+
+    def _fetch_html(url: str) -> str | None:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers=safe_headers({
+                    "User-Agent": _WEIBO_DESKTOP_UA,
+                    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                    "Accept-Language": languages.accept_language_for_url(
+                        url,
+                        "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+                    ),
+                    "Referer": _MODELPRESS_REFERER,
+                    **({"Cookie": cookies} if cookies else {}),
+                }),
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = resp.read()
+                if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+                    import gzip
+                    body = gzip.decompress(body)
+                return body.decode("utf-8", errors="replace")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[modelpress] fetch failed for {url}: {str(exc)[:200]}")
+            return None
+
+    html_text = _fetch_html(page_url)
+    if not html_text:
+        return None
+
+    def _decode(value: str) -> str:
+        return html.unescape(
+            value.replace("\\u0026", "&")
+                 .replace("\\u003d", "=")
+                 .replace("\\/", "/")
+        )
+
+    def _meta(names: tuple[str, ...], text: str = html_text) -> str | None:
+        name_alt = "|".join(re.escape(n) for n in names)
+        patterns = (
+            rf'<meta\s[^>]*?(?:property|name)\s*=\s*["\'](?:{name_alt})["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']',
+            rf'<meta\s[^>]*?content\s*=\s*["\']([^"\']+)["\'][^>]*?(?:property|name)\s*=\s*["\'](?:{name_alt})["\']',
+        )
+        for pattern in patterns:
+            m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if m:
+                return re.sub(r"\s+", " ", _decode(m.group(1))).strip()
+        return None
+
+    title = _meta(("og:title", "twitter:title"))
+    thumb = _meta(("og:image", "twitter:image"))
+
+    def _photo_index_total(text: str) -> tuple[int | None, int | None]:
+        m = re.search(r"(?:\u753b\u50cf|\u5199\u771f)\s*(\d+)\s*/\s*(\d+)", text)
+        if not m:
+            return None, None
+        return int(m.group(1)), int(m.group(2))
+
+    def _photo_detail_urls() -> list[str]:
+        current_id = None
+        current_match = re.search(r"/photo/detail/(\d+)", page_url)
+        if current_match:
+            current_id = int(current_match.group(1))
+
+        ids: list[int] = []
+        for m in re.finditer(r"/photo/detail/(\d+)", html_text):
+            photo_id = int(m.group(1))
+            if photo_id not in ids:
+                ids.append(photo_id)
+
+        index, total = _photo_index_total(title or html_text[:5000])
+        if current_id and index and total:
+            first_id = current_id - index + 1
+            derived = list(range(first_id, first_id + total))
+            if all(photo_id in ids for photo_id in derived) or len(ids) < total:
+                ids = derived
+        elif current_id and ids:
+            consecutive = [current_id]
+            next_id = current_id + 1
+            while next_id in ids:
+                consecutive.append(next_id)
+                next_id += 1
+            if len(consecutive) > 1:
+                ids = consecutive
+
+        if current_id and current_id not in ids:
+            ids.insert(0, current_id)
+
+        return [f"https://mdpr.jp/photo/detail/{photo_id}" for photo_id in ids[:40]]
+
+    def _image_urls_from_text(text: str) -> list[str]:
+        found: list[str] = []
+        variants = (
+            text,
+            text.replace("\\u0026", "&").replace("\\u003d", "=").replace("\\/", "/"),
+        )
+        image_re = re.compile(
+            r'https?://img-mdpr\.freetls\.fastly\.net/article/[^"\']+\.(?:jpg|jpeg|png|webp)(?:\?[^"\']*)?',
+            re.IGNORECASE,
+        )
+        for variant in variants:
+            for m in image_re.finditer(variant):
+                url = re.split(r"[\s<>]", _decode(m.group(0)), maxsplit=1)[0]
+                if "crop=" in url:
+                    continue
+                url = re.sub(r"([?&])width=\d+", r"\g<1>width=1400", url)
+                dedup_key = re.sub(r"\?.*$", "", url)
+                if dedup_key not in {re.sub(r"\?.*$", "", u) for u in found}:
+                    found.append(url)
+        return found
+
+    gallery_pages = _photo_detail_urls() if "/photo/detail/" in page_url else []
+    found: list[tuple[str, str | None]] = []
+
+    if gallery_pages:
+        for detail_url in gallery_pages:
+            detail_html = html_text if detail_url == page_url else _fetch_html(detail_url)
+            if not detail_html:
+                continue
+            detail_title = _meta(("og:title", "twitter:title"), detail_html)
+            detail_image = _meta(("og:image", "twitter:image"), detail_html)
+            candidates = [detail_image] if detail_image else []
+            candidates.extend(_image_urls_from_text(detail_html))
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                url = _decode(candidate)
+                dedup_key = re.sub(r"\?.*$", "", url)
+                if "img-mdpr.freetls.fastly.net/article/" not in url:
+                    continue
+                if dedup_key not in {re.sub(r"\?.*$", "", u) for u, _ in found}:
+                    found.append((url, detail_title))
+                    break
+    else:
+        found = [(url, title) for url in _image_urls_from_text(html_text)]
+
+    if thumb and thumb.startswith("http") and "img-mdpr.freetls.fastly.net/article/" in thumb:
+        thumb = _decode(thumb)
+        if not any(re.sub(r"\?.*$", "", thumb) == re.sub(r"\?.*$", "", u) for u, _ in found):
+            found.insert(0, (thumb, title))
+
+    if not found:
+        return None
+
+    entries = []
+    headers = {
+        "User-Agent": _WEIBO_DESKTOP_UA,
+        "Referer": page_url,
+    }
+    for idx, (url, item_title) in enumerate(found):
+        ext = guess_ext_from_url(url) or "jpg"
+        entries.append({
+            "id": cache_key(url),
+            "url": url,
+            "ext": ext,
+            "protocol": "https",
+            "http_headers": headers,
+            "title": item_title or f"{title or 'Modelpress'} #{idx + 1}",
+            "thumbnail": url,
+            "extractor": "modelpress",
+        })
+
+    print(f"[modelpress] gallery: {len(entries)} image(s)")
+    return {
+        "_type": "playlist",
+        "entries": entries,
+        "title": title,
+        "thumbnail": thumb or found[0][0],
+        "id": cache_key(page_url),
+        "extractor": "modelpress",
+    }
+
 # ── Weibo ─────────────────────────────────────────────────────────────────────
+
+
+def extract_naver_blog(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """Extract post images from Naver Blog frameset/PostView pages."""
+    page_url = normalize_url(page_url)
+
+    def _decode(value: str) -> str:
+        return html.unescape(
+            value.replace("\\u0026", "&")
+                 .replace("\\u003d", "=")
+                 .replace("\\/", "/")
+        )
+
+    def _fetch_html(url: str, referer: str = _NAVER_BLOG_REFERER) -> str | None:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers=safe_headers({
+                    "User-Agent": _WEIBO_DESKTOP_UA,
+                    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                    "Accept-Language": languages.accept_language_for_url(
+                        url,
+                        "ko-KR,ko;q=0.9,en-US;q=0.6,en;q=0.5",
+                    ),
+                    "Referer": referer,
+                    **({"Cookie": cookies} if cookies else {}),
+                }),
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                body = resp.read()
+                if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+                    import gzip
+                    body = gzip.decompress(body)
+                return body.decode("utf-8", errors="replace")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[naver-blog] fetch failed for {url}: {str(exc)[:200]}")
+            return None
+
+    def _postview_url(html_text: str) -> str | None:
+        m = re.search(
+            r'<iframe[^>]+id\s*=\s*["\']mainFrame["\'][^>]+src\s*=\s*["\']([^"\']+)["\']',
+            html_text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if m:
+            return urllib.parse.urljoin(page_url, _decode(m.group(1)))
+
+        parsed = urllib.parse.urlsplit(page_url)
+        path_parts = [p for p in parsed.path.split("/") if p]
+        if len(path_parts) >= 2 and path_parts[0] != "PostView.naver":
+            return (
+                "https://blog.naver.com/PostView.naver?"
+                + urllib.parse.urlencode({
+                    "blogId": path_parts[0],
+                    "logNo": path_parts[1],
+                    "redirect": "Dlog",
+                    "widgetTypeCall": "true",
+                    "directAccess": "false",
+                })
+            )
+        return None
+
+    def _meta(names: tuple[str, ...], text: str) -> str | None:
+        name_alt = "|".join(re.escape(n) for n in names)
+        patterns = (
+            rf'<meta\s[^>]*?(?:property|name)\s*=\s*["\'](?:{name_alt})["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']',
+            rf'<meta\s[^>]*?content\s*=\s*["\']([^"\']+)["\'][^>]*?(?:property|name)\s*=\s*["\'](?:{name_alt})["\']',
+        )
+        for pattern in patterns:
+            m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if m:
+                return re.sub(r"\s+", " ", _decode(m.group(1))).strip()
+        return None
+
+    frameset_html = _fetch_html(page_url)
+    if not frameset_html:
+        return None
+    post_url = _postview_url(frameset_html) or page_url
+    post_html = frameset_html if post_url == page_url else _fetch_html(post_url, page_url)
+    if not post_html:
+        return None
+
+    title = _meta(("og:title", "twitter:title"), post_html)
+    thumb = _meta(("og:image", "twitter:image"), post_html)
+
+    found: list[str] = []
+    for img_tag in re.findall(r"<img[^>]+>", post_html, re.IGNORECASE | re.DOTALL):
+        if "se-image-resource" not in img_tag:
+            continue
+        candidates: list[str] = []
+        for attr in ("data-lazy-src", "src"):
+            m = re.search(attr + r'\s*=\s*["\']([^"\']+)["\']', img_tag, re.IGNORECASE)
+            if m:
+                candidates.append(_decode(m.group(1)))
+        for url in candidates:
+            if "postfiles.pstatic.net/" not in url:
+                continue
+            url = re.sub(r"([?&])type=w80_blur(?:&|$)", r"\1", url)
+            url = url.rstrip("?&")
+            dedup_key = re.sub(r"\?.*$", "", url)
+            if dedup_key not in {re.sub(r"\?.*$", "", u) for u in found}:
+                found.append(url)
+                break
+
+    if not found:
+        return None
+
+    headers = {
+        "User-Agent": _WEIBO_DESKTOP_UA,
+        "Referer": post_url,
+    }
+    entries = []
+    for idx, url in enumerate(found):
+        ext = guess_ext_from_url(url) or "jpg"
+        entries.append({
+            "id": cache_key(url),
+            "url": url,
+            "ext": ext,
+            "protocol": "https",
+            "http_headers": headers,
+            "title": f"{title or 'Naver Blog'} #{idx + 1}",
+            "thumbnail": url,
+            "extractor": "naver-blog",
+        })
+
+    print(f"[naver-blog] gallery: {len(entries)} image(s)")
+    return {
+        "_type": "playlist",
+        "entries": entries,
+        "title": title,
+        "thumbnail": thumb or found[0],
+        "id": cache_key(page_url),
+        "extractor": "naver-blog",
+    }
+
+
+def _curated_profile(page_url: str) -> dict[str, Any] | None:
+    lowered = page_url.lower()
+    for profile in _CURATED_SITE_PROFILES:
+        if any(host in lowered for host in profile["hosts"]):
+            return profile
+    return None
+
+
+def extract_curated_site(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """Extract galleries/videos from supported article and blog pages.
+
+    These sites mostly expose first-party media in static HTML or hydration JSON.
+    A shared parser keeps the support light: no browser dependency, just page
+    fetch + media URL collection + per-item Referer headers.
+    """
+    page_url = normalize_url(page_url)
+    profile = _curated_profile(page_url)
+    if not profile:
+        return None
+
+    referer = profile["referer"]
+
+    def _decode(value: str) -> str:
+        value = html.unescape(value)
+        if "\\" in value:
+            try:
+                value = value.encode("utf-8").decode("unicode_escape")
+            except Exception:
+                pass
+        return (
+            value.replace("\\u0026", "&")
+                 .replace("\\u003d", "=")
+                 .replace("\\/", "/")
+        )
+
+    def _fetch_html(url: str) -> str | None:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers=safe_headers({
+                    "User-Agent": _WEIBO_DESKTOP_UA,
+                    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                    "Accept-Language": languages.accept_language_for_url(url, profile["language"]),
+                    "Referer": referer,
+                    **({"Cookie": cookies} if cookies else {}),
+                }),
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                body = resp.read()
+                if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+                    import gzip
+                    body = gzip.decompress(body)
+                return body.decode("utf-8", errors="replace")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[curated-site] fetch failed for {url}: {str(exc)[:200]}")
+            return None
+
+    html_text = _fetch_html(page_url)
+    if not html_text:
+        return None
+    scan_text = html_text
+    if profile["label"] == "Naver Article":
+        body_match = re.search(
+            r'<article[^>]+id\s*=\s*["\']dic_area["\'][^>]*>(.*?)</article>',
+            html_text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if body_match:
+            scan_text = body_match.group(1)
+
+    def _meta(names: tuple[str, ...]) -> str | None:
+        name_alt = "|".join(re.escape(n) for n in names)
+        patterns = (
+            rf'<meta\s[^>]*?(?:property|name)\s*=\s*["\'](?:{name_alt})["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']',
+            rf'<meta\s[^>]*?content\s*=\s*["\']([^"\']+)["\'][^>]*?(?:property|name)\s*=\s*["\'](?:{name_alt})["\']',
+        )
+        for pattern in patterns:
+            m = re.search(pattern, html_text, re.IGNORECASE | re.DOTALL)
+            if m:
+                return re.sub(r"\s+", " ", _decode(m.group(1))).strip()
+        return None
+
+    title = _meta(("og:title", "twitter:title")) or _meta(("title",))
+    thumb = _meta(("og:image", "twitter:image"))
+
+    media_re = re.compile(
+        r'https?://[^"\'<>\s\\]+\.(?:jpg|jpeg|png|webp|gif|avif|mp4|m3u8|mpd)(?:\?[^"\'<>\s\\]*)?',
+        re.IGNORECASE,
+    )
+    attr_re = re.compile(
+        r'(?:src|data-src|data-original|data-lazy-src|data-image|content)\s*=\s*["\']([^"\']+)["\']',
+        re.IGNORECASE,
+    )
+
+    candidates: list[str] = []
+    for text in (scan_text, _decode(scan_text)):
+        for m in media_re.finditer(text):
+            candidates.append(_decode(m.group(0)))
+        for m in attr_re.finditer(text):
+            raw = _decode(m.group(1))
+            if raw.startswith("//"):
+                raw = "https:" + raw
+            elif raw.startswith("/"):
+                raw = urllib.parse.urljoin(page_url, raw)
+            if re.search(r"\.(?:jpg|jpeg|png|webp|gif|avif|mp4|m3u8|mpd)(?:[?#]|$)", raw, re.IGNORECASE):
+                candidates.append(raw)
+
+    if thumb:
+        candidates.insert(0, _decode(thumb))
+
+    cdn_tokens = tuple(token.lower() for token in profile["cdn"])
+    found: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        url = html.unescape(candidate).strip().strip('"\'(),;')
+        if not url.startswith("http"):
+            continue
+        lowered = url.lower()
+        if not any(token in lowered for token in cdn_tokens):
+            continue
+        if any(skip in lowered for skip in (
+            "sprite", "logo", "icon", "avatar", "profile", "emoji",
+            "gnb_", "sp_", "header", "footer", "naver", "press_logo",
+        )):
+            continue
+        if profile["label"] == "Naver Article" and "pstatic.net" in lowered:
+            if not any(marker in lowered for marker in ("/image/", "/mnews/", "/photo/", "/newsen/")):
+                continue
+        url = re.sub(r"([?&])(?:width|height|w|h)=\d+", r"\1", url)
+        url = re.sub(r"[?&]$", "", url).rstrip("?&")
+        dedup = re.sub(r"\?.*$", "", url)
+        if dedup in seen:
+            continue
+        seen.add(dedup)
+        found.append(url)
+        if len(found) >= 80:
+            break
+
+    if not found:
+        return None
+
+    headers = {
+        "User-Agent": _WEIBO_DESKTOP_UA,
+        "Referer": page_url if "pximg.net" not in found[0].lower() else referer,
+    }
+    entries: list[dict[str, Any]] = []
+    for idx, url in enumerate(found):
+        ext = (guess_ext_from_url(url) or "").lower()
+        protocol = "m3u8_native" if ext == "m3u8" else ("http_dash_segments" if ext == "mpd" else "https")
+        item_headers = headers.copy()
+        if "pximg.net" in url.lower():
+            item_headers["Referer"] = "https://www.pixiv.net/"
+        entries.append({
+            "id": cache_key(url),
+            "url": url,
+            "ext": ext or ("mp4" if re.search(r"\.(?:mp4|m3u8|mpd)(?:[?#]|$)", url, re.I) else "jpg"),
+            "protocol": protocol,
+            "http_headers": item_headers,
+            "title": f"{title or profile['label']} #{idx + 1}",
+            "thumbnail": url if ext not in ("mp4", "m3u8", "mpd") else thumb,
+            "extractor": "curated-site",
+        })
+
+    print(f"[curated-site:{profile['label']}] gallery: {len(entries)} item(s)")
+    return {
+        "_type": "playlist",
+        "entries": entries,
+        "title": title or profile["label"],
+        "thumbnail": thumb or found[0],
+        "id": cache_key(page_url),
+        "extractor": "curated-site",
+    }
 
 
 def _weibo_headers(page_url: str, cookies: str | None = None) -> dict[str, str]:

@@ -67,7 +67,7 @@ from config import (
     STREAM_STALL_TIMEOUT,
     TRUSTED_TOKEN,
 )
-from models import DownloadRequest, ExtractRequest, PlaylistRequest
+from models import DownloadRequest, ExtractRequest, PlaylistRequest, ProxyRequest
 from strategies import run_extraction, run_extraction_with_format
 from telemetry import make_context
 from utils import (
@@ -140,6 +140,7 @@ app.add_middleware(
     allow_origin_regex=_extension_origin_regex,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-FCDL-Cookies"],
+    expose_headers=["Content-Disposition", "Content-Length", "X-Request-ID"],
 )
 
 # ── Cache ─────────────────────────────────────────────────────────────────────
@@ -340,9 +341,28 @@ _HEADERED_DIRECT_HOSTS = (
     "instagram.com", "cdninstagram.com", "fbcdn.net", "threadscdn.com",
     "weibo.com", "weibo.cn", "sinaimg.cn", "weibocdn.com",
     "xiaohongshu.com", "xhscdn.com",
+    "naver.com", "naver.net", "pstatic.net",
+    "mdpr.jp", "modelpress.jp",
+    "ameblo.jp", "ameba.jp", "stat.ameba.jp",
+    "natalie.mu", "oricon.co.jp", "kstyle.com",
+    "tistory.com", "daum.net", "kakao.com", "kakaocdn.net",
+    "livedoor.jp", "livedoor.blog", "livedoor.blogimg.jp",
+    "yimg.jp", "pximg.net", "pixiv.net", "fanbox.cc",
+    "biliimg.com", "hdslb.com",
+    "bunshun.jp", "dailyshincho.jp", "news-postseven.com", "josei7.com",
+    "kodansha.co.jp", "gendai.media", "hpplus.jp", "fashion-press.net",
+    "fashionsnap.com", "wwdjapan.com", "thetv.jp", "mantan-web.jp",
+    "crank-in.net", "cinematoday.jp", "eiga.com", "realsound.jp",
+    "spice.eplus.jp", "jprime.jp", "smart-flash.jp", "flash.jp",
+    "nikkan-gendai.com", "asagei.com", "entamenext.com", "girlsnews.tv",
+    "tokyo-sports.co.jp", "hochi.news", "sponichi.co.jp", "nikkansports.com",
+    "sanspo.com", "mainichi.jp", "asahi.com", "yomiuri.co.jp", "sankei.com",
+    "tokyo-np.co.jp", "kyodo.co.jp", "47news.jp", "jiji.com", "itmedia.co.jp",
+    "impress.co.jp", "mynavi.jp", "ascii.jp", "gigazine.net",
 )
 
 _SINA_CDN_SUFFIXES = ("sinaimg.cn", "weibocdn.com")
+_DOH_CDN_SUFFIXES = _SINA_CDN_SUFFIXES + ("naver.net", "pstatic.net")
 
 
 def _needs_headered_direct_stream(
@@ -369,6 +389,30 @@ def _download_headers(
     elif page_url and any(h in page_url for h in ("xiaohongshu.com", "xhscdn.com")):
         headers["Referer"] = "https://www.xiaohongshu.com/"
         headers["Origin"]  = "https://www.xiaohongshu.com"
+    elif page_url and "blog.naver.com" in page_url:
+        headers["Referer"] = "https://blog.naver.com/"
+        headers["Origin"]  = "https://blog.naver.com"
+    elif page_url and any(h in page_url for h in ("news.naver.com", "entertain.naver.com", "sports.news.naver.com", "m.sports.naver.com")):
+        headers["Referer"] = "https://news.naver.com/"
+        headers["Origin"]  = "https://news.naver.com"
+    elif page_url and any(h in page_url for h in ("naver.com", "naver.net", "pstatic.net", "naver.me")):
+        headers["Referer"] = "https://tv.naver.com/"
+        headers["Origin"]  = "https://tv.naver.com"
+    elif page_url and any(h in page_url for h in ("mdpr.jp", "modelpress.jp")):
+        headers["Referer"] = "https://mdpr.jp/"
+        headers["Origin"]  = "https://mdpr.jp"
+    elif page_url and any(h in page_url for h in ("pixiv.net", "fanbox.cc", "pximg.net")):
+        headers["Referer"] = "https://www.pixiv.net/"
+    elif page_url and any(h in page_url for h in ("bilibili.com", "biliimg.com", "hdslb.com")):
+        headers["Referer"] = "https://www.bilibili.com/"
+        headers["Origin"]  = "https://www.bilibili.com"
+    elif page_url and any(h in page_url for h in ("tistory.com", "daum.net", "kakao.com", "kakaocdn.net")):
+        headers["Referer"] = "https://www.daum.net/"
+        headers["Origin"]  = "https://www.daum.net"
+    elif page_url and any(h in page_url for h in ("ameblo.jp", "ameba.jp", "natalie.mu", "oricon.co.jp", "kstyle.com", "livedoor.jp", "livedoor.blog", "yahoo.co.jp", "yimg.jp")):
+        headers["Referer"] = normalize_url(page_url)
+    elif page_url and registry.is_japanese_domain(page_url):
+        headers["Referer"] = normalize_url(page_url)
     if cookies:
         headers["Cookie"] = safe_text(cookies)
     return safe_headers(headers)
@@ -645,6 +689,88 @@ def _youtube_android_streams(
     }
 
 
+def _youtube_android_360_stream(
+    page_url: str,
+    cookies: str | None = None,
+) -> dict[str, Any]:
+    video_id = _youtube_video_id(page_url)
+    if not video_id:
+        raise HTTPException(400, "invalid YouTube URL")
+
+    client_version = "20.10.38"
+    ua = "com.google.android.youtube/20.10.38 (Linux; U; Android 13) gzip"
+    body = {
+        "videoId": video_id,
+        "context": {
+            "client": {
+                "hl": "en",
+                "gl": "US",
+                "clientName": "ANDROID",
+                "clientVersion": client_version,
+                "androidSdkVersion": 33,
+                "osName": "Android",
+                "osVersion": "13",
+                "platform": "MOBILE",
+                "utcOffsetMinutes": 0,
+            },
+        },
+    }
+    req_headers = {
+        "Content-Type": "application/json",
+        "User-Agent": ua,
+        "X-Youtube-Client-Name": "3",
+        "X-Youtube-Client-Version": client_version,
+        "Origin": "https://www.youtube.com",
+        "Referer": f"https://www.youtube.com/watch?v={video_id}",
+    }
+    if cookies:
+        req_headers["Cookie"] = safe_text(cookies)
+
+    req = urllib.request.Request(
+        "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+        data=json.dumps(body).encode("utf-8"),
+        headers=req_headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"YouTube InnerTube request failed: {safe_text(exc)[:300]}")
+
+    status = (data.get("playabilityStatus") or {}).get("status")
+    if status not in (None, "OK"):
+        reason = (data.get("playabilityStatus") or {}).get("reason") or status
+        raise HTTPException(422, f"YouTube refused playback: {safe_text(reason)[:300]}")
+
+    formats = (data.get("streamingData") or {}).get("formats") or []
+    candidates = [
+        f for f in formats
+        if f.get("url")
+        and str(f.get("mimeType") or "").startswith("video/mp4")
+        and f.get("audioQuality")
+        and isinstance(f.get("height"), int)
+        and f["height"] <= 360
+    ]
+    if not candidates:
+        raise HTTPException(502, "YouTube InnerTube returned no muxed 360p stream")
+
+    candidates.sort(
+        key=lambda f: (
+            int(f.get("height") or 0),
+            str(f.get("itag")) == "18",
+            int(f.get("bitrate") or 0),
+        ),
+        reverse=True,
+    )
+    details = data.get("videoDetails") or {}
+    return {
+        "stream": candidates[0],
+        "title": details.get("title") or "YouTube Video",
+        "id": video_id,
+    }
+
+
 def _resolve_a_records(host: str) -> list[str]:
     try:
         return [info[4][0] for info in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)]
@@ -679,10 +805,52 @@ def _open_direct_media(url: str, headers: dict[str, str]) -> Any:
         return urllib.request.urlopen(req, timeout=30)
     except urllib.error.URLError as exc:
         host = urllib.parse.urlparse(url).hostname or ""
-        if host.endswith(_SINA_CDN_SUFFIXES):
+        if host.endswith(_DOH_CDN_SUFFIXES):
             print(f"[direct] system resolver failed for {host}: {str(exc)[:160]}; trying DoH/IP")
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme == "http":
+                return _open_http_via_ip(url, headers)
             return _open_https_via_ip(url, headers)
         raise
+
+
+def _open_http_via_ip(url: str, headers: dict[str, str]) -> http.client.HTTPResponse:
+    url = normalize_url(url)
+    headers = safe_headers(headers)
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or ""
+    if not host:
+        raise urllib.error.URLError("missing host")
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+    ips = _resolve_a_records(host)
+    if not ips:
+        raise urllib.error.URLError(f"could not resolve {host}")
+    last_error: Exception | None = None
+    for ip in ips[:4]:
+        conn: http.client.HTTPConnection | None = None
+        try:
+            conn = http.client.HTTPConnection(ip, parsed.port or 80, timeout=30)
+            conn.request("GET", path, headers=safe_headers({**headers, "Host": host}))
+            resp = conn.getresponse()
+            if 300 <= resp.status < 400 and resp.getheader("Location"):
+                location = urllib.parse.urljoin(url, resp.getheader("Location") or "")
+                conn.close()
+                return _open_direct_media(location, headers)
+            if resp.status >= 400:
+                body = resp.read(240).decode("utf-8", errors="replace")
+                conn.close()
+                raise urllib.error.HTTPError(url, resp.status, body or resp.reason, resp.headers, None)
+            return resp
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    raise urllib.error.URLError(str(last_error or f"could not connect to {host}"))
 
 
 def _open_https_via_ip(url: str, headers: dict[str, str]) -> http.client.HTTPResponse:
@@ -945,9 +1113,11 @@ def download(
     url: str = Query(..., description="Video page or player URL"),
     referer: str | None = Query(None),
     cookies: str | None = Query(None),
+    x_fcdl_cookies: str | None = Header(None, alias="X-FCDL-Cookies"),
     audioOnly: bool = Query(False),
     proxy: str | None = Query(None),
 ) -> StreamingResponse:
+    cookies = safe_text(x_fcdl_cookies or cookies) if (x_fcdl_cookies or cookies) else None
     info = run_extraction(url, referer=referer, cookies=cookies, audio_only=audioOnly, proxy=proxy)
     response = _to_response(info)
     video_id = info.get("id") or cache_key(url)
@@ -983,7 +1153,7 @@ def download(
     # (YouTube SABR — yt-dlp skip_download returned HLS, so the HLS guard triggered
     # and ytdl-stream strategy won). Call the supervisor directly instead of having
     # /download HTTP-request itself: urllib would forward cookies in the Cookie header,
-    # but /ytdl-stream only reads X-FCDL-Cookies / the cookies query-param, so yt-dlp
+    # but /ytdl-stream reads X-FCDL-Cookies / legacy query cookies, so yt-dlp
     # would run without cookies and YouTube would block with the bot-challenge 422.
     if "/ytdl-stream?" in response.get("url", ""):
         _qs = urllib.parse.parse_qs(urllib.parse.urlparse(response["url"]).query)
@@ -1164,6 +1334,49 @@ def youtube_hd_stream_endpoint(
     )
 
 
+@app.get("/youtube-360-stream")
+@limiter.limit(RATE_LIMIT)
+def youtube_360_stream_endpoint(
+    request: Request,
+    page_url: str = Query(..., description="YouTube page URL to stream as muxed 360p MP4"),
+    cookies: str | None = Query(None, description="Optional YouTube session cookies"),
+    x_fcdl_cookies: str | None = Header(None, alias="X-FCDL-Cookies"),
+) -> StreamingResponse:
+    page_url = normalize_url(page_url)
+    if not page_url:
+        raise HTTPException(400, "page_url is required")
+    if not any(x in page_url for x in ("youtube.com/", "youtu.be/", "youtube-nocookie.com/")):
+        raise HTTPException(400, "youtube-360-stream only supports YouTube URLs")
+
+    rid = uuid.uuid4().hex[:12]
+    cookies_val = safe_text(x_fcdl_cookies or cookies) if (x_fcdl_cookies or cookies) else None
+    if cookies_val:
+        try:
+            auth.validate_cookies(cookies_val)
+        except (auth.CookieTooLargeError, auth.CookieFormatError) as exc:
+            raise HTTPException(400, str(exc))
+    if not cookies_val:
+        cookies_val = _cookie_header_from_netscape_file(COOKIES_FILE, "youtube")
+
+    picked = _youtube_android_360_stream(page_url, cookies=cookies_val)
+    stream = picked["stream"]
+    video_id = picked.get("id") or cache_key(page_url)
+    filename = _safe_filename(picked.get("title"), video_id)
+    headers = {
+        "Content-Disposition": content_disposition(filename, video_id),
+        "Cache-Control": "no-cache, no-store",
+        "X-Request-ID": rid,
+        "X-FCDL-Video-Height": str(stream.get("height") or ""),
+        "X-FCDL-Video-Itag": str(stream.get("itag") or ""),
+    }
+    request_headers = {"Cookie": cookies_val} if cookies_val else {}
+    print(
+        f"[youtube-360] rid={rid} itag={stream.get('itag')} "
+        f"height={stream.get('height')}"
+    )
+    return _direct_media_stream(stream["url"], request_headers, headers)
+
+
 @app.get("/youtube-mux-stream")
 @limiter.limit(RATE_LIMIT)
 def youtube_mux_stream_endpoint(
@@ -1289,7 +1502,7 @@ def _default_proxy_headers(target_url: str, referer: str | None) -> dict[str, st
         h["Referer"] = "https://www.instagram.com/"
     elif "threadscdn" in host:
         h["Referer"] = "https://www.threads.com/"
-    elif "bilivideo" in host or "bilibili" in host:
+    elif "bilivideo" in host or "bilibili" in host or "biliimg" in host or "hdslb" in host:
         h["Referer"] = "https://www.bilibili.com/"
         h["Origin"]  = "https://www.bilibili.com"
     elif "weibocdn" in host or "weibo" in host:
@@ -1298,6 +1511,35 @@ def _default_proxy_headers(target_url: str, referer: str | None) -> dict[str, st
     elif "xhscdn" in host or "xiaohongshu" in host:
         h["Referer"] = "https://www.xiaohongshu.com/"
         h["Origin"]  = "https://www.xiaohongshu.com"
+    elif "postfiles.pstatic" in host:
+        h["Referer"] = "https://blog.naver.com/"
+        h["Origin"]  = "https://blog.naver.com"
+    elif "imgnews.pstatic" in host or "mimgnews.pstatic" in host:
+        h["Referer"] = "https://news.naver.com/"
+        h["Origin"]  = "https://news.naver.com"
+    elif "naver" in host or "pstatic" in host:
+        h["Referer"] = "https://tv.naver.com/"
+        h["Origin"]  = "https://tv.naver.com"
+    elif "mdpr" in host or "modelpress" in host:
+        h["Referer"] = "https://mdpr.jp/"
+        h["Origin"]  = "https://mdpr.jp"
+    elif "pximg" in host or "pixiv" in host or "fanbox" in host:
+        h["Referer"] = "https://www.pixiv.net/"
+    elif "kakaocdn" in host or "daumcdn" in host or "tistory" in host:
+        h["Referer"] = "https://www.daum.net/"
+        h["Origin"]  = "https://www.daum.net"
+    elif any(token in host for token in (
+        "ameba", "natalie", "oricon", "kstyle", "livedoor", "yimg",
+        "kodansha", "hpplus", "fashion-press", "fashionsnap", "wwdjapan",
+        "thetv", "mantan-web", "crank-in", "cinematoday", "eiga",
+        "realsound", "spice.eplus", "jprime", "flash", "bunshun",
+        "dailyshincho", "news-postseven", "josei7", "gendai", "asagei",
+        "entamenext", "girlsnews", "tokyo-sports", "hochi", "sponichi",
+        "nikkansports", "sanspo", "mainichi", "asahi", "yomiuri",
+        "sankei", "tokyo-np", "kyodo", "47news", "jiji", "itmedia",
+        "impress", "mynavi", "ascii", "gigazine",
+    )):
+        h["Referer"] = f"https://{host}/"
     elif "redd.it" in host or "redditmedia" in host:
         h["Referer"] = "https://www.reddit.com/"
     return h
@@ -1310,7 +1552,29 @@ def proxy(
     url: str = Query(..., description="Media URL to proxy"),
     referer: str | None = Query(None),
     cookies: str | None = Query(None),
+    x_fcdl_cookies: str | None = Header(None, alias="X-FCDL-Cookies"),
     filename: str | None = Query(None),
+) -> StreamingResponse:
+    cookies = safe_text(x_fcdl_cookies or cookies) if (x_fcdl_cookies or cookies) else None
+    return _proxy_stream(url, referer, cookies, filename)
+
+
+@app.post("/proxy")
+@limiter.limit(RATE_LIMIT)
+def proxy_post(
+    request: Request,
+    req: ProxyRequest,
+    x_fcdl_cookies: str | None = Header(None, alias="X-FCDL-Cookies"),
+) -> StreamingResponse:
+    cookies = safe_text(x_fcdl_cookies or req.cookies) if (x_fcdl_cookies or req.cookies) else None
+    return _proxy_stream(req.url, req.referer, cookies, req.filename)
+
+
+def _proxy_stream(
+    url: str,
+    referer: str | None,
+    cookies: str | None,
+    filename: str | None,
 ) -> StreamingResponse:
     url = normalize_url(url)
     referer = normalize_url(referer) if referer else None

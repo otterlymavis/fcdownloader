@@ -2,5 +2,16 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true
-  }
+  },
+  "exclude": [
+    "desktop-companion/build",
+    "desktop-companion/dist-*",
+    "desktop-companion/nobrowser-*",
+    "dist",
+    "web-build",
+    "artifacts",
+    "history_logs",
+    "pytest-of-*",
+    "node_modules"
+  ]
 }

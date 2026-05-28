@@ -7,6 +7,7 @@ import { DetectedMedia, Provenance } from '../types';
 import { extractYouTubeStreams } from './ytExtractor';
 import { extractViaServer } from './serverExtractor';
 import { getAcceptLanguage } from './siteRegistry';
+import { debugLog, debugWarn } from './releaseLogger';
 
 let _seq = 0;
 const genId = () => `ext_${Date.now()}_${_seq++}`;
@@ -29,7 +30,14 @@ export function isJapaneseDomain(url: string): boolean {
     const JAPANESE_DOMAINS = [
       'nicovideo.jp', 'nico.ms', 'n.nicovideo.jp',
       'abema.tv', 'ameba.jp', 'ameblo.jp',
-      'wwd.co.jp', 'wwdjapan.com',
+      'mdpr.jp', 'modelpress.jp',
+      'wwd.co.jp', 'wwdjapan.com', 'natalie.mu', 'oricon.co.jp', 'kstyle.com',
+      'blog.livedoor.jp', 'livedoor.blog', 'bunshun.jp', 'dailyshincho.jp',
+      'news-postseven.com', 'josei7.com', 'gendai.media', 'vivi.tv',
+      'cancam.jp', 'withonline.jp', 'fashion-press.net', 'fashionsnap.com',
+      'thetv.jp', 'mantan-web.jp', 'crank-in.net', 'cinematoday.jp',
+      'eiga.com', 'realsound.jp', 'jprime.jp', 'smart-flash.jp',
+      'pixiv.net', 'fanbox.cc',
       'gyao.jp', 'hulu.jp', 'openrec.tv', 'mildom.com',
     ];
     return JAPANESE_DOMAINS.some(d => host === d || host.endsWith('.' + d));
@@ -97,18 +105,18 @@ async function runExtractor(
   name: string,
   fn: () => Promise<DetectedMedia[]>,
 ): Promise<ExtractorResult> {
-  console.log(`[extract] ${name} start`);
+  debugLog(`[extract] ${name} start`);
   try {
     const media = await fn();
     if (media.length > 0) {
-      console.log(`[extract] ${name} success`);
+      debugLog(`[extract] ${name} success`);
       return { success: true, fatal: false, media };
     }
-    console.log(`[extract] ${name} failed: no media`);
+    debugLog(`[extract] ${name} failed: no media`);
     return { success: false, fatal: false, reason: 'no media' };
   } catch (e) {
     const reason = String((e as Error)?.message || e).slice(0, 240);
-    console.warn(`[extract] ${name} failed:`, reason);
+    debugWarn(`[extract] ${name} failed:`, reason);
     return { success: false, fatal: false, reason };
   }
 }
@@ -135,8 +143,8 @@ async function extractHtmlMedia(pageUrl: string, mode: 'hls' | 'dash' | 'generic
     mode === 'hls' ? [/(https?:\/\/[^"'\\<>\s]+?\.m3u8[^"'\\<>\s]*)/gi]
     : mode === 'dash' ? [/(https?:\/\/[^"'\\<>\s]+?\.mpd[^"'\\<>\s]*)/gi]
     : [
-        /(https?:\/\/[^"'\\<>\s]+?\.(?:m3u8|mpd|mp4|m4v|webm|mov)[^"'\\<>\s]*)/gi,
-        /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.com|weibocdn\.com|xhscdn\.com)[^"'\\<>\s]*)/gi,
+        /(https?:\/\/[^"'\\<>\s]+?\.(?:m3u8|mpd|mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif)[^"'\\<>\s]*)/gi,
+        /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.com|weibocdn\.com|xhscdn\.com|biliimg\.com|hdslb\.com|pximg\.net|yimg\.jp|kakaocdn\.net)[^"'\\<>\s]*)/gi,
       ];
   patterns.forEach((re) => {
     extractUrls(html, re).forEach((u) => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.65)));
@@ -298,7 +306,7 @@ async function extractYouTube(pageUrl: string): Promise<DetectedMedia[]> {
     const items = await extractViaServer(pageUrl);
     if (items.length > 0) return items;
   } catch (e) {
-    console.warn('[extractYouTube] server extractor errored:', String(e).slice(0, 200));
+    debugWarn('[extractYouTube] server extractor errored:', String(e).slice(0, 200));
   }
 
   // Tier 2: on-device InnerTube. Returns HLS HD when available, otherwise the
@@ -389,7 +397,7 @@ async function extractBilibili(pageUrl: string): Promise<DetectedMedia[]> {
     const items = await extractViaServer(pageUrl);
     if (items.length > 0) return items;
   } catch (e) {
-    console.warn('[extractBilibili] server extractor errored:', String(e).slice(0, 200));
+    debugWarn('[extractBilibili] server extractor errored:', String(e).slice(0, 200));
   }
   // Tier 2: on-page __playinfo__. Falls back to 480p durl when DASH not given.
   return extractBilibiliLocal(pageUrl);
@@ -452,7 +460,7 @@ async function extractWeibo(pageUrl: string): Promise<DetectedMedia[]> {
       return items.map(item => ({ ...item, label: item.label ?? 'Weibo' }));
     }
   } catch (e) {
-    console.warn('[extractWeibo] server extractor errored:', String(e).slice(0, 200));
+    debugWarn('[extractWeibo] server extractor errored:', String(e).slice(0, 200));
   }
 
   try {
@@ -475,7 +483,7 @@ async function extractXiaohongshu(pageUrl: string): Promise<DetectedMedia[]> {
       return items.map(item => ({ ...item, label: item.label ?? 'Xiaohongshu' }));
     }
   } catch (e) {
-    console.warn('[extractXiaohongshu] server extractor errored:', String(e).slice(0, 200));
+    debugWarn('[extractXiaohongshu] server extractor errored:', String(e).slice(0, 200));
   }
 
   try {
@@ -498,7 +506,7 @@ async function extractNicoNico(pageUrl: string): Promise<DetectedMedia[]> {
     const items = await extractViaServer(pageUrl);
     if (items.length > 0) return items.map(item => ({ ...item, label: item.label ?? 'NicoNico' }));
   } catch (e) {
-    console.warn('[extractNicoNico] server extractor errored:', String(e).slice(0, 200));
+    debugWarn('[extractNicoNico] server extractor errored:', String(e).slice(0, 200));
   }
 
   // Tier 2: on-page JSON. NicoNico embeds video info in window.__INITIAL_WATCH_DATA__
@@ -536,7 +544,7 @@ async function extractAbema(pageUrl: string): Promise<DetectedMedia[]> {
     const items = await extractViaServer(pageUrl);
     if (items.length > 0) return items.map(item => ({ ...item, label: item.label ?? 'Abema' }));
   } catch (e) {
-    console.warn('[extractAbema] server extractor errored:', String(e).slice(0, 200));
+    debugWarn('[extractAbema] server extractor errored:', String(e).slice(0, 200));
   }
 
   // On-page HLS scan with locale-aware headers
@@ -557,13 +565,44 @@ async function extractAbema(pageUrl: string): Promise<DetectedMedia[]> {
 }
 
 // ── Ameba ─────────────────────────────────────────────────────────────────────
+async function extractNaver(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const items = await extractViaServer(pageUrl);
+    if (items.length > 0) return items.map(item => ({ ...item, label: item.label ?? 'Naver' }));
+  } catch (e) {
+    debugWarn('[extractNaver] server extractor errored:', String(e).slice(0, 200));
+  }
+
+  try {
+    const html = await fetchHtml(pageUrl, DESKTOP_UA, getAcceptLanguage(pageUrl));
+    const results: DetectedMedia[] = [];
+    extractUrls(
+      html,
+      /(https?:\/\/[^"'\\<>\s]*(?:pstatic\.net|naver\.com)[^"'\\<>\s]*\.(?:m3u8|mp4)[^"'\\<>\s]*)/gi,
+    ).forEach(u => pushUnique(results, makeItem(u, pageUrl, 'Naver', 'social-extractor', 0.65)));
+    return results;
+  } catch { return []; }
+}
+
+async function extractModelpress(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const items = await extractViaServer(pageUrl);
+    if (items.length > 0) return items.map(item => ({ ...item, label: item.label ?? 'Modelpress' }));
+  } catch (e) {
+    debugWarn('[extractModelpress] server extractor errored:', String(e).slice(0, 200));
+  }
+
+  const items = await extractJapaneseGeneric(pageUrl);
+  return items.map(item => ({ ...item, label: item.label ?? 'Modelpress' }));
+}
+
 async function extractAmeba(pageUrl: string): Promise<DetectedMedia[]> {
   // Server-first
   try {
     const items = await extractViaServer(pageUrl);
     if (items.length > 0) return items.map(item => ({ ...item, label: item.label ?? 'Ameba' }));
   } catch (e) {
-    console.warn('[extractAmeba] server extractor errored:', String(e).slice(0, 200));
+    debugWarn('[extractAmeba] server extractor errored:', String(e).slice(0, 200));
   }
 
   // On-page scan with locale-aware headers
@@ -588,6 +627,16 @@ async function extractAmeba(pageUrl: string): Promise<DetectedMedia[]> {
  * Generic fallback for Japanese streaming sites not covered by a dedicated
  * extractor. Fetches with locale-aware headers and scans for HLS/MP4/DASH URLs.
  */
+async function extractCuratedArticle(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const items = await extractViaServer(pageUrl);
+    if (items.length > 0) return items;
+  } catch (e) {
+    debugWarn('[extractCuratedArticle] server extractor errored:', String(e).slice(0, 200));
+  }
+  return extractHtmlMedia(pageUrl, 'generic');
+}
+
 async function extractJapaneseGeneric(pageUrl: string): Promise<DetectedMedia[]> {
   // Server-first
   try {
@@ -649,7 +698,10 @@ const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[
   // ── Japanese sites ──────────────────────────────────────────────────────────
   { re: /(?:nicovideo\.jp\/watch\/|nico\.ms\/)[a-zA-Z0-9]+/,                       fn: extractNicoNico    },
   { re: /abema\.tv\/video\/(?:episode|series)\/[A-Za-z0-9_-]+/,                    fn: extractAbema       },
+  { re: /(?:tv\.naver\.com\/v\/\d+|now\.naver\.com\/|blog\.naver\.com\/|m\.blog\.naver\.com\/|news\.naver\.com\/|n\.news\.naver\.com\/|m\.news\.naver\.com\/|entertain\.naver\.com\/|m\.entertain\.naver\.com\/|sports\.news\.naver\.com\/|m\.sports\.naver\.com\/|naver\.me\/[A-Za-z0-9]+)/, fn: extractNaver },
+  { re: /(?:mdpr\.jp\/|modelpress\.jp\/)/,                                         fn: extractModelpress  },
   { re: /(?:ameba\.jp\/[^/]+\/entry\/\d+|ameblo\.jp\/[^/]+\/entry-\d+)/,           fn: extractAmeba       },
+  { re: /(?:natalie\.mu|oricon\.co\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|t\.bilibili\.com|bilibili\.com\/(?:opus|read)|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net)/i, fn: extractCuratedArticle },
 ];
 
 /** Returns true if the URL looks like a social-media post page (not a CDN media URL). */
@@ -664,7 +716,7 @@ export function isSocialPageUrl(url: string): boolean {
  */
 export async function extractFromSocialUrl(pageUrl: string): Promise<DetectedMedia[]> {
   if (!/^https?:\/\//i.test(pageUrl)) {
-    console.warn('[extract] invalid URL or unsupported protocol:', pageUrl);
+    debugWarn('[extract] invalid URL or unsupported protocol:', pageUrl);
     return [];
   }
   const platform = PLATFORMS.find(p => p.re.test(pageUrl));
@@ -690,15 +742,15 @@ export async function extractFromSocialUrl(pageUrl: string): Promise<DetectedMed
     const [name, fn] = strategies[i];
     const result = await runExtractor(name, fn);
     if (result.success && result.media?.length) {
-      console.log(`[extract] extraction success via ${name}`);
+      debugLog(`[extract] extraction success via ${name}`);
       return result.media;
     }
     diagnostics.push(`${name}: ${result.reason ?? 'failed'}`);
     if (i < strategies.length - 1) {
-      console.log(`[extract] falling back to ${strategies[i + 1][0]}`);
+      debugLog(`[extract] falling back to ${strategies[i + 1][0]}`);
     }
   }
-  console.warn('[extract] all strategies failed:', diagnostics.slice(-6).join('; '));
+  debugWarn('[extract] all strategies failed:', diagnostics.slice(-6).join('; '));
   return [];
 }
 

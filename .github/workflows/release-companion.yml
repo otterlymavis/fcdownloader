@@ -52,6 +52,27 @@ jobs:
         working-directory: desktop-companion
         run: npm run dist
 
+      - name: Build NoBrowser Go companion
+        if: runner.os == 'Windows'
+        working-directory: desktop-companion
+        run: npm run variants:nobrowser-go
+
+      - name: Smoke test NoBrowser Go helper
+        if: runner.os == 'Windows'
+        working-directory: desktop-companion
+        run: npm run test:nobrowser-go
+
+      - name: Smoke test NoBrowser Go installer
+        if: runner.os == 'Windows'
+        working-directory: desktop-companion
+        run: npm run test:nobrowser-go:installer
+
+      - name: Generate artifact checksums
+        working-directory: desktop-companion
+        run: |
+          npm run release:hash-artifacts
+          npm run release:verify-artifacts
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
@@ -61,6 +82,9 @@ jobs:
             desktop-companion/dist/*.dmg
             desktop-companion/dist/*.blockmap
             desktop-companion/dist/latest*.yml
+            desktop-companion/dist-nobrowser-go-ver/*.exe
+            desktop-companion/build/companion-artifacts.json
+            desktop-companion/build/companion-artifacts.sha256
           if-no-files-found: error
           retention-days: 90
 
@@ -72,3 +96,8 @@ jobs:
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "FCDownloader $tag" --notes "FCDownloader release bundle."
           find desktop-companion/dist -maxdepth 1 \( -name '*.exe' -o -name '*.dmg' -o -name '*.blockmap' -o -name 'latest*.yml' \) -print0 \
             | xargs -0 -I{} gh release upload "$tag" "{}" --clobber
+          if [ -d desktop-companion/dist-nobrowser-go-ver ]; then
+            find desktop-companion/dist-nobrowser-go-ver -maxdepth 1 -name '*.exe' -print0 \
+              | xargs -0 -r -I{} gh release upload "$tag" "{}" --clobber
+          fi
+          gh release upload "$tag" desktop-companion/build/companion-artifacts.json desktop-companion/build/companion-artifacts.sha256 --clobber

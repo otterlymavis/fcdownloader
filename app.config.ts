@@ -8,7 +8,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     name: 'FCDownloader',
   slug: 'fcdownloader',
   owner: 'mabisuuu',
-  version: '1.1.0',
+  version: '1.5.5',
   orientation: 'default',
   userInterfaceStyle: 'automatic', // dark mode support
   platforms: ['ios', 'android'],
@@ -21,7 +21,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   },
   android: {
     package: 'com.mabisuuu.fcdownloader',
-    versionCode: 11,
+    versionCode: 16,
+    allowBackup: false,
     adaptiveIcon: {
       foregroundImage: './assets/android-icon-foreground.png',
       backgroundImage: './assets/android-icon-background.png',
@@ -29,10 +30,16 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     permissions: [
       'android.permission.INTERNET',
-      'android.permission.READ_EXTERNAL_STORAGE',
-      'android.permission.WRITE_EXTERNAL_STORAGE',
       'android.permission.READ_MEDIA_VIDEO',
       'android.permission.READ_MEDIA_IMAGES',
+    ],
+    blockedPermissions: [
+      'android.permission.ACCESS_MEDIA_LOCATION',
+      'android.permission.READ_EXTERNAL_STORAGE',
+      'android.permission.WRITE_EXTERNAL_STORAGE',
+      'android.permission.READ_MEDIA_AUDIO',
+      'android.permission.SYSTEM_ALERT_WINDOW',
+      'android.permission.VIBRATE',
     ],
   },
   ios: {
@@ -50,7 +57,6 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       LSApplicationQueriesSchemes: ['vlc', 'infuse', 'nplayer'],
     },
     entitlements: {
-      'com.apple.developer.networking.wifi-info': true,
       'com.apple.security.application-groups': ['group.com.mabisuuu.fcdownloader'],
     },
   },
@@ -60,16 +66,16 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     [
       'expo-media-library',
       {
-        photosPermission: 'Allow FCDownloader to save videos to your gallery.',
-        savePhotosPermission: 'Allow FCDownloader to save videos to your gallery.',
-        isAccessMediaLocationEnabled: true,
+        photosPermission: 'Allow FCDownloader to save photos and videos to your gallery.',
+        savePhotosPermission: 'Allow FCDownloader to save photos and videos to your gallery.',
+        granularPermissions: ['photo', 'video'],
+        isAccessMediaLocationEnabled: false,
       },
     ],
     [
       'expo-build-properties',
       {
         android: {
-          newArchEnabled: false,
           minSdkVersion: 24,
           // Public releases should use HTTPS. Local/self-hosted LAN builds can
           // opt into HTTP with FCDL_ALLOW_INSECURE_HTTP=1.

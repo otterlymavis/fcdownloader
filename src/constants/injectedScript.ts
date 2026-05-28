@@ -82,6 +82,7 @@ export const INJECTED_SCRIPT = `
     if (/\\binstagram\\.com\\/.*\\bvideo\\b/.test(url))             return 'direct';
     if (/\\bv\\.redd\\.it\\//.test(url))                            return 'hls';
     if (/\\bfbcdn\\.net\\/.*\\bvideo/.test(url))                    return 'hls';
+    if (/\\bvod\\.pstatic\\.net\\//.test(url))                      return 'hls';
     if (/\\bfbcdn\\.net\\/.*\\.mp4/.test(url))                      return 'direct';
     if (/\\bdailymotion\\.com\\/cdn/.test(url))                     return 'hls';
     if (/\\bdmcdn\\.net\\//.test(url))                              return 'hls';
@@ -109,7 +110,7 @@ export const INJECTED_SCRIPT = `
   function isSkippableImage(url) {
     var u = String(url || '').toLowerCase();
     return /(?:favicon|apple-touch-icon|sprite|logo|placeholder|blank|pixel|tracking)/.test(u) ||
-      /\\/(?:icons?|assets?)\\//.test(u) && !/(?:cdninstagram|fbcdn|threadscdn|pinimg|sinaimg|xhscdn)/.test(u);
+      /\\/(?:icons?|assets?)\\//.test(u) && !/(?:cdninstagram|fbcdn|threadscdn|pinimg|sinaimg|xhscdn|pstatic)/.test(u);
   }
 
   var LOG_SEEN = new Set();
@@ -169,7 +170,7 @@ export const INJECTED_SCRIPT = `
            .replace(/\\\\u002F/gi, '/'),
     ];
     var extRe = /https?:\\/\\/[^"'\\\\\\s<>]{4,}?\\.(m3u8|mpd|mp4|webm|mov|m4v|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)[^"'\\\\\\s<>]*/gi;
-    var cdnRe = /https?:\\/\\/[^"'\\\\\\s<>]*(?:video\\.twimg\\.com|tiktokcdn\\.com|tiktokcdn-us\\.com|v\\d+-webapp\\.tiktok\\.com|cdninstagram\\.com|scontent[-\\w]*\\.cdninstagram\\.com|v\\.redd\\.it|fbcdn\\.net|threadscdn\\.com|vimeocdn\\.com\\/video|googlevideo\\.com\\/videoplayback|pinimg\\.com\\/(?:videos|originals|736x|1200x|564x)|dmcdn\\.net|usher\\.twitch\\.tv|bilivideo\\.com|weibocdn\\.com|xhscdn\\.com)[^"'\\\\\\s<>]{4,}/gi;
+    var cdnRe = /https?:\\/\\/[^"'\\\\\\s<>]*(?:video\\.twimg\\.com|tiktokcdn\\.com|tiktokcdn-us\\.com|v\\d+-webapp\\.tiktok\\.com|cdninstagram\\.com|scontent[-\\w]*\\.cdninstagram\\.com|v\\.redd\\.it|fbcdn\\.net|threadscdn\\.com|vimeocdn\\.com\\/video|googlevideo\\.com\\/videoplayback|pinimg\\.com\\/(?:videos|originals|736x|1200x|564x)|dmcdn\\.net|usher\\.twitch\\.tv|bilivideo\\.com|weibocdn\\.com|xhscdn\\.com|vod\\.pstatic\\.net)[^"'\\\\\\s<>]{4,}/gi;
     variants.forEach(function (body) {
       var m;
       extRe.lastIndex = 0;

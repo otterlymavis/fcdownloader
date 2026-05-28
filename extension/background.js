@@ -17,9 +17,11 @@
 // packaging time so end users never have to enter the URL manually.
 import { FCDL_DEFAULT_BACKEND } from "./config.js";
 const DEFAULT_BACKEND = (FCDL_DEFAULT_BACKEND || "").trim().replace(/\/+$/, "");
+const DEBUG_LOGS = false;
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i;
 const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i;
-const SERVER_ONLY_RE = /youtube\.com|youtu\.be|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.com|bilibili\.com|weibo\.com|weibo\.cn|weibocdn\.com|xiaohongshu\.com|xhslink\.com|xhscdn\.com|nicovideo\.jp|nico\.ms|niconico\.com|nicochannel\.jp|tver\.jp|tver\.co\.jp|abema\.tv|abema\.io|twitcasting\.tv|openrec\.tv|video\.fc2\.com|live\.fc2\.com|nhk\.or\.jp|nhk\.jp|cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp|fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp|video\.yahoo\.co\.jp|news\.yahoo\.co\.jp/;
+const SERVER_ONLY_RE = /youtube\.com|youtu\.be|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.com|bilibili\.com|weibo\.com|weibo\.cn|weibocdn\.com|xiaohongshu\.com|xhslink\.com|xhscdn\.com|naver\.com|naver\.me|pstatic\.net|nicovideo\.jp|nico\.ms|niconico\.com|nicochannel\.jp|tver\.jp|tver\.co\.jp|abema\.tv|abema\.io|twitcasting\.tv|openrec\.tv|video\.fc2\.com|live\.fc2\.com|nhk\.or\.jp|nhk\.jp|cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp|fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp|video\.yahoo\.co\.jp|news\.yahoo\.co\.jp|ameblo\.jp|ameba\.jp|natalie\.mu|oricon\.co\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net/;
+const PROXY_REQUIRED_RE = /(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|weibocdn\.com|xhscdn\.com|bilivideo\.com|biliimg\.com|hdslb\.com|pstatic\.net|pximg\.net|yimg\.jp|kakaocdn\.net|daumcdn\.net|img-mdpr\.freetls\.fastly\.net)/i;
 const PREFLIGHT_MEDIA_TYPES = [
   "video/",
   "image/",
@@ -27,6 +29,14 @@ const PREFLIGHT_MEDIA_TYPES = [
   "application/x-mpegURL",
   "application/octet-stream",
 ];
+
+function debugLog(...args) {
+  if (DEBUG_LOGS) console.log(...args);
+}
+
+function debugWarn(...args) {
+  if (DEBUG_LOGS) console.warn(...args);
+}
 
 // On install: seed the storage.sync backend from DEFAULT_BACKEND so the
 // user never sees the "configure backend" screen on a public-distribution
@@ -42,13 +52,13 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     if (!stored.backend?.trim()) {
       if (DEFAULT_BACKEND) {
         await chrome.storage.sync.set({ backend: DEFAULT_BACKEND });
-        console.log("[fcdl] seeded backend from build default:", DEFAULT_BACKEND);
+        debugLog("[fcdl] seeded backend from build default:", DEFAULT_BACKEND);
       } else {
         chrome.runtime.openOptionsPage();
       }
     }
   } catch (e) {
-    console.warn("[fcdl] onInstalled setup failed:", e);
+    debugWarn("[fcdl] onInstalled setup failed:", e);
   }
 });
 
@@ -207,12 +217,12 @@ try {
       { urls: ["<all_urls>"] },
       ["responseHeaders"],
     );
-    console.log("[fcdl] webRequest listener registered");
+    debugLog("[fcdl] webRequest listener registered");
   } else {
-    console.warn("[fcdl] chrome.webRequest unavailable — install permission missing?");
+    debugWarn("[fcdl] chrome.webRequest unavailable — install permission missing?");
   }
 } catch (e) {
-  console.warn("[fcdl] webRequest setup failed:", e);
+  debugWarn("[fcdl] webRequest setup failed:", e);
 }
 
 function isLikelyMedia(url) {
@@ -317,11 +327,14 @@ async function callExtract(pageUrl, referer, cookies) {
   }
 }
 
-function backendDownloadUrl(backend, pageUrl, referer, cookies) {
+function backendDownloadUrl(backend, pageUrl, referer) {
   const p = new URLSearchParams({ url: pageUrl });
   if (referer) p.set("referer", referer);
-  if (cookies) p.set("cookies", cookies);
   return `${backend}/download?${p.toString()}`;
+}
+
+function cookieHeaderList(cookies) {
+  return cookies ? [{ name: "X-FCDL-Cookies", value: cookies }] : [];
 }
 
 // ── Download orchestration ────────────────────────────────────────────────
@@ -400,6 +413,11 @@ async function preflightDirectUrl(url, headers = []) {
 }
 
 async function fetchLocalHelperHealth(timeoutMs = 2500) {
+  const info = await fetchLocalHelperInfo(timeoutMs);
+  return Boolean(info?.ok);
+}
+
+async function fetchLocalHelperInfo(timeoutMs = 2500) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -407,9 +425,30 @@ async function fetchLocalHelperHealth(timeoutMs = 2500) {
       method: "GET",
       signal: ac.signal,
     });
-    return health.ok;
+    const data = await health.json().catch(() => ({}));
+    if (!health.ok || data?.ok === false) return null;
+    return data;
   } catch {
-    return false;
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function ensureLocalHelperTools(timeoutMs = 10 * 60 * 1000) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const response = await fetch("http://127.0.0.1:8765/tools/ensure", {
+      method: "GET",
+      signal: ac.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    return response.ok && data?.ok !== false
+      ? { ok: true, health: await fetchLocalHelperInfo(2500), tools: data.tools || [] }
+      : { ok: false, error: data?.error || `HTTP ${response.status}` };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
   } finally {
     clearTimeout(timer);
   }
@@ -432,7 +471,7 @@ async function launchLocalCompanion() {
     });
     return true;
   } catch (e) {
-    console.warn("[fcdl] companion launch failed:", e?.message || e);
+    debugWarn("[fcdl] companion launch failed:", e?.message || e);
     return false;
   }
 }
@@ -460,7 +499,7 @@ async function downloadItem(tabId, item) {
   const cookies = await cookieHeaderFor(cookieSourceUrl);
   const { backend } = await getSettings();
 
-  console.log("[fcdl] download", {
+  debugLog("[fcdl] download", {
     item_url: (item.url || "").slice(0, 80),
     sent_url: (urlForBackend || "").slice(0, 80),
     referer: (referer || "").slice(0, 80),
@@ -470,18 +509,19 @@ async function downloadItem(tabId, item) {
   });
 
   async function viaBackend(pageForBackend) {
-    const dlUrl = backendDownloadUrl(backend, pageForBackend, referer, cookies);
-    // Log the page URL only — dlUrl contains session cookies so must not be logged.
-    console.log("[fcdl] → backend for", (pageForBackend || "").slice(0, 100), "cookies?", !!cookies);
-    const check = await preflightBackendUrl(dlUrl);
+    const dlUrl = backendDownloadUrl(backend, pageForBackend, referer);
+    const headers = cookieHeaderList(cookies);
+    debugLog("[fcdl] → backend for", (pageForBackend || "").slice(0, 100), "cookies?", !!cookies);
+    const check = await preflightBackendUrl(dlUrl, headers);
     if (!check.ok) {
       throw new Error(`Backend: ${check.error}`);
     }
-    return chromeDownload(dlUrl, suggestedFilename(item, urlForBackend, tabTitle));
+    return chromeDownload(dlUrl, suggestedFilename(item, urlForBackend, tabTitle), headers);
   }
 
   // ytdl-stream proxy URL: download it directly without re-routing through /download.
-  // The URL already has page_url + cookies baked in from the /extract call.
+  // The URL carries the page URL from /extract; cookies are sent separately
+  // through X-FCDL-Cookies so they do not leak into browser history or logs.
   // Re-routing through /download would ignore this URL entirely (it uses item.pageUrl
   // as the extraction target), re-extract the page, and double-download the video.
   //
@@ -490,10 +530,9 @@ async function downloadItem(tabId, item) {
   // path + content-type as the filename ("ytdl-stream.json"), ignoring our hint.
   // _watchYtdlStreamDownload detects this and removes the garbage file.
   if ((item.url || "").includes("/ytdl-stream?")) {
-    // Do not log the full URL — it contains page_url, and older server builds
-    // may include session cookies as query params.
-    console.log("[fcdl] → ytdl-stream direct download");
-    const headers = cookies ? [{ name: "X-FCDL-Cookies", value: cookies }] : [];
+    // Do not log the full URL because it contains the source page_url.
+    debugLog("[fcdl] → ytdl-stream direct download");
+    const headers = cookieHeaderList(cookies);
     const check = await preflightBackendUrl(item.url, headers);
     if (!check.ok) {
       _notifyYtdlError("YouTube download failed", check.error);
@@ -502,7 +541,7 @@ async function downloadItem(tabId, item) {
     const dlId = await chromeDownload(item.url, suggestedFilename(item, item.url, tabTitle), headers);
     // Fire-and-forget monitor — does not block the popup response.
     _watchYtdlStreamDownload(dlId).catch((e) =>
-      console.warn("[fcdl] ytdl-stream watcher error:", e?.message || e)
+      debugWarn("[fcdl] ytdl-stream watcher error:", e?.message || e)
     );
     return dlId;
   }
@@ -510,11 +549,11 @@ async function downloadItem(tabId, item) {
   if (item.source === "youtube-hd-local") {
     const page = item.pageUrl || tabPageUrl || item.url;
     const localUrl = `http://127.0.0.1:8765/youtube-hd?${new URLSearchParams({ url: page }).toString()}`;
-    console.log("[fcdl] → local youtube helper");
+    debugLog("[fcdl] → local youtube helper");
     if (!await fetchLocalHelperHealth()) {
       const standalone = bestHelperAbsentFallback(tabId);
       if (standalone) {
-        console.log("[fcdl] → Companion absent; using best standalone candidate", standalone.source, standalone.kind);
+        debugLog("[fcdl] → Companion absent; using best standalone candidate", standalone.source, standalone.kind);
         return downloadItem(tabId, standalone);
       }
       throw new Error("Companion is not running. Start playback to detect the 360p download, or open Companion for HD.");
@@ -530,12 +569,12 @@ async function downloadItem(tabId, item) {
 
   const backendStrategy = backendStrategyForItem(item, urlForBackend);
   if (backendStrategy) {
-    console.log("[fcdl] →", backendStrategy);
+    debugLog("[fcdl] →", backendStrategy);
     return viaBackend(urlForBackend);
   }
 
   // Plain mp4/webm CDN URLs that don't require auth — direct download.
-  console.log("[fcdl] → direct CDN");
+  debugLog("[fcdl] → direct CDN");
   try {
     const directHeaders = [];
     if (/googlevideo\.com/i.test(item.url || "")) {
@@ -549,9 +588,9 @@ async function downloadItem(tabId, item) {
     if (/googlevideo\.com/i.test(item.url || "")) {
       throw e;
     }
-    console.warn("[fcdl] direct failed, falling back to backend:", e?.message || e);
-    const dlUrl = backendDownloadUrl(backend, item.url, referer, cookies);
-    return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl, tabTitle));
+    debugWarn("[fcdl] direct failed, falling back to backend:", e?.message || e);
+    const dlUrl = backendDownloadUrl(backend, item.url, referer);
+    return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl, tabTitle), cookieHeaderList(cookies));
   }
 }
 
@@ -560,9 +599,9 @@ async function downloadItem(tabId, item) {
 // any interrupted downloads so we can see them in the service-worker console.
 chrome.downloads.onChanged.addListener((delta) => {
   if (delta.state?.current === "interrupted") {
-    console.warn("[fcdl] download interrupted:", delta);
+    debugWarn("[fcdl] download interrupted:", delta);
   } else if (delta.state?.current === "complete") {
-    console.log("[fcdl] download complete:", delta.id);
+    debugLog("[fcdl] download complete:", delta.id);
   }
 });
 
@@ -607,7 +646,7 @@ async function _watchYtdlStreamDownload(downloadId) {
 
   if ((isJsonFile || isTinyFile) && dl.state === "complete") {
     // Chrome saved the server's JSON error body — remove it and tell the user.
-    console.warn("[fcdl] ytdl-stream returned a JSON/tiny error file — removing:", dl.filename, "size:", dl.fileSize);
+    debugWarn("[fcdl] ytdl-stream returned a JSON/tiny error file — removing:", dl.filename, "size:", dl.fileSize);
     chrome.downloads.removeFile(downloadId, () => {
       chrome.downloads.erase({ id: downloadId }, () => {});
     });
@@ -620,7 +659,7 @@ async function _watchYtdlStreamDownload(downloadId) {
   }
 
   if (interrupted) {
-    console.warn("[fcdl] ytdl-stream download interrupted:", dl.error);
+    debugWarn("[fcdl] ytdl-stream download interrupted:", dl.error);
     _notifyYtdlError(
       "YouTube download interrupted",
       "The server download failed (" + (dl.error || "unknown error") + "). " +
@@ -640,7 +679,7 @@ function _notifyYtdlError(title, message) {
       });
     }
   } catch (e) {
-    console.warn("[fcdl] notification failed:", e?.message || e);
+    debugWarn("[fcdl] notification failed:", e?.message || e);
   }
 }
 
@@ -712,8 +751,8 @@ function galleryFilename(title, index, item) {
 async function buildProxiedUrl(item, ctx) {
   const { backend } = await getSettings();
   const params = new URLSearchParams({ url: item.url });
-  if (ctx?.referer) params.set("referer", ctx.referer);
-  if (ctx?.cookies) params.set("cookies", ctx.cookies);
+  const itemReferer = item.headers?.Referer || item.headers?.referer || ctx?.referer || "";
+  if (itemReferer) params.set("referer", itemReferer);
   // Pass an ext-aware suggested filename so the proxy can set
   // Content-Disposition. The path-folder part of galleryFilename has to be
   // dropped here because Content-Disposition can't contain a directory.
@@ -726,11 +765,23 @@ async function downloadGalleryItem(title, index, item, ctx) {
   const sourceUrl = item.kind === "paired" ? (item.videoUrl || item.url) : item.url;
   if (!sourceUrl) throw new Error(`gallery item ${index} has no URL`);
 
+  const hasReplayHeaders = Boolean(item.headers && Object.keys(item.headers).length);
+  const canTryDirect = !ctx?.cookies && !hasReplayHeaders && !PROXY_REQUIRED_RE.test(sourceUrl);
+  if (canTryDirect) {
+    try {
+      const check = await preflightDirectUrl(sourceUrl);
+      if (!check.ok) throw new Error(check.error);
+      return chromeDownload(sourceUrl, filename);
+    } catch (e) {
+      debugWarn(`[fcdl] gallery item ${index} direct failed, falling back to proxy:`, e?.message || e);
+    }
+  }
+
   const proxied = await buildProxiedUrl(
     { ...item, url: sourceUrl },
     { ...(ctx || {}), filename },
   );
-  return chromeDownload(proxied, filename);
+  return chromeDownload(proxied, filename, cookieHeaderList(ctx?.cookies));
 }
 
 async function downloadGallery(tabId, pageUrl, title, items) {
@@ -747,7 +798,7 @@ async function downloadGallery(tabId, pageUrl, title, items) {
       started++;
     } catch (e) {
       failed++;
-      console.warn(`[fcdl] gallery item ${i} failed:`, e);
+      debugWarn(`[fcdl] gallery item ${i} failed:`, e);
     }
     // Tiny gap so chrome.downloads doesn't queue them as one batch and so
     // the user's Downloads UI doesn't look like a single concurrent storm.
@@ -768,7 +819,7 @@ async function downloadMany(tabId, items) {
       failed++;
       const error = String(e?.message || e);
       errors.push({ index: i, error });
-      console.warn(`[fcdl] selected item ${i} failed:`, e);
+      debugWarn(`[fcdl] selected item ${i} failed:`, e);
     }
     await new Promise((r) => setTimeout(r, 120));
   }
@@ -796,12 +847,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
     if (msg.type === "fcdl:helper_status") {
-      sendResponse({ ok: true, ready: await fetchLocalHelperHealth(1200) });
+      const health = await fetchLocalHelperInfo(1200);
+      sendResponse({ ok: true, ready: Boolean(health?.ok), health });
       return;
     }
     if (msg.type === "fcdl:helper_start") {
       await launchLocalCompanion();
-      sendResponse({ ok: true, ready: await waitForLocalHelper(10000) });
+      const ready = await waitForLocalHelper(10000);
+      sendResponse({ ok: true, ready, health: ready ? await fetchLocalHelperInfo(2500) : null });
+      return;
+    }
+    if (msg.type === "fcdl:helper_ensure_tools") {
+      sendResponse(await ensureLocalHelperTools());
       return;
     }
     if (msg.type === "fcdl:detected") {
@@ -819,13 +876,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const t0 = Date.now();
       try {
         const cookies = await cookieHeaderFor(msg.referer || msg.pageUrl);
-        console.log("[fcdl] extract →", msg.pageUrl, "cookies:", cookies.length, "chars");
+        debugLog("[fcdl] extract →", msg.pageUrl, "cookies:", cookies.length, "chars");
         const info = await callExtract(msg.pageUrl, msg.referer || null, cookies || null);
-        console.log("[fcdl] extract ←", Date.now() - t0, "ms, kind=", info?.kind);
+        debugLog("[fcdl] extract ←", Date.now() - t0, "ms, kind=", info?.kind);
         sendResponse({ ok: true, info });
       } catch (e) {
         const elapsed = Date.now() - t0;
-        console.warn("[fcdl] extract failed in", elapsed, "ms:", e);
+        debugWarn("[fcdl] extract failed in", elapsed, "ms:", e);
         const error = String(e.message || e);
         if (/No extractor found for this URL and the page HTML contained no detectable media/i.test(error)) {
           preferRuntimeCapturedMedia(msg.tabId, msg.pageUrl);
@@ -860,7 +917,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const tab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : null;
         const pageUrl = msg.pageUrl || tab?.url || "";
         const cookies = await cookieHeaderFor(pageUrl);
-        const id = await downloadGalleryItem(msg.title, msg.index, msg.item, { referer: pageUrl, cookies });
+        const itemReferer = msg.item?.headers?.Referer || msg.item?.headers?.referer || pageUrl;
+        const id = await downloadGalleryItem(msg.title, msg.index, msg.item, { referer: itemReferer, cookies });
         sendResponse({ ok: true, downloadId: id });
       } catch (e) {
         sendResponse({ ok: false, error: String(e.message || e) });

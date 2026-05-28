@@ -24,8 +24,9 @@ GET http://127.0.0.1:8765/health
 GET http://127.0.0.1:8765/youtube-hd?url=<youtube page url>
 ```
 
-The helper runs yt-dlp, uses ffmpeg from `imageio-ffmpeg`, muxes the best
-MP4 video/audio up to 1080p, and returns a real MP4 response to the browser.
+The helper runs yt-dlp, resolves ffmpeg from `FCDL_FFMPEG_EXE`, PATH, or a
+first-use cache, muxes the best MP4 video/audio up to 1080p, and returns a
+real MP4 response to the browser.
 
 For development:
 
@@ -52,8 +53,9 @@ installation is more browser-specific and harder to support at the start.
 
 The Electron app lives in `desktop-companion/`. It wraps the local helper and
 exposes start/stop/status UI. Public builds now package the helper as a native
-PyInstaller executable with pinned `yt-dlp` and `imageio-ffmpeg`, so users do
-not need Python setup.
+PyInstaller executable with pinned `yt-dlp`, so users do not need Python setup.
+ffmpeg is downloaded and cached the first time the helper needs to mux a
+download, unless a system or explicitly configured ffmpeg is already available.
 
 ## Target Flow
 
