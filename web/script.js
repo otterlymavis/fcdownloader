@@ -274,6 +274,50 @@ function fmtDuration(seconds) {
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
+function formatDimensions(width, height) {
+  const w = Number(width || 0);
+  const h = Number(height || 0);
+  if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) return `${w} x ${h}`;
+  if (Number.isFinite(h) && h > 0) return `${h}p`;
+  return "";
+}
+
+function mediaResolution(item = {}) {
+  const direct = formatDimensions(item.width, item.height);
+  if (direct) return direct;
+
+  const selectedFormat = Array.isArray(item.formats)
+    ? item.formats.find((format) => String(format.id || format.formatId || "") === String(item.formatId || ""))
+    : null;
+  const selected = formatDimensions(selectedFormat?.width, selectedFormat?.height);
+  if (selected) return selected;
+
+  const bestFormat = Array.isArray(item.formats)
+    ? item.formats
+        .filter((format) => format?.width || format?.height)
+        .sort((a, b) => (Number(b.height || 0) - Number(a.height || 0)) || (Number(b.width || 0) - Number(a.width || 0)))[0]
+    : null;
+  const best = formatDimensions(bestFormat?.width, bestFormat?.height);
+  if (best) return best;
+
+  const label = String(item.label || "");
+  if (/(?:\d{3,4}p|4k|8k)/i.test(label)) return label.match(/(?:\d{3,4}p|4k|8k)/i)[0];
+
+  const url = String(item.url || item.videoUrl || "");
+  const urlDimensions = url.match(/(?:^|[\/_-])(\d{3,5})x(\d{3,5})(?:[\/_.-]|$)/i);
+  if (urlDimensions) return `${urlDimensions[1]} x ${urlDimensions[2]}`;
+  try {
+    const params = new URL(url).searchParams;
+    const fromParams = formatDimensions(
+      params.get("width") || params.get("w"),
+      params.get("height") || params.get("h"),
+    );
+    if (fromParams) return fromParams;
+  } catch {}
+
+  return item.kind === "audio" ? "Audio only" : "";
+}
+
 async function extract(pageUrl, referer, cookies, pageHtml, mediaHints) {
   const backend = getBackend();
   if (!backend) {
@@ -632,6 +676,7 @@ function renderSingleResult(resolved, info, url) {
 
   const details = [];
   if (info.label) details.push(info.label);
+  details.push(mediaResolution(info));
   if (info.duration) details.push(fmtDuration(info.duration));
   if (info.kind) details.push(info.kind);
   metaEl.textContent = details.join(" - ");
@@ -701,6 +746,7 @@ function renderGalleryResult(resolved, info, url, referer, cookies) {
 
     const meta = [
       entry.item.ext ? entry.item.ext.toUpperCase() : entry.item.kind,
+      mediaResolution(entry.item),
       entry.item.duration ? fmtDuration(entry.item.duration) : "",
     ].filter(Boolean).join(" - ");
 

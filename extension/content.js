@@ -110,10 +110,13 @@
     document.querySelectorAll("video, audio, video source, audio source").forEach((el) => {
       const src = el.currentSrc || el.src || el.getAttribute("src") || "";
       if (!src || src.startsWith("blob:") || src.startsWith("data:")) return;
+      const mediaEl = el.closest?.("video,audio") || el;
       found.push({
         url: src,
         kind: src.includes(".m3u8") ? "hls" : src.includes(".mpd") ? "dash" : el.tagName === "AUDIO" ? "audio" : "direct",
         source: "video-tag",
+        width: mediaEl.videoWidth || undefined,
+        height: mediaEl.videoHeight || undefined,
       });
     });
     return found;
@@ -127,7 +130,13 @@
       if (!src || src.startsWith("data:") || src.startsWith("blob:")) return;
       if (!/^https?:\/\//i.test(src)) return;
       if (/(?:favicon|apple-touch-icon|sprite|logo|placeholder|blank|pixel|tracking)/i.test(src)) return;
-      found.push({ url: src, kind: "image", source: "image-tag" });
+      found.push({
+        url: src,
+        kind: "image",
+        source: "image-tag",
+        width: el.naturalWidth || undefined,
+        height: el.naturalHeight || undefined,
+      });
     });
     return found;
   }
@@ -234,6 +243,8 @@
         kind: "direct",
         source: "yt-innertube-android",
         label: muxed360.qualityLabel || "360p",
+        width: muxed360.width,
+        height: muxed360.height,
         title: document.title,
         pageUrl: location.href,
         referer: "https://www.youtube.com/",

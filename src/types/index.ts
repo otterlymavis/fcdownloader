@@ -19,6 +19,7 @@ export interface FormatOption {
   protocol?: string;
   width?: number;
   height?: number;
+  resolution?: string;
   fps?: number;
   vcodec?: string;
   acodec?: string;

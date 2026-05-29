@@ -1,4 +1,4 @@
-import { DetectedMedia } from '../types';
+import { DetectedMedia, FormatOption } from '../types';
 
 const SOURCE_NAMES: Array<[RegExp, string]> = [
   [/video\.twimg\.com|twimg\.com/i, 'Twitter'],
@@ -113,19 +113,32 @@ function formatDimensions(width?: number, height?: number): string | null {
   return null;
 }
 
+export function getFormatResolution(format: FormatOption): string | null {
+  const dimensions = formatDimensions(format.width, format.height);
+  if (dimensions) return dimensions;
+
+  if (format.resolution && format.resolution !== 'audio only') return format.resolution;
+
+  const labelResolution = format.label?.match(/(?:\d{3,4}p|4k|8k|\d{3,5}x\d{3,5})/i)?.[0];
+  if (labelResolution) return labelResolution;
+
+  return format.vcodec === 'none' ? 'Audio only' : null;
+}
+
 export function getMediaResolution(item: DetectedMedia): string | null {
   const direct = formatDimensions(item.width, item.height);
   if (direct) return direct;
 
   const selectedFormat = item.availableFormats?.find((format) => format.id === item.formatId);
-  const selected = formatDimensions(selectedFormat?.width, selectedFormat?.height);
-  if (selected) return selected;
+  if (selectedFormat) {
+    const selected = getFormatResolution(selectedFormat);
+    if (selected) return selected;
+  }
 
   const bestFormat = item.availableFormats
     ?.filter((format) => format.width || format.height)
     .sort((a, b) => (b.height ?? 0) - (a.height ?? 0) || (b.width ?? 0) - (a.width ?? 0))[0];
-  const best = formatDimensions(bestFormat?.width, bestFormat?.height);
-  if (best) return best;
+  if (bestFormat) return getFormatResolution(bestFormat);
 
   const quality = getQuality(item.url, item.label);
   if (quality && /(?:\d{3,4}p|4k|8k)/i.test(quality)) return quality;

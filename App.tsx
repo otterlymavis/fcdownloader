@@ -41,6 +41,7 @@ import {
 } from './src/theme/appTheme';
 import {
   formatBytes,
+  getFormatResolution,
   getInitial,
   getMediaFormat,
   getMediaKind,
@@ -70,9 +71,10 @@ import {
 type Tab = 'home' | 'browser' | 'library' | 'bookmarks';
 
 function formatOptionLabel(format: NonNullable<DetectedMedia['availableFormats']>[number]): string {
+  const resolution = getFormatResolution(format);
   const parts = [
-    format.label,
-    format.height ? `${format.height}p` : undefined,
+    format.label && format.label !== resolution ? format.label : undefined,
+    resolution,
     format.ext?.toUpperCase(),
     format.vcodec && format.vcodec !== 'none' ? format.vcodec : undefined,
     format.acodec && format.acodec !== 'none' ? format.acodec : undefined,

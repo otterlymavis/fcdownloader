@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FCDownloader",
-  "version": "1.5.8",
+  "version": "1.5.9",
   "description": "Save media you own, control, or have permission to access from supported websites.",
   "permissions": [
     "downloads",

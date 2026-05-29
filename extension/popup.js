@@ -94,6 +94,56 @@ function describeItem(item) {
   return h || "Media";
 }
 
+function formatDimensions(width, height) {
+  const w = Number(width || 0);
+  const h = Number(height || 0);
+  if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) return `${w} x ${h}`;
+  if (Number.isFinite(h) && h > 0) return `${h}p`;
+  return "";
+}
+
+function mediaResolution(item = {}) {
+  const direct = formatDimensions(item.width, item.height);
+  if (direct) return direct;
+
+  const selectedFormat = Array.isArray(item.formats)
+    ? item.formats.find((format) => String(format.id || format.formatId || "") === String(item.formatId || ""))
+    : null;
+  const selected = formatDimensions(selectedFormat?.width, selectedFormat?.height);
+  if (selected) return selected;
+
+  const bestFormat = Array.isArray(item.formats)
+    ? item.formats
+        .filter((format) => format?.width || format?.height)
+        .sort((a, b) => (Number(b.height || 0) - Number(a.height || 0)) || (Number(b.width || 0) - Number(a.width || 0)))[0]
+    : null;
+  const best = formatDimensions(bestFormat?.width, bestFormat?.height);
+  if (best) return best;
+
+  const label = String(item.label || "");
+  if (/(?:\d{3,4}p|4k|8k)/i.test(label)) return label.match(/(?:\d{3,4}p|4k|8k)/i)[0];
+
+  const url = String(item.url || item.videoUrl || "");
+  const urlDimensions = url.match(/(?:^|[\/_-])(\d{3,5})x(\d{3,5})(?:[\/_.-]|$)/i);
+  if (urlDimensions) return `${urlDimensions[1]} x ${urlDimensions[2]}`;
+  try {
+    const params = new URL(url).searchParams;
+    const fromParams = formatDimensions(
+      params.get("width") || params.get("w"),
+      params.get("height") || params.get("h"),
+    );
+    if (fromParams) return fromParams;
+  } catch {}
+
+  return item.kind === "audio" ? "Audio only" : "";
+}
+
+function itemMeta(item) {
+  return [describeItem(item), mediaResolution(item)]
+    .filter((part, index, parts) => part && parts.indexOf(part) === index)
+    .join(" - ");
+}
+
 function titleOf(item, fallback) {
   return item.title || fallback || describeItem(item) || "Media";
 }
@@ -217,7 +267,7 @@ function render(items) {
 
   // Primary card
   primaryTitle.textContent = titleOf(first, hostname(currentPageUrl));
-  primaryMeta.textContent  = describeItem(first);
+  primaryMeta.textContent  = itemMeta(first);
   primaryBtn.textContent   = "Download";
   primaryBtn.disabled      = false;
   primaryBtn.onclick       = () => downloadItem(first);
@@ -247,7 +297,7 @@ function render(items) {
       </label>
       <div class="row-meta">
         <div class="row-title">${escapeHtml(titleOf(item, hostname(item.url)))}${idx === 0 ? ' <span class="best-badge">Best</span>' : ""}</div>
-        <div class="row-sub">${escapeHtml(describeItem(item))}</div>
+        <div class="row-sub">${escapeHtml(itemMeta(item))}</div>
       </div>
       <button type="button">Save</button>
     `;
@@ -454,11 +504,15 @@ extractBtn.addEventListener("click", async () => {
       url: isYtdlStream ? currentPageUrl : (info.kind === "paired" ? info.videoUrl : info.url),
       title: info.title,
       label: isYtdlStream ? "HD (local helper)" : info.label,
+      width: info.width,
+      height: info.height,
       ext: "mp4",
       kind: isYtdlStream ? "embed" : info.kind,
       source: isYtdlStream ? "youtube-hd-local" : "backend",
       backendRouted: !isYtdlStream,
       pageUrl: currentPageUrl,
+      formatId: info.formatId,
+      formats: info.formats,
     };
     await sendMessage({
       type: "fcdl:detected",
@@ -537,7 +591,7 @@ function renderGallery(info) {
     li.innerHTML = `
       <div class="row-meta">
         <div class="row-title">${escapeHtml(label)} ${idx + 1}</div>
-        <div class="row-sub">${escapeHtml((it.ext || "").toUpperCase() || it.kind)}</div>
+        <div class="row-sub">${escapeHtml([(it.ext || "").toUpperCase() || it.kind, mediaResolution(it)].filter(Boolean).join(" - "))}</div>
       </div>
       <button type="button">Save</button>
     `;
