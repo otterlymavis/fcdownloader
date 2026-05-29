@@ -1,4 +1,4 @@
-// Popup — show one prominent media item, hide the rest behind a collapsed
+// Popup - show one prominent media item, hide the rest behind a collapsed
 // "Show other media" section. Matches the simpler "one obvious action"
 // UX of the web app.
 
@@ -33,7 +33,8 @@ let waitingForCapturedMedia = false;
 let currentVisibleItems = [];
 let selectedItemKeys = new Set();
 
-// ── Helpers ────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Helpers
 
 function sendMessage(message, timeoutMs = 30000) {
   return new Promise((resolve) => {
@@ -84,12 +85,12 @@ function escapeHtml(s) {
 function describeItem(item) {
   // Friendly human label: prefer a quality/format hint, else the host.
   if (item.label) return item.label;
-  if (item.kind === "image") return `Image${hostname(item.url) ? ` Â· ${hostname(item.url)}` : ""}`;
-  if (item.kind === "audio") return `Audio${hostname(item.url) ? ` Â· ${hostname(item.url)}` : ""}`;
+  if (item.kind === "image") return `Image${hostname(item.url) ? ` - ${hostname(item.url)}` : ""}`;
+  if (item.kind === "audio") return `Audio${hostname(item.url) ? ` - ${hostname(item.url)}` : ""}`;
   if (item.kind === "embed" || item.source === "iframe") return "Embedded video";
   const h = hostname(item.url);
-  if (item.kind === "hls")  return `HLS stream${h ? ` · ${h}` : ""}`;
-  if (item.kind === "dash") return `DASH stream${h ? ` · ${h}` : ""}`;
+  if (item.kind === "hls")  return `HLS stream${h ? ` - ${h}` : ""}`;
+  if (item.kind === "dash") return `DASH stream${h ? ` - ${h}` : ""}`;
   return h || "Media";
 }
 
@@ -196,7 +197,8 @@ function helperStatusText(ready, health) {
   return toolBits ? `Companion ready: HD enabled (${toolBits} tools)` : "Companion ready: HD enabled";
 }
 
-// ── Rendering ──────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Rendering
 
 let lastItemsKey = "";
 
@@ -222,7 +224,7 @@ function render(items) {
   primaryEl.hidden = false;
   emptyEl.hidden   = true;
 
-  // Optional "more media" section — only when there's >1, and only show
+  // Optional "more media" section: only when there's >1, and only show
   // up to 5 extras so it never feels like a developer list.
   if (rest.length === 0) {
     moreEl.hidden = true;
@@ -304,7 +306,8 @@ function refresh() {
   });
 }
 
-// ── Init ───────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Init
 
 (async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -327,7 +330,7 @@ function refresh() {
     return;
   }
 
-  // First-run gate — only triggers when neither storage NOR the build-time
+  // First-run gate: only triggers when neither storage NOR the build-time
   // default has a backend URL (i.e. someone built from source without
   // setting EXTENSION_DEFAULT_BACKEND). Public-distribution builds bake in
   // the URL and never hit this branch.
@@ -346,7 +349,7 @@ function refresh() {
           if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
         };
       }
-      return;  // skip the refresh loop — nothing to fetch
+      return;  // skip the refresh loop: nothing to fetch
     }
   } catch {}
 
@@ -382,7 +385,8 @@ if (helperTools) {
   });
 }
 
-// ── "Find media" fallback — only shown in empty state ─────────────────
+// ---------------------------------------------------------------------------
+// "Find media" fallback: only shown in empty state
 
 if (selectAllBtn) {
   selectAllBtn.addEventListener("click", () => {
@@ -402,7 +406,7 @@ if (downloadSelectedBtn) {
 
 extractBtn.addEventListener("click", async () => {
   extractBtn.disabled = true;
-  setStatus("Looking for media...��");
+  setStatus("Looking for media...");
   try {
     const resp = await sendMessage({
       type: "fcdl:extract",
@@ -470,7 +474,8 @@ extractBtn.addEventListener("click", async () => {
   }
 });
 
-// ── Gallery rendering ──────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Gallery rendering
 //
 // Carousels (Instagram, Reddit, Threads) come back from /extract as
 // { kind: "gallery", items: [{ url, kind: "image"|"direct"|..., ext, title }] }.
@@ -486,7 +491,7 @@ function describeGallery(items) {
   const parts = [];
   if (photos) parts.push(`${photos} photo${photos === 1 ? "" : "s"}`);
   if (videos) parts.push(`${videos} video${videos === 1 ? "" : "s"}`);
-  return parts.join(" · ") || `${items.length} items`;
+  return parts.join(" - ") || `${items.length} items`;
 }
 
 function renderGallery(info) {
@@ -496,7 +501,7 @@ function renderGallery(info) {
   primaryBtn.textContent   = `Save all ${items.length}`;
   primaryBtn.onclick = async () => {
     primaryBtn.disabled = true;
-    setStatus(`Downloading 0 of ${items.length}…`);
+    setStatus(`Downloading 0 of ${items.length}...`);
     const resp = await sendMessage({
       type: "fcdl:download_gallery",
       tabId: currentTabId,
@@ -520,7 +525,7 @@ function renderGallery(info) {
   primaryEl.hidden = false;
   emptyEl.hidden   = true;
 
-  // Per-item list — collapsed by default
+  // Per-item list: collapsed by default
   moreEl.hidden = false;
   if (bulkActions) bulkActions.hidden = true;
   selectedItemKeys = new Set();
@@ -551,11 +556,12 @@ function renderGallery(info) {
   });
 }
 
-// ── Per-item Download ──────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Per-item Download
 
 async function downloadItem(item) {
   const itemWithDefaults = { pageUrl: currentPageUrl, ...item };
-  setStatus("Starting download…");
+  setStatus("Starting download...");
   const resp = await sendMessage(
     { type: "fcdl:download", tabId: currentTabId, item: itemWithDefaults },
     25000,
@@ -567,7 +573,8 @@ async function downloadItem(item) {
   setStatus("Download started. Check your browser's Downloads.", "success");
 }
 
-// ── Settings ───────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Settings
 
 async function downloadSelectedItems() {
   const items = currentVisibleItems
