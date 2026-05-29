@@ -37,6 +37,45 @@ from utils import (
 )
 
 
+def _decode_html_body(body: bytes, headers: Any = None) -> str:
+    """Decode fetched HTML using the site's declared charset, with JP fallbacks."""
+    header_charset = ""
+    if headers is not None:
+        content_type = ""
+        try:
+            content_type = headers.get("Content-Type", "") or ""
+        except Exception:
+            content_type = ""
+        m = re.search(r"charset\s*=\s*([A-Za-z0-9._-]+)", content_type, re.I)
+        if m:
+            header_charset = m.group(1)
+
+    head = body[:4096].decode("ascii", errors="ignore")
+    meta_charset = ""
+    m = re.search(
+        r"<meta\s+[^>]*charset\s*=\s*['\"]?\s*([A-Za-z0-9._-]+)",
+        head,
+        re.I,
+    )
+    if m:
+        meta_charset = m.group(1)
+
+    encodings: list[str] = []
+    for enc in (header_charset, meta_charset, "utf-8", "cp932", "shift_jis", "euc_jp"):
+        if enc and enc.lower() not in {e.lower() for e in encodings}:
+            encodings.append(enc)
+
+    for enc in encodings:
+        try:
+            text = body.decode(enc)
+        except (LookupError, UnicodeDecodeError):
+            continue
+        if text.count("\ufffd") <= max(2, len(text) // 1000):
+            return text
+
+    return body.decode(encodings[0] if encodings else "utf-8", errors="replace")
+
+
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
 _WEIBO_DESKTOP_UA = (
@@ -204,7 +243,7 @@ def extract_meta_page(
             if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
                 import gzip
                 body = gzip.decompress(body)
-            html_text = body.decode("utf-8", errors="replace")
+            html_text = _decode_html_body(body, resp.headers)
     except Exception as exc:  # noqa: BLE001
         print(f"[{label}] fetch failed for {page_url}: {str(exc)[:200]}")
         return None
@@ -365,7 +404,7 @@ def extract_modelpress(page_url: str, cookies: str | None) -> dict[str, Any] | N
                 if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
                     import gzip
                     body = gzip.decompress(body)
-                return body.decode("utf-8", errors="replace")
+                return _decode_html_body(body, resp.headers)
         except Exception as exc:  # noqa: BLE001
             print(f"[modelpress] fetch failed for {url}: {str(exc)[:200]}")
             return None
@@ -570,7 +609,7 @@ def extract_naver_blog(page_url: str, cookies: str | None) -> dict[str, Any] | N
                 if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
                     import gzip
                     body = gzip.decompress(body)
-                return body.decode("utf-8", errors="replace")
+                return _decode_html_body(body, resp.headers)
         except Exception as exc:  # noqa: BLE001
             print(f"[naver-blog] fetch failed for {url}: {str(exc)[:200]}")
             return None
@@ -712,6 +751,7 @@ def _normalize_curated_media_url(url: str) -> str:
 def _oricon_full_image_url(url: str) -> str:
     """Normalize Oricon photo CDN URLs toward their largest static asset."""
     url = html.unescape(url).strip()
+    url = re.sub(r"/detail/img320/", "/detail/img660/", url, flags=re.I)
     url = re.sub(r"([?&])(?:width|height|w|h)=\d+", r"\1", url)
     url = re.sub(r"[?&](?:resize|fit|crop|quality|auto|format)=[^&#]+", "", url)
     url = re.sub(r"[?&]$", "", url).rstrip("?&")
@@ -719,6 +759,31 @@ def _oricon_full_image_url(url: str) -> str:
     url = re.sub(r"([_-])(?:s|m|small|thumb)(?=\.(?:jpe?g|png|webp|gif|avif)(?:[?#]|$))", "", url, flags=re.I)
     url = re.sub(r"([_-])+\.(jpe?g|png|webp|gif|avif)([?#].*)?$", r".\2\3", url, flags=re.I)
     return url
+
+
+def _oricon_image_key(url: str) -> str:
+    clean = re.sub(r"\?.*$", "", _oricon_full_image_url(url))
+    clean = re.sub(
+        r"_(?:p_)?(?:o|l|s|m|thumb|thumbnail)_\d+(?=\.(?:jpe?g|png|webp|gif|avif)$)",
+        "",
+        clean,
+        flags=re.I,
+    )
+    clean = re.sub(r"/detail/img\d+/", "/detail/img/", clean, flags=re.I)
+    return clean
+
+
+def _oricon_quality_score(url: str) -> int:
+    lower = url.lower()
+    if re.search(r"_(?:p_)?o_\d+\.(?:jpe?g|png|webp|gif|avif)(?:[?#]|$)", lower):
+        return 1000
+    if re.search(r"_(?:p_)?l_\d+\.(?:jpe?g|png|webp|gif|avif)(?:[?#]|$)", lower):
+        return 700
+    if "/detail/img660/" in lower:
+        return 650
+    if re.search(r"(?:thumb|thumbnail|small|/detail/img320/|_(?:p_)?s_\d+\.)", lower):
+        return 100
+    return 500
 
 
 def _extract_oricon_gallery(
@@ -779,7 +844,7 @@ def _extract_oricon_gallery(
         return pages[:80]
 
     image_re = re.compile(
-        r'https?://contents\.oricon\.co\.jp/upimg/[^"\'<>\s\\]+?\.(?:jpg|jpeg|png|webp|gif|avif)(?:\?[^"\'<>\s\\]*)?',
+        r'https?://contents\.oricon\.co\.jp/(?:upimg|photo/img)/[^"\'<>\s\\]+?\.(?:jpg|jpeg|png|webp|gif|avif)(?:\?[^"\'<>\s\\]*)?',
         re.IGNORECASE,
     )
     attr_re = re.compile(
@@ -795,8 +860,8 @@ def _extract_oricon_gallery(
     thumb = _meta(("og:image", "twitter:image"), first_html)
     page_urls = _photo_pages(first_html) or [page_url]
 
-    found: list[tuple[str, str | None, str]] = []
-    seen: set[str] = set()
+    found: list[tuple[str, str | None, str, int]] = []
+    by_key: dict[str, int] = {}
 
     def _add(url: str, item_title: str | None, referer: str) -> None:
         url = _decode(url)
@@ -804,16 +869,21 @@ def _extract_oricon_gallery(
             url = "https:" + url
         elif url.startswith("/"):
             url = urllib.parse.urljoin(referer, url)
-        if "contents.oricon.co.jp/upimg/" not in url.lower():
+        lowered = url.lower()
+        if "contents.oricon.co.jp/upimg/" not in lowered and "contents.oricon.co.jp/photo/img/" not in lowered:
             return
         if not re.search(r"\.(?:jpg|jpeg|png|webp|gif|avif)(?:[?#]|$)", url, re.I):
             return
         full_url = _oricon_full_image_url(url)
-        dedup = re.sub(r"\?.*$", "", full_url)
-        if dedup in seen:
+        key = _oricon_image_key(full_url)
+        score = _oricon_quality_score(full_url)
+        existing_index = by_key.get(key)
+        if existing_index is None:
+            by_key[key] = len(found)
+            found.append((full_url, item_title, referer, score))
             return
-        seen.add(dedup)
-        found.append((full_url, item_title, referer))
+        if score > found[existing_index][3]:
+            found[existing_index] = (full_url, item_title, referer, score)
 
     def _scan(text: str, detail_url: str) -> None:
         item_title = _meta(("og:title", "twitter:title"), text)
@@ -831,12 +901,14 @@ def _extract_oricon_gallery(
         if detail_html:
             _scan(detail_html, detail_url)
 
+    found = [entry for entry in found if entry[3] >= 500]
+
     if not found:
         return None
 
     headers = {"User-Agent": _WEIBO_DESKTOP_UA}
     entries: list[dict[str, Any]] = []
-    for idx, (url, item_title, item_referer) in enumerate(found):
+    for idx, (url, item_title, item_referer, _score) in enumerate(found):
         ext = guess_ext_from_url(url) or "jpg"
         entries.append({
             "id": cache_key(url),
@@ -916,7 +988,7 @@ def extract_curated_site(
                 if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
                     import gzip
                     body = gzip.decompress(body)
-                return body.decode("utf-8", errors="replace")
+                return _decode_html_body(body, resp.headers)
         except Exception as exc:  # noqa: BLE001
             print(f"[curated-site] fetch failed for {fetch_url}: {str(exc)[:200]}")
             return None

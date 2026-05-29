@@ -66,6 +66,7 @@ class ExtractRequest(BaseModel):
     referer: str | None = None
     cookies: str | None = None
     pageHtml: str | None = None
+    mediaHints: list[dict[str, Any]] | None = None
     proxy: str | None = None
     subtitles: bool = False
     subLangs: str = "en"
@@ -89,6 +90,7 @@ class DownloadRequest(BaseModel):
     embedChapters: bool = False
     concurrentFragments: int = 1
     proxy: str | None = None
+    headers: dict[str, str] | None = None
 
 
 class ProxyRequest(BaseModel):
@@ -96,6 +98,7 @@ class ProxyRequest(BaseModel):
     referer: str | None = None
     cookies: str | None = None
     filename: str | None = None
+    headers: dict[str, str] | None = None
 
 
 class PlaylistRequest(BaseModel):

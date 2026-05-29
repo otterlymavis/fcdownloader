@@ -23,6 +23,7 @@ const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i;
 const SERVER_ONLY_RE = /youtube\.com|youtu\.be|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.com|bilibili\.com|weibo\.com|weibo\.cn|weibocdn\.com|xiaohongshu\.com|xhslink\.com|xhscdn\.com|naver\.com|naver\.me|pstatic\.net|nicovideo\.jp|nico\.ms|niconico\.com|nicochannel\.jp|tver\.jp|tver\.co\.jp|abema\.tv|abema\.io|twitcasting\.tv|openrec\.tv|video\.fc2\.com|live\.fc2\.com|nhk\.or\.jp|nhk\.jp|cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp|fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp|video\.yahoo\.co\.jp|news\.yahoo\.co\.jp|ameblo\.jp|ameba\.jp|natalie\.mu|oricon\.co\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net/;
 const PAGE_HTML_RE = /(?:^|\.)(?:oricon\.co\.jp|news\.yahoo\.co\.jp|news\.naver\.com|n\.news\.naver\.com|m\.news\.naver\.com|entertain\.naver\.com|m\.entertain\.naver\.com|sports\.news\.naver\.com|m\.sports\.naver\.com|t\.bilibili\.com|bilibili\.com|ameblo\.jp|ameba\.jp|natalie\.mu|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net)$/i;
 const PROXY_REQUIRED_RE = /(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|weibocdn\.com|xhscdn\.com|bilivideo\.com|biliimg\.com|hdslb\.com|pstatic\.net|pximg\.net|yimg\.jp|kakaocdn\.net|daumcdn\.net|img-mdpr\.freetls\.fastly\.net)/i;
+const REPLAY_HEADER_ALLOW_RE = /^(accept|accept-language|origin|range|referer|user-agent)$/i;
 const PREFLIGHT_MEDIA_TYPES = [
   "video/",
   "image/",
@@ -66,6 +67,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 // ── Detected videos per tab ───────────────────────────────────────────────
 
 const tabState = new Map(); // tabId -> { url, pageUrl, items: [{url, kind, source, ...}] }
+const requestHeadersByUrl = new Map();
 
 function ensureTab(tabId, pageUrl) {
   let s = tabState.get(tabId);
@@ -163,6 +165,41 @@ function mediaKindForUrl(url) {
   return "direct";
 }
 
+function isConcreteMediaUrl(url) {
+  const u = String(url || "").toLowerCase().split("?")[0];
+  return /\.(?:mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac)(?:$|[?#])/.test(u);
+}
+
+function isConcreteStreamUrl(url) {
+  const u = String(url || "").toLowerCase().split("?")[0];
+  return u.endsWith(".m3u8") || u.endsWith(".mpd") || isConcreteMediaUrl(url);
+}
+
+function replayHeadersObject(headers = []) {
+  const out = {};
+  for (const h of headers || []) {
+    if (!h?.name || typeof h.value !== "string") continue;
+    if (!REPLAY_HEADER_ALLOW_RE.test(h.name)) continue;
+    out[h.name] = h.value;
+  }
+  return out;
+}
+
+function encodeReplayHeaders(headers = {}) {
+  const clean = {};
+  for (const [name, value] of Object.entries(headers || {})) {
+    if (!REPLAY_HEADER_ALLOW_RE.test(name)) continue;
+    if (typeof value !== "string" || !value) continue;
+    clean[name] = value;
+  }
+  const json = JSON.stringify(clean);
+  if (json === "{}") return "";
+  return btoa(unescape(encodeURIComponent(json)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
 function isLikelyThumbnailUrl(url) {
   const u = String(url || "").toLowerCase();
   if (!IMAGE_EXT_RE.test(u)) return false;
@@ -207,6 +244,33 @@ function updateBadge(tabId, count) {
 // try/catch + null check because the API may be missing if the webRequest
 // permission isn't granted (or the user is on a fork that strips it).
 try {
+  if (chrome.webRequest?.onBeforeSendHeaders) {
+    const capture = (details) => {
+      if (!details.tabId || details.tabId < 0 || !details.url || !isLikelyMedia(details.url)) return;
+      const headers = replayHeadersObject(details.requestHeaders || []);
+      if (!Object.keys(headers).length) return;
+      requestHeadersByUrl.set(details.url, { headers, ts: Date.now() });
+      if (requestHeadersByUrl.size > 300) {
+        const cutoff = Date.now() - 5 * 60_000;
+        for (const [key, value] of requestHeadersByUrl) {
+          if (value.ts < cutoff || requestHeadersByUrl.size > 240) requestHeadersByUrl.delete(key);
+        }
+      }
+    };
+    try {
+      chrome.webRequest.onBeforeSendHeaders.addListener(
+        capture,
+        { urls: ["<all_urls>"] },
+        ["requestHeaders", "extraHeaders"],
+      );
+    } catch {
+      chrome.webRequest.onBeforeSendHeaders.addListener(
+        capture,
+        { urls: ["<all_urls>"] },
+        ["requestHeaders"],
+      );
+    }
+  }
   if (chrome.webRequest?.onCompleted) {
     chrome.webRequest.onCompleted.addListener(
       (details) => {
@@ -217,10 +281,12 @@ try {
 
         chrome.tabs.get(details.tabId).then((tab) => {
           if (!tab?.url) return;
+          const replay = requestHeadersByUrl.get(u)?.headers || {};
           addItem(details.tabId, tab.url, {
             url: u,
             kind: mediaKindForUrl(u),
             source: "network",
+            headers: replay,
             mime: details.responseHeaders?.find((h) => /content-type/i.test(h.name))?.value || "",
           });
         }).catch(() => {});
@@ -303,7 +369,7 @@ async function getSettings() {
 
 // ── Backend extract ───────────────────────────────────────────────────────
 
-async function callExtract(pageUrl, referer, cookies, pageHtml) {
+async function callExtract(pageUrl, referer, cookies, pageHtml, mediaHints) {
   const { backend } = await getSettings();
   if (!backend) {
     throw new Error(
@@ -314,6 +380,7 @@ async function callExtract(pageUrl, referer, cookies, pageHtml) {
   if (referer) body.referer = referer;
   if (cookies) body.cookies = cookies;
   if (pageHtml) body.pageHtml = pageHtml;
+  if (Array.isArray(mediaHints) && mediaHints.length) body.mediaHints = mediaHints.slice(0, 20);
 
   // Hard-cap the request. yt-dlp retries + generic-extractor fallback take
   // up to ~20s on hard sites; anything longer is almost certainly a hang.
@@ -342,9 +409,11 @@ async function callExtract(pageUrl, referer, cookies, pageHtml) {
   }
 }
 
-function backendDownloadUrl(backend, pageUrl, referer) {
+function backendDownloadUrl(backend, pageUrl, referer, replayHeaders) {
   const p = new URLSearchParams({ url: pageUrl });
   if (referer) p.set("referer", referer);
+  const encodedHeaders = encodeReplayHeaders(replayHeaders);
+  if (encodedHeaders) p.set("headers", encodedHeaders);
   return `${backend}/download?${p.toString()}`;
 }
 
@@ -361,6 +430,20 @@ async function pageHtmlForTab(tabId, pageUrl) {
   } catch {
     return "";
   }
+}
+
+function mediaHintsForTab(tabId) {
+  const state = tabId != null ? tabState.get(tabId) : null;
+  return (state?.items || [])
+    .filter((item) => isConcreteStreamUrl(item.url || "") && item.source !== "backend")
+    .slice(0, 20)
+    .map((item) => ({
+      url: item.url,
+      kind: item.kind,
+      title: item.title,
+      referer: item.referer || item.pageUrl || state.pageUrl,
+      headers: item.headers || {},
+    }));
 }
 
 function cookieHeaderList(cookies) {
@@ -543,7 +626,7 @@ async function downloadItem(tabId, item) {
   });
 
   async function viaBackend(pageForBackend) {
-    const dlUrl = backendDownloadUrl(backend, pageForBackend, referer);
+    const dlUrl = backendDownloadUrl(backend, pageForBackend, referer, item.headers || null);
     const headers = cookieHeaderList(cookies);
     debugLog("[fcdl] → backend for", (pageForBackend || "").slice(0, 100), "cookies?", !!cookies);
     const check = await preflightBackendUrl(dlUrl, headers);
@@ -551,6 +634,17 @@ async function downloadItem(tabId, item) {
       throw new Error(`Backend: ${check.error}`);
     }
     return chromeDownload(dlUrl, suggestedFilename(item, urlForBackend, tabTitle), headers);
+  }
+
+  async function viaProxy(sourceUrl) {
+    const filename = suggestedFilename(item, downloadPageUrl, tabTitle);
+    const proxied = await buildProxiedUrl(
+      { ...item, url: sourceUrl },
+      { referer, cookies, filename },
+    );
+    const check = await preflightBackendUrl(proxied, cookieHeaderList(cookies));
+    if (!check.ok) throw new Error(`Proxy: ${check.error}`);
+    return chromeDownload(proxied, filename, cookieHeaderList(cookies));
   }
 
   // ytdl-stream proxy URL: download it directly without re-routing through /download.
@@ -599,6 +693,14 @@ async function downloadItem(tabId, item) {
     const message = "YouTube HD must be downloaded locally with yt-dlp + ffmpeg; server muxing returns empty files because Googlevideo URLs are IP-bound.";
     _notifyYtdlError("YouTube HD unavailable in extension", message);
     throw new Error(message);
+  }
+
+  const capturedConcreteMedia =
+    (isConcreteMediaUrl(item.url) || (item.kind === "direct" && isLikelyMedia(item.url || ""))) &&
+    (item.source === "network" || item.source === "video-tag" || item.source === "meta-json");
+  if (capturedConcreteMedia && (Object.keys(item.headers || {}).length || PROXY_REQUIRED_RE.test(item.url || "") || SERVER_ONLY_RE.test(item.url || ""))) {
+    debugLog("[fcdl] → proxy captured concrete media");
+    return viaProxy(item.url);
   }
 
   const backendStrategy = backendStrategyForItem(item, urlForBackend);
@@ -787,6 +889,8 @@ async function buildProxiedUrl(item, ctx) {
   const params = new URLSearchParams({ url: item.url });
   const itemReferer = item.headers?.Referer || item.headers?.referer || ctx?.referer || "";
   if (itemReferer) params.set("referer", itemReferer);
+  const encodedHeaders = encodeReplayHeaders(item.headers || {});
+  if (encodedHeaders) params.set("headers", encodedHeaders);
   // Pass an ext-aware suggested filename so the proxy can set
   // Content-Disposition. The path-folder part of galleryFilename has to be
   // dropped here because Content-Disposition can't contain a directory.
@@ -915,8 +1019,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       try {
         const cookies = await cookieHeaderFor(msg.referer || msg.pageUrl);
         const pageHtml = await pageHtmlForTab(msg.tabId, msg.pageUrl);
-        debugLog("[fcdl] extract →", msg.pageUrl, "cookies:", cookies.length, "chars", "html:", pageHtml.length, "chars");
-        const info = await callExtract(msg.pageUrl, msg.referer || null, cookies || null, pageHtml || null);
+        const mediaHints = mediaHintsForTab(msg.tabId);
+        debugLog("[fcdl] extract →", msg.pageUrl, "cookies:", cookies.length, "chars", "html:", pageHtml.length, "chars", "hints:", mediaHints.length);
+        const info = await callExtract(msg.pageUrl, msg.referer || null, cookies || null, pageHtml || null, mediaHints);
         debugLog("[fcdl] extract ←", Date.now() - t0, "ms, kind=", info?.kind);
         sendResponse({ ok: true, info });
       } catch (e) {

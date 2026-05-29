@@ -28,6 +28,7 @@ Endpoint summary:
 from __future__ import annotations
 
 import http.client
+import base64
 import hashlib
 import json
 import os
@@ -57,6 +58,7 @@ from yt_dlp.version import __version__ as YT_DLP_VERSION
 import auth
 import extractors
 import languages
+import registry
 import supervisor
 from config import (
     ALLOWED_ORIGINS,
@@ -369,6 +371,104 @@ _HEADERED_DIRECT_HOSTS = (
 
 _SINA_CDN_SUFFIXES = ("sinaimg.cn", "weibocdn.com")
 _DOH_CDN_SUFFIXES = _SINA_CDN_SUFFIXES + ("naver.net", "pstatic.net")
+_REPLAY_HEADER_ALLOW = {
+    "accept",
+    "accept-language",
+    "origin",
+    "range",
+    "referer",
+    "user-agent",
+}
+
+_MEDIA_HINT_HOST_RE = re.compile(
+    r"(?:\.m3u8|\.mpd|\.mp4|\.m4v|\.webm|\.mov|\.mp3|\.m4a|\.aac|\.wav|\.ogg|\.opus|\.flac)(?:[?#]|$)|"
+    r"(?:v\.redd\.it|cdninstagram\.com|fbcdn\.net|threadscdn\.com|bilivideo\.com|xhscdn\.com|"
+    r"kakaocdn\.net|daumcdn\.net|pstatic\.net|naver\.net|abema(?:tv)?\.akamaized\.net|"
+    r"brightcove\.net|boltdns\.net|bcovlive-a\.akamaihd\.net)",
+    re.I,
+)
+
+
+def _decode_replay_headers(encoded: str | None) -> dict[str, str]:
+    if not encoded:
+        return {}
+    raw = safe_text(encoded).strip()
+    if not raw or len(raw) > 16_384:
+        return {}
+    try:
+        padded = raw + ("=" * (-len(raw) % 4))
+        data = base64.urlsafe_b64decode(padded.encode("ascii"))
+        parsed = json.loads(data.decode("utf-8", errors="strict"))
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    allowed: dict[str, str] = {}
+    for key, value in parsed.items():
+        name = safe_text(key).strip()
+        if name.lower() not in _REPLAY_HEADER_ALLOW:
+            continue
+        allowed[name] = safe_text(value)
+    return safe_headers(allowed)
+
+
+def _direct_media_url_kind(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    path = parsed.path.lower()
+    if looks_like_hls(url, None) or path.endswith(".m3u8"):
+        return "hls"
+    if path.endswith((".mp4", ".m4v", ".webm", ".mov", ".mp3", ".m4a", ".aac", ".wav", ".ogg", ".opus", ".flac")):
+        return "direct"
+    return ""
+
+
+def _info_from_media_hints(page_url: str, hints: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in hints or []:
+        if not isinstance(raw, dict):
+            continue
+        url = normalize_url(safe_text(raw.get("url")))
+        if not url.startswith(("http://", "https://")):
+            continue
+        if not _MEDIA_HINT_HOST_RE.search(url):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        kind = safe_text(raw.get("kind")).lower() or _direct_media_url_kind(url) or "direct"
+        if kind == "dash":
+            protocol = "http_dash_segments"
+        elif kind == "hls" or looks_like_hls(url):
+            protocol = "m3u8"
+        else:
+            protocol = "https"
+        headers = safe_headers(raw.get("headers") or {})
+        if raw.get("referer") and "Referer" not in headers:
+            headers["Referer"] = safe_text(raw.get("referer"))
+        entries.append({
+            "id": cache_key(url),
+            "title": safe_text(raw.get("title")) or "Captured media",
+            "url": url,
+            "webpage_url": page_url,
+            "ext": guess_ext_from_url(url) or ("mp4" if kind != "audio" else "m4a"),
+            "protocol": protocol,
+            "http_headers": headers,
+            "extractor": "browser-captured",
+        })
+        if len(entries) >= 20:
+            break
+    if not entries:
+        return None
+    if len(entries) == 1:
+        return entries[0]
+    return {
+        "_type": "playlist",
+        "title": "Captured media",
+        "webpage_url": page_url,
+        "extractor": "browser-captured",
+        "entries": entries,
+    }
 
 
 def _needs_headered_direct_stream(
@@ -1043,6 +1143,8 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
         if req.pageHtml:
             info = extractors.extract_curated_site(req.pageUrl, req.cookies, page_html=req.pageHtml)
         if not info:
+            info = _info_from_media_hints(req.pageUrl, req.mediaHints)
+        if not info:
             info = run_extraction(
                 req.pageUrl,
                 referer=req.referer,
@@ -1128,8 +1230,33 @@ def download(
     x_fcdl_cookies: str | None = Header(None, alias="X-FCDL-Cookies"),
     audioOnly: bool = Query(False),
     proxy: str | None = Query(None),
+    headers: str | None = Query(None, description="Base64url JSON request headers captured by the browser"),
 ) -> StreamingResponse:
     cookies = safe_text(x_fcdl_cookies or cookies) if (x_fcdl_cookies or cookies) else None
+    replay_headers = _decode_replay_headers(headers)
+    direct_kind = _direct_media_url_kind(url)
+    if direct_kind and replay_headers:
+        video_id = cache_key(url)
+        filename = _safe_filename(None, video_id)
+        out_headers = {
+            "Content-Disposition": content_disposition(filename, video_id),
+            "Cache-Control": "no-store",
+        }
+        request_headers = {
+            **_download_headers(referer, cookies, page_url=url),
+            **replay_headers,
+        }
+        if cookies:
+            request_headers["Cookie"] = safe_text(cookies)
+        rid = uuid.uuid4().hex[:12]
+        if direct_kind == "hls":
+            return StreamingResponse(
+                _ffmpeg_stream("", None, url, request_headers, request_id=rid),
+                media_type="video/mp4",
+                headers=out_headers,
+            )
+        return _direct_media_stream(url, request_headers, out_headers)
+
     info = run_extraction(url, referer=referer, cookies=cookies, audio_only=audioOnly, proxy=proxy)
     response = _to_response(info)
     video_id = info.get("id") or cache_key(url)
@@ -1185,6 +1312,29 @@ def download(
 @app.post("/download")
 @limiter.limit(RATE_LIMIT)
 def download_post(request: Request, req: DownloadRequest) -> StreamingResponse:
+    direct_kind = _direct_media_url_kind(req.pageUrl)
+    if direct_kind and req.headers:
+        video_id = cache_key(req.pageUrl)
+        filename = _safe_filename(None, video_id)
+        headers = {
+            "Content-Disposition": content_disposition(filename, video_id),
+            "Cache-Control": "no-store",
+        }
+        request_headers = {
+            **_download_headers(req.referer, req.cookies, page_url=req.pageUrl),
+            **safe_headers(req.headers),
+        }
+        if req.cookies:
+            request_headers["Cookie"] = safe_text(req.cookies)
+        rid = uuid.uuid4().hex[:12]
+        if direct_kind == "hls":
+            return StreamingResponse(
+                _ffmpeg_stream("", None, req.pageUrl, request_headers, request_id=rid),
+                media_type="video/mp4",
+                headers=headers,
+            )
+        return _direct_media_stream(req.pageUrl, request_headers, headers)
+
     info = run_extraction_with_format(
         req.pageUrl, referer=req.referer, cookies=req.cookies, format_id=req.formatId,
         audio_only=req.audioOnly, subtitles=req.subtitles, sub_langs=req.subLangs,
@@ -1566,9 +1716,10 @@ def proxy(
     cookies: str | None = Query(None),
     x_fcdl_cookies: str | None = Header(None, alias="X-FCDL-Cookies"),
     filename: str | None = Query(None),
+    headers: str | None = Query(None, description="Base64url JSON request headers captured by the browser"),
 ) -> StreamingResponse:
     cookies = safe_text(x_fcdl_cookies or cookies) if (x_fcdl_cookies or cookies) else None
-    return _proxy_stream(url, referer, cookies, filename)
+    return _proxy_stream(url, referer, cookies, filename, _decode_replay_headers(headers))
 
 
 @app.post("/proxy")
@@ -1579,7 +1730,7 @@ def proxy_post(
     x_fcdl_cookies: str | None = Header(None, alias="X-FCDL-Cookies"),
 ) -> StreamingResponse:
     cookies = safe_text(x_fcdl_cookies or req.cookies) if (x_fcdl_cookies or req.cookies) else None
-    return _proxy_stream(req.url, req.referer, cookies, req.filename)
+    return _proxy_stream(req.url, req.referer, cookies, req.filename, safe_headers(req.headers or {}))
 
 
 def _proxy_stream(
@@ -1587,13 +1738,14 @@ def _proxy_stream(
     referer: str | None,
     cookies: str | None,
     filename: str | None,
+    replay_headers: dict[str, str] | None = None,
 ) -> StreamingResponse:
     url = normalize_url(url)
     referer = normalize_url(referer) if referer else None
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "url must be absolute http(s)")
 
-    headers = safe_headers(_default_proxy_headers(url, referer))
+    headers = safe_headers({**_default_proxy_headers(url, referer), **safe_headers(replay_headers or {})})
     if cookies:
         headers["Cookie"] = safe_header_value("Cookie", cookies)
 

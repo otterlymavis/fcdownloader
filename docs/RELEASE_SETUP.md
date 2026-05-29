@@ -94,9 +94,9 @@ For the web hub:
 
 ```powershell
 $env:EXTRACTOR_URL = "https://fcdownloader-extractor.fly.dev"
-$env:ANDROID_DOWNLOAD_URL = "https://github.com/otterlymavis/fcdownloader/releases/latest/download/fcdownloader-v1.5.6.apk"
+$env:ANDROID_DOWNLOAD_URL = "https://github.com/otterlymavis/fcdownloader/releases/latest/download/fcdownloader-v1.5.7.apk"
 $env:IOS_DOWNLOAD_URL = "https://testflight.apple.com/join/your-code"
-$env:EXTENSION_DOWNLOAD_URL = "https://github.com/otterlymavis/fcdownloader/releases/latest/download/fcdownloader-extension-v1.5.6.zip"
+$env:EXTENSION_DOWNLOAD_URL = "https://github.com/otterlymavis/fcdownloader/releases/latest/download/fcdownloader-extension-v1.5.7.zip"
 $env:HELPER_DOWNLOAD_URL = "https://github.com/otterlymavis/fcdownloader/releases/latest/download/FCDownloader%20Companion%20NoBrowser%20Go%20Setup%200.2.1.exe"
 $env:HELPER_CHECKSUMS_URL = "https://github.com/otterlymavis/fcdownloader/releases/latest/download/companion-artifacts.sha256"
 npm run bake:web

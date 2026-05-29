@@ -536,6 +536,53 @@ class TestCuratedSiteExtractor:
         ]
         assert info["entries"][1]["http_headers"]["Referer"] == "https://www.oricon.co.jp/news/2452025/photo/2/"
 
+    def test_oricon_shift_jis_and_full_size_preference(self, monkeypatch):
+        pages = {
+            "https://contents.oricon.co.jp/news/2452025/photo/1/": """
+              <html><head>
+                <meta charset="shift_jis">
+                <meta property="og:title" content="画像・写真 | 東京ニュース 1枚目">
+                <meta property="og:image" content="https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_sample_p_o_11111111.jpg">
+              </head><body>
+                <a href="/news/2452025/photo/2/">next</a>
+                <img src="https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_sample_p_l_22222222.jpg">
+                <img src="https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_sample_p_s_33333333.jpg">
+                <img src="https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_related_p_s_44444444.jpg">
+              </body></html>
+            """,
+            "https://contents.oricon.co.jp/news/2452025/photo/2/": """
+              <html><head>
+                <meta charset="shift_jis">
+                <meta property="og:title" content="画像・写真 | 東京ニュース 2枚目">
+                <meta property="og:image" content="https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_second_p_o_55555555.jpg">
+              </head><body>
+                <img src="https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_second_p_l_66666666.jpg">
+                <img src="https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_second_p_s_77777777.jpg">
+              </body></html>
+            """,
+        }
+
+        class FakeResponse:
+            headers = {"Content-Type": "text/html; charset=Shift_JIS"}
+            def __init__(self, body: str): self.body = body.encode("shift_jis")
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return self.body
+
+        def fake_urlopen(req, *args, **kwargs):
+            url = getattr(req, "full_url", str(req))
+            return FakeResponse(pages[url])
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        info = extractors.extract_curated_site("https://www.oricon.co.jp/news/2452025/photo/1/", None)
+        assert info is not None
+        assert info["title"] == "画像・写真 | 東京ニュース 1枚目"
+        assert [entry["url"] for entry in info["entries"]] == [
+            "https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_sample_p_o_11111111.jpg",
+            "https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_second_p_o_55555555.jpg",
+        ]
+
     def test_extracts_japanese_article_gallery(self, monkeypatch):
         html = """
         <html><head>
