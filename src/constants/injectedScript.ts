@@ -109,8 +109,19 @@ export const INJECTED_SCRIPT = `
 
   function isSkippableImage(url) {
     var u = String(url || '').toLowerCase();
-    return /(?:favicon|apple-touch-icon|sprite|logo|placeholder|blank|pixel|tracking)/.test(u) ||
+    return /(?:favicon|apple-touch-icon|sprite|logo|placeholder|blank|pixel|tracking|tracker|beacon|counter|spacer|button|banner|ads?)/.test(u) ||
       /\\/(?:icons?|assets?)\\//.test(u) && !/(?:cdninstagram|fbcdn|threadscdn|pinimg|sinaimg|xhscdn|pstatic)/.test(u);
+  }
+
+  function isNonContentUrl(url, mime) {
+    var u = String(url || '').toLowerCase();
+    var m = String(mime || '').toLowerCase();
+    if (/\\.(?:html?|php|aspx?)(?:[?#]|$)/i.test(u)) return true;
+    if (m.indexOf('text/html') !== -1 || m.indexOf('application/xhtml') !== -1 || m.indexOf('application/json') !== -1) return true;
+    if (/(?:doubleclick|googlesyndication|google-analytics|analytics|adservice|scorecardresearch|outbrain|taboola|treasuredata|bidswitch)/i.test(u)) return true;
+    if (/(?:^|[\\/_.-])(?:ad|ads|banner|beacon|tracking|tracker|counter|spacer|sprite|logo|icon|button|common|header|footer|gnb|nav|placeholder|blank|pixel)(?:[\\/_.-]|$)/i.test(u)) return true;
+    if (/\\.gif(?:[?#]|$)/i.test(u) && !/(?:article|photo|gallery|image|upimg|contents|media|original|large)/i.test(u)) return true;
+    return false;
   }
 
   var LOG_SEEN = new Set();
@@ -135,6 +146,7 @@ export const INJECTED_SCRIPT = `
     if (!url || typeof url !== 'string') return;
     url = url.trim();
     if (!url || url.startsWith('blob:') || url.startsWith('data:') || url.length < 8) return;
+    if (isNonContentUrl(url, mime)) return;
     var type = detectType(url, mime);
     if (!type) return;
     if (detectKind(url, mime) === 'image' && isSkippableImage(url)) return;

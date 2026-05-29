@@ -147,9 +147,20 @@ async function extractHtmlMedia(pageUrl: string, mode: 'hls' | 'dash' | 'generic
         /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.com|weibocdn\.com|xhscdn\.com|biliimg\.com|hdslb\.com|pximg\.net|yimg\.jp|kakaocdn\.net)[^"'\\<>\s]*)/gi,
       ];
   patterns.forEach((re) => {
-    extractUrls(html, re).forEach((u) => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.65)));
+    extractUrls(html, re)
+      .filter((u) => !isLikelyNonContentMediaUrl(u))
+      .forEach((u) => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.65)));
   });
   return results;
+}
+
+function isLikelyNonContentMediaUrl(url: string): boolean {
+  const u = url.toLowerCase();
+  if (/\.(?:html?|php|aspx?)(?:[?#]|$)/i.test(u)) return true;
+  if (/(?:doubleclick|googlesyndication|google-analytics|analytics|adservice|scorecardresearch|outbrain|taboola|treasuredata|bidswitch)/i.test(u)) return true;
+  if (/(?:^|[\/_.-])(?:ad|ads|banner|beacon|tracking|tracker|counter|spacer|sprite|logo|icon|button|common|header|footer|gnb|nav|placeholder|blank|pixel)(?:[\/_.-]|$)/i.test(u)) return true;
+  if (/\.gif(?:[?#]|$)/i.test(u) && !/(?:article|photo|gallery|image|upimg|contents|media|original|large)/i.test(u)) return true;
+  return false;
 }
 
 // ── TikTok ────────────────────────────────────────────────────────

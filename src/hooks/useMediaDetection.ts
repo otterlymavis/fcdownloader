@@ -24,7 +24,7 @@ function guessKind(url: string, mimeType?: string | null): DetectedMedia['mediaK
 function isLikelyThumbnailUrl(url: string): boolean {
   const u = url.toLowerCase();
   if (!/\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(u)) return false;
-  if (/(?:^|[\/_.-])(?:thumb|thumbnail|avatar|profile(?:_pic)?|placeholder|blank|pixel)(?:[\/_.-]|$)/i.test(u)) return true;
+  if (/(?:^|[\/_.-])(?:thumb|thumbnail|avatar|profile(?:_pic)?|placeholder|blank|pixel|beacon|tracking|tracker|counter|spacer|sprite|logo|icon|button|banner|ads?)(?:[\/_.-]|$)/i.test(u)) return true;
   if (/[?&](?:thumb|thumbnail|preview|avatar)=/i.test(u)) return true;
   try {
     const parsed = new URL(url);
@@ -34,6 +34,17 @@ function isLikelyThumbnailUrl(url: string): boolean {
     if (dimensions.length && Math.max(...dimensions) <= 512) return true;
   } catch {}
   if (/(?:^|[\/_-])(?:\d{1,3}x\d{1,3}|s\d{2,4}x\d{2,4})(?:[\/_.-]|$)/i.test(u)) return true;
+  return false;
+}
+
+function isNonContentMediaUrl(url: string, mimeType?: string | null): boolean {
+  const u = url.toLowerCase();
+  const mt = String(mimeType || '').toLowerCase();
+  if (/\.(?:html?|php|aspx?)(?:[?#]|$)/i.test(u)) return true;
+  if (mt.includes('text/html') || mt.includes('application/xhtml') || mt.includes('application/json')) return true;
+  if (/(?:doubleclick|googlesyndication|google-analytics|analytics|adservice|scorecardresearch|outbrain|taboola|treasuredata|bidswitch)/i.test(u)) return true;
+  if (/(?:^|[\/_.-])(?:ad|ads|banner|beacon|tracking|tracker|counter|spacer|sprite|logo|icon|button|common|header|footer|gnb|nav|placeholder|blank|pixel)(?:[\/_.-]|$)/i.test(u)) return true;
+  if (/\.gif(?:[?#]|$)/i.test(u) && !/(?:article|photo|gallery|image|upimg|contents|media|original|large)/i.test(u)) return true;
   return false;
 }
 
@@ -88,6 +99,7 @@ export function useMediaDetection() {
       if (data.event === 'MEDIA_DETECTED') {
         const url = String(data.url ?? '').trim();
         if (!url || isSegmentUrl(url)) return;
+        if (isNonContentMediaUrl(url, data.mimeType)) return;
         const mediaKind = data.mediaKind ?? guessKind(url, data.mimeType);
         if (mediaKind === 'image' && isLikelyThumbnailUrl(url)) return;
         const item: DetectedMedia = {
@@ -140,6 +152,7 @@ export function useMediaDetection() {
       if (data.event === 'URL_CAPTURED') {
         const url = String(data.url ?? '').trim();
         if (!url) return;
+        if (isNonContentMediaUrl(url)) return;
         setNetworkLog((prev) => {
           if (prev.includes(url)) return prev;
           return [url, ...prev].slice(0, 500);
@@ -211,6 +224,7 @@ export function useMediaDetection() {
     if (!url) return false;
     if (!url.startsWith('http')) return false;
     if (isSegmentUrl(url)) return false;
+    if (isNonContentMediaUrl(url)) return false;
     setDetected((prev) => {
       if (prev.some((m) => m.url === url)) return false as any;
       return [{

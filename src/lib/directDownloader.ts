@@ -3,10 +3,16 @@ import { extractSessionCookies } from './cookieManager';
 import { DetectedMedia } from '../types';
 import { DownloadOptions } from './hlsDownloader';
 
+const MEDIA_EXTS = new Set([
+  'mp4', 'm4v', 'webm', 'mov',
+  'jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'heic',
+  'mp3', 'm4a', 'aac', 'wav', 'ogg', 'opus', 'flac',
+]);
+
 function guessExt(url: string, mimeType?: string | null): string {
   const path = url.split('?')[0].toLowerCase();
   const m = path.match(/\.([a-z0-9]{2,5})$/);
-  if (m) return m[1];
+  if (m && MEDIA_EXTS.has(m[1])) return m[1];
   if (mimeType) {
     const mt = mimeType.toLowerCase();
     if (mt.includes('jpeg')) return 'jpg';
@@ -34,6 +40,23 @@ function mediaIsImage(url: string, mimeType?: string | null): boolean {
 
 function mediaIsAudio(url: string, mimeType?: string | null): boolean {
   return /^audio\//i.test(mimeType || '') || /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i.test(url);
+}
+
+function contentTypeLooksLikeMedia(contentType: string, media: DetectedMedia): boolean {
+  const ct = contentType.toLowerCase();
+  if (!ct) return true;
+  if (
+    ct.includes('text/html') ||
+    ct.includes('text/xml') ||
+    ct.includes('application/xhtml') ||
+    ct.includes('application/json')
+  ) {
+    return false;
+  }
+  if (ct.includes('application/octet-stream') || ct.includes('binary/octet-stream')) return true;
+  if (media.mediaKind === 'image' || mediaIsImage(media.url, media.mimeType)) return ct.startsWith('image/');
+  if (media.mediaKind === 'audio' || mediaIsAudio(media.url, media.mimeType)) return ct.startsWith('audio/');
+  return ct.startsWith('video/') || ct.includes('mp4') || ct.includes('mpegurl');
 }
 
 export async function downloadDirect(
@@ -107,8 +130,8 @@ export async function downloadDirect(
     (result.headers as Record<string, string> | undefined)?.['Content-Type'] ??
     (result.headers as Record<string, string> | undefined)?.['content-type'] ?? ''
   ).toLowerCase();
-  if (ct.includes('text/html') || ct.includes('text/xml')) {
-    throw new Error('Server returned an HTML page instead of video — the URL may have expired or require login');
+  if (!contentTypeLooksLikeMedia(ct, media)) {
+    throw new Error('Server returned a page or non-media response instead of downloadable media');
   }
 
   const info = await FileSystem.getInfoAsync(filePath);
