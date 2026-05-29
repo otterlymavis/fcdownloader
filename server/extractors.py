@@ -998,7 +998,7 @@ def extract_curated_site(
         if info:
             return info
 
-    html_text = _fetch_html(page_url)
+    html_text = page_html or _fetch_html(page_url)
     if not html_text:
         return None
 

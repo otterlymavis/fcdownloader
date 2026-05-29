@@ -288,7 +288,7 @@
   function scanBilibiliDynamic() {
     if (!/(?:^|\.)(?:t\.bilibili\.com|bilibili\.com)$/i.test(location.hostname)) return [];
     if (!/(?:\/\d{10,}|\/opus\/\d+|\/read\/cv\d+)/i.test(location.pathname)) return [];
-    return [{
+    const found = [{
       url: location.href,
       pageUrl: location.href,
       kind: "embed",
@@ -296,6 +296,26 @@
       label: "Bilibili post",
       backendRouted: true,
     }];
+    try {
+      const html = document.documentElement.outerHTML.slice(0, 1_000_000);
+      const patterns = [
+        [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:bilivideo\.com|hdslb\.com)[^"'\\<>\s]*\.(?:m4s|mp4|m3u8|mpd)[^"'\\<>\s]*)/g, "direct"],
+        [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:i\d?\.hdslb\.com|biliimg\.com)[^"'\\<>\s]*\.(?:jpe?g|png|webp)[^"'\\<>\s]*)/g, "image"],
+      ];
+      for (const [re, kind] of patterns) {
+        let m;
+        while ((m = re.exec(html)) !== null && found.length < 8) {
+          found.push({
+            url: decode(m[1]),
+            kind,
+            source: "bilibili-dynamic-page",
+            pageUrl: location.href,
+            referer: location.href,
+          });
+        }
+      }
+    } catch {}
+    return found;
   }
 
   const JAPANESE_BACKEND_PLATFORMS = [

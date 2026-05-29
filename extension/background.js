@@ -24,11 +24,14 @@ const SERVER_ONLY_RE = /youtube\.com|youtu\.be|(?:player\.)?vimeo\.com|vimeocdn\
 const PAGE_HTML_RE = /(?:^|\.)(?:oricon\.co\.jp|news\.yahoo\.co\.jp|news\.naver\.com|n\.news\.naver\.com|m\.news\.naver\.com|entertain\.naver\.com|m\.entertain\.naver\.com|sports\.news\.naver\.com|m\.sports\.naver\.com|t\.bilibili\.com|bilibili\.com|ameblo\.jp|ameba\.jp|natalie\.mu|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net)$/i;
 const PROXY_REQUIRED_RE = /(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|weibocdn\.com|xhscdn\.com|bilivideo\.com|biliimg\.com|hdslb\.com|pstatic\.net|pximg\.net|yimg\.jp|kakaocdn\.net|daumcdn\.net|img-mdpr\.freetls\.fastly\.net)/i;
 const REPLAY_HEADER_ALLOW_RE = /^(accept|accept-language|origin|range|referer|user-agent)$/i;
+const RUNTIME_CAPTURE_HOST_RE = /(?:tver\.jp|tver\.co\.jp|abema\.tv|abema\.io|fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp|cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp|video\.fc2\.com|live\.fc2\.com|nicovideo\.jp|nico\.ms|niconico\.com|nicochannel\.jp|news\.yahoo\.co\.jp|video\.yahoo\.co\.jp|mantan-web\.jp|tv\.kakao\.com|kakao\.com|xiaohongshu\.com|xhslink\.com|xhscdn\.com|bilibili\.com|bilivideo\.com|hdslb\.com|biliimg\.com|naver\.com|naver\.me|pstatic\.net|brightcove\.net|boltdns\.net|akamaihd\.net|akamaized\.net|vod-abematv|linear-abematv|kakaocdn\.net|daumcdn\.net|nimg\.jp|dmc\.nico)/i;
 const PREFLIGHT_MEDIA_TYPES = [
   "video/",
   "image/",
   "audio/",
   "application/x-mpegURL",
+  "application/vnd.apple.mpegurl",
+  "application/dash+xml",
   "application/octet-stream",
 ];
 
@@ -165,6 +168,15 @@ function mediaKindForUrl(url) {
   return "direct";
 }
 
+function mediaKindForResponse(url, contentType = "") {
+  const ct = String(contentType || "").toLowerCase();
+  if (ct.includes("mpegurl") || ct.includes("vnd.apple.mpegurl") || /\.m3u8(?:[?#]|$)/i.test(url)) return "hls";
+  if (ct.includes("dash+xml") || /\.mpd(?:[?#]|$)/i.test(url)) return "dash";
+  if (ct.startsWith("audio/")) return "audio";
+  if (ct.startsWith("image/")) return "image";
+  return mediaKindForUrl(url);
+}
+
 function isConcreteMediaUrl(url) {
   const u = String(url || "").toLowerCase().split("?")[0];
   return /\.(?:mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac)(?:$|[?#])/.test(u);
@@ -277,17 +289,21 @@ try {
         if (!details.tabId || details.tabId < 0) return;
         const u = details.url;
         if (!u || u.length < 12) return;
-        if (!isLikelyMedia(u)) return;
+        const contentType = details.responseHeaders?.find((h) => /content-type/i.test(h.name))?.value || "";
+        const mediaByType = PREFLIGHT_MEDIA_TYPES.some((type) =>
+          contentType.toLowerCase().startsWith(type.toLowerCase())
+        );
+        if (!isLikelyMedia(u) && !mediaByType) return;
 
         chrome.tabs.get(details.tabId).then((tab) => {
           if (!tab?.url) return;
           const replay = requestHeadersByUrl.get(u)?.headers || {};
           addItem(details.tabId, tab.url, {
             url: u,
-            kind: mediaKindForUrl(u),
+            kind: mediaKindForResponse(u, contentType),
             source: "network",
             headers: replay,
-            mime: details.responseHeaders?.find((h) => /content-type/i.test(h.name))?.value || "",
+            mime: contentType,
           });
         }).catch(() => {});
       },
@@ -317,6 +333,7 @@ function isLikelyMedia(url) {
   if (/(?:video\.twimg\.com|cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|v\.redd\.it|tiktokcdn\.com|v\d+-webapp\.tiktok\.com|bilivideo\.com|weibocdn\.com|xhscdn\.com|dmcdn\.net|pinimg\.com\/(?:videos|originals|736x|1200x|564x)|vimeocdn\.com|nicovideo\.cdn\.nimg\.jp|dmc\.nico|nimg\.jp|abema(?:tv)?\.akamaized\.net|linear-abematv\.akamaized\.net|vod-abematv\.akamaized\.net|brightcove\.net|boltdns\.net|bcovlive-a\.akamaihd\.net)/.test(url)) {
     return true;
   }
+  if (RUNTIME_CAPTURE_HOST_RE.test(url)) return true;
   return false;
 }
 
@@ -420,7 +437,7 @@ function backendDownloadUrl(backend, pageUrl, referer, replayHeaders) {
 async function pageHtmlForTab(tabId, pageUrl) {
   try {
     const host = new URL(pageUrl).hostname;
-    if (!PAGE_HTML_RE.test(host)) return "";
+    if (!PAGE_HTML_RE.test(host) && !SERVER_ONLY_RE.test(pageUrl) && !RUNTIME_CAPTURE_HOST_RE.test(pageUrl)) return "";
   } catch {
     return "";
   }
@@ -448,6 +465,12 @@ function mediaHintsForTab(tabId) {
 
 function cookieHeaderList(cookies) {
   return cookies ? [{ name: "X-FCDL-Cookies", value: cookies }] : [];
+}
+
+function localHelperDownloadUrl(pageUrl, youtubeOnly = false) {
+  const params = new URLSearchParams({ url: pageUrl });
+  if (!youtubeOnly) params.set("max_height", "1080");
+  return `http://127.0.0.1:8765/${youtubeOnly ? "youtube-hd" : "download"}?${params.toString()}`;
 }
 
 // ── Download orchestration ────────────────────────────────────────────────
@@ -522,6 +545,26 @@ async function preflightDirectUrl(url, headers = []) {
   } catch (e) {
     if (e.name === "AbortError") return { ok: true };
     return { ok: false, error: String(e.message || e) };
+  }
+}
+
+async function preflightLocalHelperUrl(url) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 120_000);
+  try {
+    const parsed = new URL(url);
+    const mediaUrl = parsed.searchParams.get("url") || "";
+    const checkUrl = `http://127.0.0.1:8765/formats?${new URLSearchParams({ url: mediaUrl }).toString()}`;
+    const r = await fetch(checkUrl, { method: "GET", signal: ac.signal });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data?.ok === false) {
+      return { ok: false, error: data?.error || `HTTP ${r.status}` };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -626,6 +669,9 @@ async function downloadItem(tabId, item) {
   });
 
   async function viaBackend(pageForBackend) {
+    if (!backend) {
+      throw new Error("Backend URL is not configured.");
+    }
     const dlUrl = backendDownloadUrl(backend, pageForBackend, referer, item.headers || null);
     const headers = cookieHeaderList(cookies);
     debugLog("[fcdl] → backend for", (pageForBackend || "").slice(0, 100), "cookies?", !!cookies);
@@ -637,6 +683,9 @@ async function downloadItem(tabId, item) {
   }
 
   async function viaProxy(sourceUrl) {
+    if (!backend) {
+      throw new Error("Backend URL is not configured.");
+    }
     const filename = suggestedFilename(item, downloadPageUrl, tabTitle);
     const proxied = await buildProxiedUrl(
       { ...item, url: sourceUrl },
@@ -647,87 +696,124 @@ async function downloadItem(tabId, item) {
     return chromeDownload(proxied, filename, cookieHeaderList(cookies));
   }
 
-  // ytdl-stream proxy URL: download it directly without re-routing through /download.
-  // The URL carries the page URL from /extract; cookies are sent separately
-  // through X-FCDL-Cookies so they do not leak into browser history or logs.
-  // Re-routing through /download would ignore this URL entirely (it uses item.pageUrl
-  // as the extraction target), re-extract the page, and double-download the video.
-  //
-  // The server blocks until yt-dlp finishes, then either streams the MP4 (200) or
-  // returns a JSON error (4xx/5xx). Chrome saves JSON error bodies using the URL
-  // path + content-type as the filename ("ytdl-stream.json"), ignoring our hint.
-  // _watchYtdlStreamDownload detects this and removes the garbage file.
-  if ((item.url || "").includes("/ytdl-stream?")) {
-    // Do not log the full URL because it contains the source page_url.
+  const capturedConcreteMedia =
+    (isConcreteMediaUrl(item.url) || (item.kind === "direct" && isLikelyMedia(item.url || ""))) &&
+    (item.source === "network" || item.source === "video-tag" || item.source === "meta-json");
+  const backendStrategy = backendStrategyForItem(item, urlForBackend);
+
+  const hasReplayHeaders = Boolean(item.headers && Object.keys(item.headers).length);
+  const isYoutubeHdHelperItem = item.source === "youtube-hd-local" || item.source === "youtube-hd-server";
+  const helperTarget = isYoutubeHdHelperItem
+    ? (item.pageUrl || tabPageUrl || item.url)
+    : (item.kind === "embed" || item.source === "iframe" || item.backendRouted || SERVER_ONLY_RE.test(downloadPageUrl || "")
+      ? (downloadPageUrl || urlForBackend)
+      : (urlForBackend || downloadPageUrl));
+  const helperCanTry =
+    item.kind !== "image" &&
+    helperTarget &&
+    /^https?:\/\//i.test(helperTarget) &&
+    !/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])/i.test(helperTarget) &&
+    (!cookies || isYoutubeHdHelperItem) &&
+    (!hasReplayHeaders || isYoutubeHdHelperItem);
+
+  const routes = [];
+  const addRoute = (name, enabled, run) => {
+    if (enabled && !routes.some((route) => route.name === name)) {
+      routes.push({ name, run });
+    }
+  };
+
+  addRoute("server stream", (item.url || "").includes("/ytdl-stream?"), async () => {
     debugLog("[fcdl] → ytdl-stream direct download");
     const headers = cookieHeaderList(cookies);
     const check = await preflightBackendUrl(item.url, headers);
     if (!check.ok) {
       _notifyYtdlError("YouTube download failed", check.error);
-      throw new Error(`YouTube: ${check.error}`);
+      throw new Error(check.error);
     }
     const dlId = await chromeDownload(item.url, suggestedFilename(item, item.url, tabTitle), headers);
-    // Fire-and-forget monitor — does not block the popup response.
     _watchYtdlStreamDownload(dlId).catch((e) =>
       debugWarn("[fcdl] ytdl-stream watcher error:", e?.message || e)
     );
     return dlId;
-  }
+  });
 
-  if (item.source === "youtube-hd-local") {
-    const page = item.pageUrl || tabPageUrl || item.url;
-    const localUrl = `http://127.0.0.1:8765/youtube-hd?${new URLSearchParams({ url: page }).toString()}`;
+  addRoute("local helper", isYoutubeHdHelperItem && helperCanTry, async () => {
     debugLog("[fcdl] → local youtube helper");
-    if (!await fetchLocalHelperHealth()) {
+    const health = await fetchLocalHelperInfo();
+    if (!health) {
       const standalone = bestHelperAbsentFallback(tabId);
       if (standalone) {
         debugLog("[fcdl] → Companion absent; using best standalone candidate", standalone.source, standalone.kind);
         return downloadItem(tabId, standalone);
       }
-      throw new Error("Companion is not running. Start playback to detect the 360p download, or open Companion for HD.");
+      throw new Error("Companion is not running.");
     }
-    return chromeDownload(localUrl, suggestedFilename({ ...item, ext: "mp4" }, page, tabTitle));
-  }
+    if (health.needsSetup) {
+      const setup = await ensureLocalHelperTools();
+      if (!setup.ok) throw new Error(setup.error || "Companion video tools are not ready.");
+    }
+    const localUrl = localHelperDownloadUrl(helperTarget, true);
+    const check = await preflightLocalHelperUrl(localUrl);
+    if (!check.ok) throw new Error(check.error);
+    return chromeDownload(localUrl, suggestedFilename({ ...item, ext: "mp4" }, helperTarget, tabTitle));
+  });
 
-  if (item.source === "youtube-hd-server") {
-    const message = "YouTube HD must be downloaded locally with yt-dlp + ffmpeg; server muxing returns empty files because Googlevideo URLs are IP-bound.";
-    _notifyYtdlError("YouTube HD unavailable in extension", message);
-    throw new Error(message);
-  }
-
-  const capturedConcreteMedia =
-    (isConcreteMediaUrl(item.url) || (item.kind === "direct" && isLikelyMedia(item.url || ""))) &&
-    (item.source === "network" || item.source === "video-tag" || item.source === "meta-json");
-  if (capturedConcreteMedia && (Object.keys(item.headers || {}).length || PROXY_REQUIRED_RE.test(item.url || "") || SERVER_ONLY_RE.test(item.url || ""))) {
-    debugLog("[fcdl] → proxy captured concrete media");
-    return viaProxy(item.url);
-  }
-
-  const backendStrategy = backendStrategyForItem(item, urlForBackend);
-  if (backendStrategy) {
-    debugLog("[fcdl] →", backendStrategy);
-    return viaBackend(urlForBackend);
-  }
-
-  // Plain mp4/webm CDN URLs that don't require auth — direct download.
-  debugLog("[fcdl] → direct CDN");
-  try {
+  addRoute("direct", item.url && !backendStrategy && !hasReplayHeaders, async () => {
+    debugLog("[fcdl] → direct CDN");
     const directHeaders = [];
     if (/googlevideo\.com/i.test(item.url || "")) {
       const check = await preflightDirectUrl(item.url, directHeaders);
-      if (!check.ok) {
-        throw new Error(`YouTube direct 360p was refused by YouTube (${check.error})`);
-      }
+      if (!check.ok) throw new Error(`YouTube direct 360p was refused by YouTube (${check.error})`);
     }
-    return await chromeDownload(item.url, suggestedFilename(item, downloadPageUrl, tabTitle), directHeaders);
-  } catch (e) {
-    if (/googlevideo\.com/i.test(item.url || "")) {
-      throw e;
+    return chromeDownload(item.url, suggestedFilename(item, downloadPageUrl, tabTitle), directHeaders);
+  });
+
+  addRoute("local helper", !isYoutubeHdHelperItem && helperCanTry && !capturedConcreteMedia, async () => {
+    debugLog("[fcdl] → local helper");
+    const health = await fetchLocalHelperInfo();
+    if (!health) throw new Error("Companion is not running.");
+    if (health.needsSetup) {
+      const setup = await ensureLocalHelperTools();
+      if (!setup.ok) throw new Error(setup.error || "Companion video tools are not ready.");
     }
-    debugWarn("[fcdl] direct failed, falling back to backend:", e?.message || e);
-    const dlUrl = backendDownloadUrl(backend, item.url, referer);
-    return chromeDownload(dlUrl, suggestedFilename(item, downloadPageUrl, tabTitle), cookieHeaderList(cookies));
+    const localUrl = localHelperDownloadUrl(helperTarget, false);
+    const check = await preflightLocalHelperUrl(localUrl);
+    if (!check.ok) throw new Error(check.error);
+    return chromeDownload(localUrl, suggestedFilename({ ...item, ext: "mp4" }, helperTarget, tabTitle));
+  });
+
+  addRoute("proxy", capturedConcreteMedia && (hasReplayHeaders || PROXY_REQUIRED_RE.test(item.url || "") || SERVER_ONLY_RE.test(item.url || "")), async () => {
+    debugLog("[fcdl] → proxy captured concrete media");
+    return viaProxy(item.url);
+  });
+
+  addRoute(backendStrategy || "backend", Boolean(backendStrategy), async () => {
+    debugLog("[fcdl] →", backendStrategy);
+    return viaBackend(urlForBackend);
+  });
+
+  addRoute("backend fallback", item.url && !backendStrategy, async () => {
+    debugLog("[fcdl] → backend fallback");
+    return viaBackend(item.url);
+  });
+
+  addRoute("direct fallback", item.url && backendStrategy && !hasReplayHeaders && !/googlevideo\.com/i.test(item.url || ""), async () => {
+    debugLog("[fcdl] → direct fallback");
+    return chromeDownload(item.url, suggestedFilename(item, downloadPageUrl, tabTitle));
+  });
+
+  const errors = [];
+  for (const route of routes) {
+    try {
+      return await route.run();
+    } catch (e) {
+      const message = String(e?.message || e);
+      errors.push(`${route.name}: ${message}`);
+      debugWarn(`[fcdl] ${route.name} failed; trying next route:`, message);
+    }
   }
+  throw new Error(errors.length ? `All download methods failed. ${errors.join(" | ")}` : "No usable download method was available.");
 }
 
 // Surface download failures (the chrome.downloads.download callback gives us

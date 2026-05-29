@@ -384,7 +384,10 @@ _MEDIA_HINT_HOST_RE = re.compile(
     r"(?:\.m3u8|\.mpd|\.mp4|\.m4v|\.webm|\.mov|\.mp3|\.m4a|\.aac|\.wav|\.ogg|\.opus|\.flac)(?:[?#]|$)|"
     r"(?:v\.redd\.it|cdninstagram\.com|fbcdn\.net|threadscdn\.com|bilivideo\.com|xhscdn\.com|"
     r"kakaocdn\.net|daumcdn\.net|pstatic\.net|naver\.net|abema(?:tv)?\.akamaized\.net|"
-    r"brightcove\.net|boltdns\.net|bcovlive-a\.akamaihd\.net)",
+    r"brightcove\.net|boltdns\.net|bcovlive-a\.akamaihd\.net|bcovlive\.io|akamaihd\.net|"
+    r"akamaized\.net|vod-abematv|linear-abematv|nimg\.jp|dmc\.nico|yimg\.jp|"
+    r"gyao\.yahoo\.co\.jp|fod-sp\.fujitv\.co\.jp|streaming\.yahoo\.co\.jp|"
+    r"tver\.jp|tver\.co\.jp|edgekey\.net|edgesuite\.net|hdslb\.com|biliimg\.com)",
     re.I,
 )
 

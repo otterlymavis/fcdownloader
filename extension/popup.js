@@ -150,7 +150,7 @@ function displayedItems(items) {
 }
 
 function isRuntimeOnlyExtractFailure(error) {
-  return /No extractor found for this URL and the page HTML contained no detectable media/i.test(String(error || ""));
+  return /(No extractor found for this URL and the page HTML contained no detectable media|browser runtime is client-side only|server'?s IP is blocked|HTTP 403|Forbidden|geo-restricted|geo restricted|requires you to be signed in|requires a browser session|DRM|region)/i.test(String(error || ""));
 }
 
 function needsCompanion(url, items = []) {
