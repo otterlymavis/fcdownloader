@@ -65,6 +65,7 @@ class ExtractRequest(BaseModel):
     pageUrl: str
     referer: str | None = None
     cookies: str | None = None
+    pageHtml: str | None = None
     proxy: str | None = None
     subtitles: bool = False
     subLangs: str = "en"

@@ -16,8 +16,11 @@ diagnostics for the error response when all strategies fail.
 from __future__ import annotations
 
 import os
+import socket
 import time
 import urllib.parse
+import urllib.request
+from contextlib import contextmanager
 from typing import Any, Callable
 
 from fastapi import HTTPException
@@ -43,6 +46,82 @@ _DESKTOP_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/125.0.0.0 Safari/537.36"
 )
+
+_DNS_FALLBACK_HOSTS = {"video.fc2.com", "live.fc2.com"}
+_DNS_FALLBACK_CACHE: dict[str, list[str]] = {}
+
+
+def _server_stream_supported(page_url: str) -> bool:
+    lowered = page_url.lower()
+    return registry.is_youtube(lowered) or any(
+        host in lowered
+        for host in ("nicovideo.jp", "nico.ms", "niconico.com", "nicochannel.jp")
+    )
+
+
+def _extractor_name_for(page_url: str) -> str:
+    lowered = page_url.lower()
+    if registry.is_youtube(lowered):
+        return "youtube"
+    if any(host in lowered for host in ("nicovideo.jp", "nico.ms", "niconico.com", "nicochannel.jp")):
+        return "niconico"
+    return "yt-dlp"
+
+
+def _resolve_host_via_google(host: str) -> list[str]:
+    cached = _DNS_FALLBACK_CACHE.get(host)
+    if cached:
+        return cached
+    query = urllib.parse.urlencode({"name": host, "type": "A"})
+    req = urllib.request.Request(
+        f"https://dns.google/resolve?{query}",
+        headers={"User-Agent": _DESKTOP_UA, "Accept": "application/dns-json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            import json
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return []
+    addrs = [
+        str(item.get("data"))
+        for item in data.get("Answer") or []
+        if item.get("type") == 1 and item.get("data")
+    ]
+    _DNS_FALLBACK_CACHE[host] = addrs
+    return addrs
+
+
+@contextmanager
+def _patched_dns_fallback(page_url: str):
+    host = (urllib.parse.urlsplit(page_url).hostname or "").lower()
+    if host not in _DNS_FALLBACK_HOSTS:
+        yield
+        return
+
+    original_getaddrinfo = socket.getaddrinfo
+
+    def getaddrinfo(name, port, family=0, type=0, proto=0, flags=0):  # noqa: A002
+        try:
+            return original_getaddrinfo(name, port, family, type, proto, flags)
+        except socket.gaierror:
+            if str(name).lower() != host:
+                raise
+            answers = _resolve_host_via_google(host)
+            if not answers:
+                raise
+            socktype = type or socket.SOCK_STREAM
+            protocol = proto or socket.IPPROTO_TCP
+            return [
+                (socket.AF_INET, socktype, protocol, "", (addr, port))
+                for addr in answers
+            ]
+
+    socket.getaddrinfo = getaddrinfo
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
 
 
 # ── Result helpers ────────────────────────────────────────────────────────────
@@ -82,23 +161,24 @@ def _strategy_ydl(
     if force_generic:
         opts["force_generic_extractor"] = True
     try:
-        with YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(page_url, download=False)
+        with _patched_dns_fallback(page_url):
+            with YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(page_url, download=False)
         if not info:
             return _result(name, False, reason="yt-dlp returned no info")
         # YouTube guard: skip_download=True from a datacenter IP often resolves
         # HLS/m3u8 as a SABR fallback.  Those URLs require YouTube session cookies
         # bound to the extracting IP, so ffmpeg can't remux them client-side.
         # Treat HLS as a failure so ytdl-stream (actual download mode) runs instead.
-        if registry.is_youtube(page_url):
+        if registry.is_youtube(page_url) or any(h in page_url for h in ("nicovideo.jp", "nico.ms", "niconico.com", "nicochannel.jp")):
             _proto = (info.get("protocol") or "").lower()
             _url = (info.get("url") or "").lower()
             if "m3u8" in _proto or ".m3u8" in _url:
                 return _result(
                     name, False,
                     reason=(
-                        f"YouTube returned HLS ({_proto!r}) via skip_download — "
-                        "SABR fallback; ytdl-stream needed"
+                        f"{_extractor_name_for(page_url)} returned HLS ({_proto!r}) "
+                        "via skip_download; ytdl-stream needed"
                     ),
                 )
         return _result(name, True, media=info)
@@ -284,14 +364,14 @@ def _strategy_ytdl_stream_url(
 ) -> dict[str, Any]:
     """Last-resort: build a /ytdl-stream proxy URL.
 
-    For YouTube SABR videos where skip_download=True cannot resolve format
-    URLs, the /ytdl-stream endpoint runs yt-dlp in actual download mode and
-    streams the result.  Clients forward cookies in X-FCDL-Cookies so the
-    download URL stays short and does not expose session data.
+    For sites where skip_download=True cannot resolve playable media URLs, the
+    /ytdl-stream endpoint runs yt-dlp in actual download mode and streams the
+    result. Clients forward cookies in X-FCDL-Cookies so the download URL stays
+    short and does not expose session data.
     """
     name = "ytdl-stream"
-    if not registry.is_youtube(page_url):
-        return _result(name, False, reason="not a YouTube URL — ytdl-stream not needed")
+    if not _server_stream_supported(page_url):
+        return _result(name, False, reason="URL does not need ytdl-stream")
 
     # Fetch lightweight metadata (title, thumbnail) for the UI preview.
     # tv_embedded bypasses the "Sign in to confirm you're not a bot" challenge
@@ -300,17 +380,23 @@ def _strategy_ytdl_stream_url(
     try:
         opts = {
             **ydl_opts,
-            "format": "18/b[height<=360][ext=mp4]/b[ext=mp4]",
+            "format": (
+                "18/b[height<=360][ext=mp4]/b[ext=mp4]"
+                if registry.is_youtube(page_url)
+                else "b[ext=mp4]/best"
+            ),
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
-            "extractor_args": {
+        }
+        if registry.is_youtube(page_url):
+            opts["extractor_args"] = {
                 **(ydl_opts.get("extractor_args") or {}),
                 "youtube": {"player_client": ["tv_embedded", "ios"]},
-            },
-        }
-        with YoutubeDL(opts) as ydl:
-            result = ydl.extract_info(page_url, download=False)
+            }
+        with _patched_dns_fallback(page_url):
+            with YoutubeDL(opts) as ydl:
+                result = ydl.extract_info(page_url, download=False)
         if result and result.get("title"):
             meta = result
     except Exception:
@@ -328,14 +414,14 @@ def _strategy_ytdl_stream_url(
 
     return _result(name, True, media={
         "url":          stream_url,
-        "title":        meta.get("title") or "YouTube Video",
+        "title":        meta.get("title") or "Video",
         "thumbnail":    meta.get("thumbnail"),
         "duration":     meta.get("duration"),
         "ext":          "mp4",
         "id":           meta.get("id") or cache_key(page_url),
         "webpage_url":  page_url,
         "protocol":     "https",
-        "extractor":    "youtube",
+        "extractor":    _extractor_name_for(page_url),
         "http_headers": {},
     })
 
@@ -714,6 +800,10 @@ def run_extraction(
         strategies: list[tuple[str, Callable[[], dict[str, Any]]]] = [
             ("yt-dlp",                   lambda: _strategy_ydl(page_url, ydl_opts, False)),
             ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies)),
+            *(
+                [("ytdl-stream", lambda: _strategy_ytdl_stream_url(page_url, ydl_opts, cookies))]
+                if _server_stream_supported(page_url) else []
+            ),
             ("WebView/runtime interception", lambda: _strategy_skip(
                 "WebView/runtime interception",
                 "browser runtime is client-side only",
@@ -724,7 +814,11 @@ def run_extraction(
             ("generic media detector",   lambda: _strategy_html_detector(page_url, http_headers, cookies, "generic")),
             ("embedded player detector", lambda: _strategy_page_embeds(page_url, http_headers, cookies, ydl_opts)),
             ("generic yt-dlp extractor", lambda: _strategy_ydl(page_url, ydl_opts, True)),
-            ("ytdl-stream",              lambda: _strategy_ytdl_stream_url(page_url, ydl_opts, cookies)),
+            *(
+                []
+                if _server_stream_supported(page_url)
+                else [("ytdl-stream", lambda: _strategy_ytdl_stream_url(page_url, ydl_opts, cookies))]
+            ),
             ("browser playback fallback", lambda: _strategy_skip(
                 "browser playback fallback",
                 "browser playback fallback must run in the app WebView",

@@ -19,6 +19,17 @@
     chrome.runtime.sendMessage({ type: "fcdl:detected", items });
   }
 
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg?.type !== "fcdl:get_page_html") return false;
+    try {
+      const html = document.documentElement?.outerHTML || "";
+      sendResponse({ ok: true, pageHtml: html.slice(0, 1_500_000), url: location.href });
+    } catch (e) {
+      sendResponse({ ok: false, error: String(e?.message || e) });
+    }
+    return false;
+  });
+
   function decode(u) {
     return String(u || "")
       .replace(/\\u0026/g, "&")
@@ -274,6 +285,19 @@
     return found;
   }
 
+  function scanBilibiliDynamic() {
+    if (!/(?:^|\.)(?:t\.bilibili\.com|bilibili\.com)$/i.test(location.hostname)) return [];
+    if (!/(?:\/\d{10,}|\/opus\/\d+|\/read\/cv\d+)/i.test(location.pathname)) return [];
+    return [{
+      url: location.href,
+      pageUrl: location.href,
+      kind: "embed",
+      source: "bilibili-dynamic-page",
+      label: "Bilibili post",
+      backendRouted: true,
+    }];
+  }
+
   const JAPANESE_BACKEND_PLATFORMS = [
     {
       label: "Niconico",
@@ -344,6 +368,31 @@
     }];
   }
 
+  function scanNaverFeedLinks() {
+    if (!/(?:^|\.)(?:m\.entertain\.naver\.com|entertain\.naver\.com|m\.sports\.naver\.com|sports\.news\.naver\.com)$/i.test(location.hostname)) {
+      return [];
+    }
+    const urls = [];
+    for (const a of Array.from(document.querySelectorAll("a[href]"))) {
+      const href = a.getAttribute("href") || "";
+      let url = "";
+      try { url = new URL(href, location.href).href; } catch { continue; }
+      if (!/(?:n\.news|m\.news|news|m\.entertain|entertain|m\.sports|sports\.news)\.naver\.com\/.*(?:article|mnews\/article|sports\/index|entertain\/article)/i.test(url)) {
+        continue;
+      }
+      if (!urls.includes(url)) urls.push(url);
+      if (urls.length >= 5) break;
+    }
+    return urls.map((url) => ({
+      url,
+      pageUrl: url,
+      kind: "embed",
+      source: "naver-feed-link",
+      label: "Naver article",
+      backendRouted: true,
+    }));
+  }
+
   // ── Run all scans ────────────────────────────────────────────────────────
 
   // Image scanning is only useful on hosts where photo downloads are the
@@ -364,8 +413,10 @@
     out.push(...scanMetaTags());
     out.push(...scanYouTube());
     out.push(...scanBilibili());
+    out.push(...scanBilibiliDynamic());
     out.push(...scanWeibo());
     out.push(...scanJapanesePlatforms());
+    out.push(...scanNaverFeedLinks());
 
     // Page-wide JSON-field scan is noisy: news pages with comments / feeds
     // (AmusePlus, Threads feed pages) contain dozens of "video_url" matches

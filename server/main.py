@@ -20,7 +20,7 @@ Endpoint summary:
   POST /extract         → resolve media URL(s) for a page
   GET  /download        → stream server-muxed mp4 to client
   POST /download        → stream server-muxed mp4 (with more options)
-  GET  /ytdl-stream     → server-side yt-dlp download proxy for YouTube SABR
+  GET  /ytdl-stream     → server-side yt-dlp download proxy for hard formats
   POST /playlist        → flat item list for a playlist URL
   GET  /proxy           → stream a CDN media URL with auth headers
   GET  /debug           → diagnostic endpoint (requires TRUSTED_TOKEN)
@@ -28,6 +28,7 @@ Endpoint summary:
 from __future__ import annotations
 
 import http.client
+import hashlib
 import json
 import os
 import re
@@ -54,6 +55,7 @@ from yt_dlp import YoutubeDL
 from yt_dlp.version import __version__ as YT_DLP_VERSION
 
 import auth
+import extractors
 import languages
 import supervisor
 from config import (
@@ -171,6 +173,12 @@ def _cache_put(key: str, val: dict[str, Any]) -> None:
 # ── Response shaping ──────────────────────────────────────────────────────────
 
 _IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "heic"}
+
+
+def _without_thumbnail_fields(item: dict[str, Any]) -> dict[str, Any]:
+    cleaned = item.copy()
+    cleaned.pop("thumbnail", None)
+    return cleaned
 
 
 def _headers_for(f: dict[str, Any]) -> dict[str, str]:
@@ -291,7 +299,7 @@ def _to_gallery_response(info: dict[str, Any]) -> dict[str, Any]:
             video, audio = entry["requested_formats"]
             if video.get("vcodec") == "none" and audio.get("vcodec") != "none":
                 video, audio = audio, video
-            items.append({
+            items.append(_without_thumbnail_fields({
                 "kind":      "paired",
                 "videoUrl":  video["url"],
                 "audioUrl":  audio["url"],
@@ -299,14 +307,13 @@ def _to_gallery_response(info: dict[str, Any]) -> dict[str, Any]:
                 "label":     _label_for(video),
                 "ext":       video.get("ext") or "mp4",
                 "title":     entry.get("title"),
-                "thumbnail": entry.get("thumbnail"),
                 "duration":  entry.get("duration"),
                 "extractor": entry.get("extractor"),
                 "formatId":  "+".join([
                     safe_text(video.get("format_id")),
                     safe_text(audio.get("format_id")),
                 ]).strip("+"),
-            })
+            }))
             continue
 
         url = entry.get("url")
@@ -317,7 +324,7 @@ def _to_gallery_response(info: dict[str, Any]) -> dict[str, Any]:
 
         ext = (entry.get("ext") or guess_ext_from_url(url) or "").lower()
         is_image = ext in _IMAGE_EXTS
-        items.append({
+        items.append(_without_thumbnail_fields({
             "kind":      "image" if is_image else ("hls" if looks_like_hls(url, entry.get("protocol")) else "direct"),
             "url":       url,
             "headers":   _headers_for(entry),
@@ -325,11 +332,10 @@ def _to_gallery_response(info: dict[str, Any]) -> dict[str, Any]:
             "ext":       ext or ("mp4" if not is_image else "jpg"),
             "mimeType":  _mime_for(entry) if not is_image else f"image/{ext or 'jpeg'}",
             "title":     entry.get("title"),
-            "thumbnail": entry.get("thumbnail"),
             "duration":  entry.get("duration"),
             "extractor": entry.get("extractor"),
             "formatId":  entry.get("format_id"),
-        })
+        }))
 
     return {"kind": "gallery", "items": items, "count": len(items)}
 
@@ -1025,21 +1031,27 @@ def version() -> dict[str, Any]:
 @limiter.limit(RATE_LIMIT)
 def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
     cache_key_str = request_cache_key(req.pageUrl, req.referer, req.cookies)
+    if req.pageHtml:
+        cache_key_str += "|html:" + hashlib.sha256(req.pageHtml.encode("utf-8")).hexdigest()[:16]
     if (cached := _cache_get(cache_key_str)) is not None:
         return cached
 
     ctx = make_context("/extract", req.pageUrl, auth_provided=bool(req.cookies))
 
     try:
-        info = run_extraction(
-            req.pageUrl,
-            referer=req.referer,
-            cookies=req.cookies,
-            subtitles=req.subtitles,
-            sub_langs=req.subLangs,
-            proxy=req.proxy,
-            ctx=ctx,
-        )
+        info = None
+        if req.pageHtml:
+            info = extractors.extract_curated_site(req.pageUrl, req.cookies, page_html=req.pageHtml)
+        if not info:
+            info = run_extraction(
+                req.pageUrl,
+                referer=req.referer,
+                cookies=req.cookies,
+                subtitles=req.subtitles,
+                sub_langs=req.subLangs,
+                proxy=req.proxy,
+                ctx=ctx,
+            )
     except HTTPException:
         ctx.emit(status="error")
         raise
@@ -1054,7 +1066,7 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
 
     response = _to_response(info)
     response["title"]     = info.get("title")
-    response["thumbnail"] = info.get("thumbnail")
+    response["thumbnail"] = None
     response["duration"]  = info.get("duration")
 
     if req.subtitles:
@@ -1237,15 +1249,18 @@ def download_post(request: Request, req: DownloadRequest) -> StreamingResponse:
 @limiter.limit(RATE_LIMIT)
 def ytdl_stream_endpoint(
     request: Request,
-    page_url: str = Query(..., description="YouTube page URL to stream"),
-    cookies: str | None = Query(None, description="Optional YouTube session cookies"),
+    page_url: str = Query(..., description="Page URL to stream through yt-dlp download mode"),
+    cookies: str | None = Query(None, description="Optional session cookies"),
     x_fcdl_cookies: str | None = Header(None, alias="X-FCDL-Cookies"),
 ) -> StreamingResponse:
     page_url = normalize_url(page_url)
     if not page_url:
         raise HTTPException(400, "page_url is required")
-    if not any(x in page_url for x in ("youtube.com/", "youtu.be/", "youtube-nocookie.com/")):
-        raise HTTPException(400, "ytdl-stream only supports YouTube URLs")
+    if not any(x in page_url for x in (
+        "youtube.com/", "youtu.be/", "youtube-nocookie.com/",
+        "nicovideo.jp", "nico.ms", "niconico.com", "nicochannel.jp",
+    )):
+        raise HTTPException(400, "ytdl-stream only supports YouTube and Niconico URLs")
 
     cookies_val = safe_text(x_fcdl_cookies or cookies) if (x_fcdl_cookies or cookies) else None
 
@@ -1465,10 +1480,7 @@ def playlist_extract(request: Request, req: PlaylistRequest) -> dict[str, Any]:
             "id":        entry.get("id"),
             "url":       url,
             "title":     entry.get("title"),
-            "thumbnail": (
-                entry.get("thumbnail")
-                or (entry.get("thumbnails", [{}])[-1].get("url") if entry.get("thumbnails") else None)
-            ),
+            "thumbnail": None,
             "duration":  entry.get("duration"),
             "uploader":  entry.get("uploader") or entry.get("channel"),
         })

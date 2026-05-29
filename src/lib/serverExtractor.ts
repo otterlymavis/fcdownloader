@@ -164,6 +164,8 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
     return r.items.flatMap((item) => toDetectedMedia(item, pageUrl));
   }
 
+  if (r.kind === 'image' && r.url && isLikelyThumbnailUrl(r.url)) return [];
+
   const headers = r.headers ?? {};
   const ua = headers['User-Agent'] ?? headers['user-agent'] ?? '';
   const baseItem = {
@@ -176,7 +178,6 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
     provenance: 'social-extractor' as const,
     sourcePageUrl: pageUrl,
     sourceTitle: r.title,
-    thumbnailUrl: r.thumbnail,
     duration: r.duration,
     extractor: r.extractor,
     formatId: r.formatId,
@@ -239,4 +240,20 @@ function directMediaKind(r: ServerExtractResponse): NonNullable<DetectedMedia['m
   if (r.kind === 'image' || mimeType.startsWith('image/')) return 'image';
   if (r.kind === 'audio' || mimeType.startsWith('audio/')) return 'audio';
   return 'video';
+}
+
+function isLikelyThumbnailUrl(url: string): boolean {
+  const u = url.toLowerCase();
+  if (!/\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(u)) return false;
+  if (/(?:^|[\/_.-])(?:thumb|thumbnail|avatar|profile(?:_pic)?|placeholder|blank|pixel)(?:[\/_.-]|$)/i.test(u)) return true;
+  if (/[?&](?:thumb|thumbnail|preview|avatar)=/i.test(u)) return true;
+  try {
+    const parsed = new URL(url);
+    const dimensions = ['width', 'w', 'height', 'h']
+      .map((key) => Number(parsed.searchParams.get(key) || 0))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (dimensions.length && Math.max(...dimensions) <= 512) return true;
+  } catch {}
+  if (/(?:^|[\/_-])(?:\d{1,3}x\d{1,3}|s\d{2,4}x\d{2,4})(?:[\/_.-]|$)/i.test(u)) return true;
+  return false;
 }

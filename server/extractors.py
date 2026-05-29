@@ -169,6 +169,8 @@ _CURATED_SITE_PROFILES: tuple[dict[str, Any], ...] = (
             "itmedia.co.jp", "impress.co.jp", "mynavi.jp", "ascii.jp",
             "gigazine.net", "images.microcms-assets.io", "cdn-ak.f.st-hatena.com",
             "cloudfront.net", "imgix.net", "akamaized.net", "yimg.jp",
+            "cdn.clipkit.co", "i.gzn.jp", "dailyshincho.com",
+            "res.cloudinary.com", "webaccel.jp", "ismcdn.jp", "img.cf.47news.jp",
         ),
     },
 )
@@ -483,6 +485,26 @@ def extract_modelpress(page_url: str, cookies: str | None) -> dict[str, Any] | N
         if not any(re.sub(r"\?.*$", "", thumb) == re.sub(r"\?.*$", "", u) for u, _ in found):
             found.insert(0, (thumb, title))
 
+    if not found and profile["label"] == "Naver Article":
+        linked_articles: list[str] = []
+        for m in re.finditer(
+            r'["\']((?:https?:)?//(?:n\.news|m\.news|news|m\.entertain|entertain|m\.sports|sports\.news)\.naver\.com/[^"\']*?(?:article|mnews/article|sports/index|entertain/article)[^"\']*)["\']',
+            html_text,
+            re.I,
+        ):
+            article_url = _decode(m.group(1))
+            if article_url.startswith("//"):
+                article_url = "https:" + article_url
+            article_url = html.unescape(article_url)
+            if article_url not in linked_articles:
+                linked_articles.append(article_url)
+            if len(linked_articles) >= 8:
+                break
+        for article_url in linked_articles:
+            nested = extract_curated_site(article_url, cookies)
+            if nested and nested.get("entries"):
+                return nested
+
     if not found:
         return None
 
@@ -659,7 +681,190 @@ def _curated_profile(page_url: str) -> dict[str, Any] | None:
     return None
 
 
-def extract_curated_site(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+def _normalize_curated_media_url(url: str) -> str:
+    """Prefer original article assets over CDN thumbnail transforms."""
+    url = html.unescape(url).strip()
+    parsed = urllib.parse.urlsplit(url)
+    if "daumcdn.net/thumb/" in parsed.netloc + parsed.path:
+        params = urllib.parse.parse_qs(parsed.query)
+        fname = (params.get("fname") or [""])[0]
+        if fname.startswith("http"):
+            url = html.unescape(urllib.parse.unquote(fname))
+    url = re.sub(
+        r"(?:-|_)(?:\d{2,4}x\d{2,4}|scaled)(?=\.(?:jpe?g|png|webp|gif|avif)(?:[?#]|$))",
+        "",
+        url,
+        flags=re.I,
+    )
+    url = re.sub(
+        r"_\d{2,4}_(?:square|thumb|thumbnail)(?=\.(?:jpe?g|png|webp|gif|avif)(?:[?#]|$))",
+        "",
+        url,
+        flags=re.I,
+    )
+    url = re.sub(r"/\d{2,3}w/", "/1200w/", url, flags=re.I)
+    url = re.sub(r"/_size_c\d{2,4}x\d{2,4}/", "/_size_c1280x720/", url, flags=re.I)
+    url = re.sub(r"([?&])(?:width|height|w|h)=\d+", r"\1", url)
+    url = re.sub(r"[?&]$", "", url).rstrip("?&")
+    return url
+
+
+def _oricon_full_image_url(url: str) -> str:
+    """Normalize Oricon photo CDN URLs toward their largest static asset."""
+    url = html.unescape(url).strip()
+    url = re.sub(r"([?&])(?:width|height|w|h)=\d+", r"\1", url)
+    url = re.sub(r"[?&](?:resize|fit|crop|quality|auto|format)=[^&#]+", "", url)
+    url = re.sub(r"[?&]$", "", url).rstrip("?&")
+    url = re.sub(r"([_/.-])(?:thumb|thumbnail|small)([_/.-])", r"\1\2", url, flags=re.I)
+    url = re.sub(r"([_-])(?:s|m|small|thumb)(?=\.(?:jpe?g|png|webp|gif|avif)(?:[?#]|$))", "", url, flags=re.I)
+    url = re.sub(r"([_-])+\.(jpe?g|png|webp|gif|avif)([?#].*)?$", r".\2\3", url, flags=re.I)
+    return url
+
+
+def _extract_oricon_gallery(
+    page_url: str,
+    cookies: str | None,
+    fetch_html,
+    initial_html: str | None = None,
+) -> dict[str, Any] | None:
+    if "oricon.co.jp" not in page_url.lower():
+        return None
+
+    def _decode(value: str) -> str:
+        value = html.unescape(value)
+        if "\\" in value:
+            try:
+                value = value.encode("utf-8").decode("unicode_escape")
+            except Exception:
+                pass
+        return (
+            value.replace("\\u0026", "&")
+                 .replace("\\u003d", "=")
+                 .replace("\\/", "/")
+        )
+
+    def _meta(names: tuple[str, ...], text: str) -> str | None:
+        name_alt = "|".join(re.escape(n) for n in names)
+        patterns = (
+            rf'<meta\s[^>]*?(?:property|name)\s*=\s*["\'](?:{name_alt})["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']',
+            rf'<meta\s[^>]*?content\s*=\s*["\']([^"\']+)["\'][^>]*?(?:property|name)\s*=\s*["\'](?:{name_alt})["\']',
+        )
+        for pattern in patterns:
+            m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if m:
+                return re.sub(r"\s+", " ", _decode(m.group(1))).strip()
+        return None
+
+    def _photo_pages(text: str) -> list[str]:
+        pages: list[str] = []
+        for m in re.finditer(r'["\'](/news/\d+/photo/\d+/?(?:\?[^"\']*)?)["\']', text):
+            url = urllib.parse.urljoin(page_url, html.unescape(m.group(1)))
+            url = re.sub(r"[?#].*$", "", url)
+            if url not in pages:
+                pages.append(url)
+
+        current = re.search(r"/news/(\d+)/photo/(\d+)/?", page_url)
+        total_match = re.search(r"(?:photo|image|画像|写真)\D{0,12}(\d+)\D{0,6}(?:of|/|／)\D{0,6}(\d+)", text, re.I)
+        if current and total_match:
+            news_id = current.group(1)
+            total = min(int(total_match.group(2)), 80)
+            for idx in range(1, total + 1):
+                url = f"https://www.oricon.co.jp/news/{news_id}/photo/{idx}/"
+                if url not in pages:
+                    pages.append(url)
+
+        canonical = re.sub(r"[?#].*$", "", page_url)
+        if "/photo/" in canonical and canonical not in pages:
+            pages.insert(0, canonical)
+        return pages[:80]
+
+    image_re = re.compile(
+        r'https?://contents\.oricon\.co\.jp/upimg/[^"\'<>\s\\]+?\.(?:jpg|jpeg|png|webp|gif|avif)(?:\?[^"\'<>\s\\]*)?',
+        re.IGNORECASE,
+    )
+    attr_re = re.compile(
+        r'(?:src|data-src|data-original|data-lazy-src|data-image|content)\s*=\s*["\']([^"\']+)["\']',
+        re.IGNORECASE,
+    )
+
+    first_html = initial_html or fetch_html(page_url)
+    if not first_html:
+        return None
+
+    title = _meta(("og:title", "twitter:title"), first_html)
+    thumb = _meta(("og:image", "twitter:image"), first_html)
+    page_urls = _photo_pages(first_html) or [page_url]
+
+    found: list[tuple[str, str | None, str]] = []
+    seen: set[str] = set()
+
+    def _add(url: str, item_title: str | None, referer: str) -> None:
+        url = _decode(url)
+        if url.startswith("//"):
+            url = "https:" + url
+        elif url.startswith("/"):
+            url = urllib.parse.urljoin(referer, url)
+        if "contents.oricon.co.jp/upimg/" not in url.lower():
+            return
+        if not re.search(r"\.(?:jpg|jpeg|png|webp|gif|avif)(?:[?#]|$)", url, re.I):
+            return
+        full_url = _oricon_full_image_url(url)
+        dedup = re.sub(r"\?.*$", "", full_url)
+        if dedup in seen:
+            return
+        seen.add(dedup)
+        found.append((full_url, item_title, referer))
+
+    def _scan(text: str, detail_url: str) -> None:
+        item_title = _meta(("og:title", "twitter:title"), text)
+        for candidate in (_meta(("og:image", "twitter:image"), text),):
+            if candidate:
+                _add(candidate, item_title, detail_url)
+        for variant in (text, _decode(text)):
+            for m in image_re.finditer(variant):
+                _add(m.group(0), item_title, detail_url)
+            for m in attr_re.finditer(variant):
+                _add(m.group(1), item_title, detail_url)
+
+    for idx, detail_url in enumerate(page_urls):
+        detail_html = first_html if idx == 0 and detail_url == re.sub(r"[?#].*$", "", page_url) else fetch_html(detail_url)
+        if detail_html:
+            _scan(detail_html, detail_url)
+
+    if not found:
+        return None
+
+    headers = {"User-Agent": _WEIBO_DESKTOP_UA}
+    entries: list[dict[str, Any]] = []
+    for idx, (url, item_title, item_referer) in enumerate(found):
+        ext = guess_ext_from_url(url) or "jpg"
+        entries.append({
+            "id": cache_key(url),
+            "url": url,
+            "ext": ext,
+            "protocol": "https",
+            "http_headers": {**headers, "Referer": item_referer},
+            "title": item_title or f"{title or 'Oricon'} #{idx + 1}",
+            "thumbnail": url,
+            "extractor": "oricon",
+        })
+
+    print(f"[oricon] gallery: {len(entries)} image(s)")
+    return {
+        "_type": "playlist",
+        "entries": entries,
+        "title": title or "Oricon",
+        "thumbnail": _oricon_full_image_url(thumb) if thumb else found[0][0],
+        "id": cache_key(page_url),
+        "extractor": "oricon",
+    }
+
+
+def extract_curated_site(
+    page_url: str,
+    cookies: str | None,
+    page_html: str | None = None,
+) -> dict[str, Any] | None:
     """Extract galleries/videos from supported article and blog pages.
 
     These sites mostly expose first-party media in static HTML or hydration JSON.
@@ -687,9 +892,17 @@ def extract_curated_site(page_url: str, cookies: str | None) -> dict[str, Any] |
         )
 
     def _fetch_html(url: str) -> str | None:
+        fetch_url = url
+        if profile["label"] == "Oricon":
+            fetch_url = re.sub(
+                r"^https?://(?:www\.)?oricon\.co\.jp/",
+                "https://contents.oricon.co.jp/",
+                url,
+                flags=re.I,
+            )
         try:
             req = urllib.request.Request(
-                url,
+                fetch_url,
                 headers=safe_headers({
                     "User-Agent": _WEIBO_DESKTOP_UA,
                     "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
@@ -705,12 +918,23 @@ def extract_curated_site(page_url: str, cookies: str | None) -> dict[str, Any] |
                     body = gzip.decompress(body)
                 return body.decode("utf-8", errors="replace")
         except Exception as exc:  # noqa: BLE001
-            print(f"[curated-site] fetch failed for {url}: {str(exc)[:200]}")
+            print(f"[curated-site] fetch failed for {fetch_url}: {str(exc)[:200]}")
             return None
+
+    if page_html and profile["label"] == "Oricon":
+        info = _extract_oricon_gallery(page_url, cookies, _fetch_html, page_html)
+        if info:
+            return info
 
     html_text = _fetch_html(page_url)
     if not html_text:
         return None
+
+    if profile["label"] == "Oricon":
+        info = _extract_oricon_gallery(page_url, cookies, _fetch_html, html_text)
+        if info:
+            return info
+
     scan_text = html_text
     if profile["label"] == "Naver Article":
         body_match = re.search(
@@ -755,7 +979,10 @@ def extract_curated_site(page_url: str, cookies: str | None) -> dict[str, Any] |
                 raw = "https:" + raw
             elif raw.startswith("/"):
                 raw = urllib.parse.urljoin(page_url, raw)
-            if re.search(r"\.(?:jpg|jpeg|png|webp|gif|avif|mp4|m3u8|mpd)(?:[?#]|$)", raw, re.IGNORECASE):
+            raw_lowered = raw.lower()
+            if raw.startswith("http") and "res.cloudinary.com/" in raw_lowered and "/image/upload/" in raw_lowered:
+                candidates.append(raw)
+            elif re.search(r"\.(?:jpg|jpeg|png|webp|gif|avif|mp4|m3u8|mpd)(?:[?#]|$)", raw, re.IGNORECASE):
                 candidates.append(raw)
 
     if thumb:
@@ -774,13 +1001,15 @@ def extract_curated_site(page_url: str, cookies: str | None) -> dict[str, Any] |
         if any(skip in lowered for skip in (
             "sprite", "logo", "icon", "avatar", "profile", "emoji",
             "gnb_", "sp_", "header", "footer", "naver", "press_logo",
+            "placeholder", "blank", "thumb_default", "btn_", "button",
+            "/common/", "/static/", "/assets/", "/img/common/", "/css/",
+            "/bg/", "bg_", "spacer", "holder",
         )):
             continue
         if profile["label"] == "Naver Article" and "pstatic.net" in lowered:
             if not any(marker in lowered for marker in ("/image/", "/mnews/", "/photo/", "/newsen/")):
                 continue
-        url = re.sub(r"([?&])(?:width|height|w|h)=\d+", r"\1", url)
-        url = re.sub(r"[?&]$", "", url).rstrip("?&")
+        url = _normalize_curated_media_url(url)
         dedup = re.sub(r"\?.*$", "", url)
         if dedup in seen:
             continue

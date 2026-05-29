@@ -40,6 +40,7 @@ const DEBUG_LOGS = false;
 
 let sharedReferer = "";
 let sharedCookies = "";
+let sharedPageHtml = "";
 let companionReady = false;
 let companionNeedsSetup = false;
 let initialSubmitStarted = false;
@@ -162,9 +163,10 @@ function buildBookmarklet() {
     `if(!v){var m=document.documentElement.outerHTML.match(re);if(m)v=m[0];}` +
     `if(!v){alert("FCDownload: no recognised media found on this page.\\n\\nIframes seen:\\n"+(seen.length?seen.join("\\n"):"(none)"));return;}` +
     `var c=document.cookie||"";` +
-    `var t="${frontend}#url="+encodeURIComponent(v)+"&ref="+encodeURIComponent(u)+(c?"&xfer=1":"");` +
+    `var t="${frontend}#url="+encodeURIComponent(v)+"&ref="+encodeURIComponent(u)+"&xfer=1";` +
     `var w=window.open(t,"_blank");` +
-    `if(c&&w){var n=0;var send=function(){try{w.postMessage({type:"fcdl:cookies",cookies:c,referer:u},"${location.origin}");}catch(e){}if(++n<20)setTimeout(send,150);};send();}` +
+    `var h="";try{h=document.documentElement.outerHTML.slice(0,1500000);}catch(e){}` +
+    `if(w){var n=0;var send=function(){try{w.postMessage({type:"fcdl:cookies",cookies:c,referer:u,pageHtml:h},"${location.origin}");}catch(e){}if(++n<20)setTimeout(send,150);};send();}` +
     `})();`;
 
   return "javascript:" + encodeURIComponent(src);
@@ -268,7 +270,7 @@ function fmtDuration(seconds) {
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
-async function extract(pageUrl, referer, cookies) {
+async function extract(pageUrl, referer, cookies, pageHtml) {
   const backend = getBackend();
   if (!backend) {
     throw new Error(
@@ -278,6 +280,7 @@ async function extract(pageUrl, referer, cookies) {
   const body = { pageUrl };
   if (referer) body.referer = referer;
   if (cookies) body.cookies = cookies;
+  if (pageHtml) body.pageHtml = pageHtml;
 
   const response = await fetch(`${backend}/extract`, {
     method: "POST",
@@ -315,6 +318,19 @@ function buildYouTube360DownloadUrl(pageUrl) {
   }
   const params = new URLSearchParams({ page_url: pageUrl });
   return `${backend}/youtube-360-stream?${params.toString()}`;
+}
+
+function isLikelyThumbnailUrl(url) {
+  const u = String(url || "").toLowerCase();
+  if (!/\.(?:jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(u)) return false;
+  if (/(?:^|[\/_.-])(?:thumb|thumbnail|avatar|profile(?:_pic)?|cover|poster)(?:[\/_.-]|$)/i.test(u)) return true;
+  if (/[?&](?:thumb|thumbnail|preview|avatar|width|w|height|h)=/i.test(u)) return true;
+  if (/(?:^|[\/_-])(?:\d{1,3}x\d{1,3}|s\d{2,4}x\d{2,4})(?:[\/_.-]|$)/i.test(u)) return true;
+  return false;
+}
+
+function displayThumbnail(url) {
+  return "";
 }
 
 function cookieHeaders(cookies) {
@@ -514,7 +530,7 @@ async function extractWithCompanion(pageUrl) {
     return {
       info: {
         title: data.title || pageUrl,
-        thumbnail: data.thumbnail || "",
+        thumbnail: displayThumbnail(data.thumbnail),
         duration: data.duration,
         kind: "video",
         label: companionLabel(data),
@@ -529,7 +545,7 @@ async function extractWithCompanion(pageUrl) {
   }
 }
 
-async function resolveMedia(pageUrl, referer, cookies) {
+async function resolveMedia(pageUrl, referer, cookies, pageHtml) {
   let strategy = chooseWebStrategy(pageUrl, referer, cookies);
   if (strategy.type === "direct") return strategy.direct;
 
@@ -546,14 +562,14 @@ async function resolveMedia(pageUrl, referer, cookies) {
   if (isYouTubeUrl(pageUrl)) {
     let info = {};
     try {
-      info = await extract(pageUrl, referer, cookies);
+      info = await extract(pageUrl, referer, cookies, pageHtml);
     } catch (error) {
       debugInfo("YouTube metadata extraction failed, using 360p fallback:", error?.message || error);
     }
     return {
       info: {
         title: info.title || "YouTube video",
-        thumbnail: info.thumbnail || "",
+        thumbnail: displayThumbnail(info.thumbnail),
         duration: info.duration,
         kind: "video",
         label: "YouTube 360p MP4",
@@ -569,12 +585,12 @@ async function resolveMedia(pageUrl, referer, cookies) {
     };
   }
 
-  const info = await extract(pageUrl, referer, cookies);
+  const info = await extract(pageUrl, referer, cookies, pageHtml);
   if (info.kind === "gallery" && Array.isArray(info.items)) {
     return {
       info: {
         title: info.title || info.uploader || "Media gallery",
-        thumbnail: info.items.find((item) => item.thumbnail)?.thumbnail || "",
+        thumbnail: displayThumbnail(info.items.find((item) => item.thumbnail)?.thumbnail),
         kind: "gallery",
         label: describeGallery(info.items),
       },
@@ -634,11 +650,16 @@ function renderSingleResult(resolved, info, url) {
 function renderGalleryResult(resolved, info, url, referer, cookies) {
   const items = resolved.galleryItems || [];
   const title = info.title || "Media gallery";
-  const downloads = items.map((item, index) => ({
-    item,
-    index,
-    ...galleryItemDownload(item, url, referer, cookies, title, index),
-  }));
+  const downloads = items.map((item, index) => {
+    if (item.kind === "image" && isLikelyThumbnailUrl(item.url)) {
+      return { item, index, disabledReason: "Thumbnail skipped." };
+    }
+    return {
+      item,
+      index,
+      ...galleryItemDownload(item, url, referer, cookies, title, index),
+    };
+  });
   const available = downloads.filter((entry) => entry.href || entry.request);
 
   downloadLink.hidden = true;
@@ -728,7 +749,7 @@ form.addEventListener("submit", async (event) => {
   setStatus("Finding your media...");
 
   try {
-    const resolved = await resolveMedia(url, sharedReferer || null, sharedCookies || null);
+    const resolved = await resolveMedia(url, sharedReferer || null, sharedCookies || null, sharedPageHtml || null);
     const info = resolved.info || {};
     if (resolved.galleryItems?.length) {
       renderGalleryResult(resolved, info, url, sharedReferer || null, sharedCookies || null);
@@ -755,6 +776,7 @@ reset.addEventListener("click", () => {
   urlIn.value = "";
   sharedReferer = "";
   sharedCookies = "";
+  sharedPageHtml = "";
   urlIn.focus();
 });
 
@@ -782,6 +804,7 @@ window.addEventListener("message", (event) => {
   if (data.type !== "fcdl:cookies") return;
   if (typeof data.cookies === "string") sharedCookies = data.cookies;
   if (typeof data.referer === "string" && !sharedReferer) sharedReferer = data.referer;
+  if (typeof data.pageHtml === "string") sharedPageHtml = data.pageHtml;
   submitInitialUrl();
 });
 

@@ -491,6 +491,51 @@ class TestNaverBlogExtractor:
 
 
 class TestCuratedSiteExtractor:
+    def test_oricon_photo_page_expands_full_gallery(self, monkeypatch):
+        pages = {
+            "https://contents.oricon.co.jp/news/2452025/photo/1/": """
+              <html><head>
+                <meta property="og:title" content="Sample Oricon Gallery">
+                <meta property="og:image" content="https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_sample_01_thumb.jpg?width=640">
+              </head><body>
+                <a href="/news/2452025/photo/2/">next</a>
+                <img src="https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_sample_01_thumb.jpg?width=640">
+              </body></html>
+            """,
+            "https://contents.oricon.co.jp/news/2452025/photo/2/": """
+              <html><head>
+                <meta property="og:title" content="Sample Oricon Gallery 2">
+                <meta property="og:image" content="https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_sample_02_s.jpg?height=480">
+              </head><body>
+                <img data-lazy-src="https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_sample_02_s.jpg?height=480">
+              </body></html>
+            """,
+        }
+
+        class FakeResponse:
+            headers = {}
+            def __init__(self, body: str): self.body = body.encode()
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return self.body
+
+        def fake_urlopen(req, *args, **kwargs):
+            url = getattr(req, "full_url", str(req))
+            return FakeResponse(pages[url])
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        info = extractors.extract_curated_site("https://www.oricon.co.jp/news/2452025/photo/1/", None)
+        assert info is not None
+        assert info["_type"] == "playlist"
+        assert info["extractor"] == "oricon"
+        assert info["title"] == "Sample Oricon Gallery"
+        assert [entry["url"] for entry in info["entries"]] == [
+            "https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_sample_01.jpg",
+            "https://contents.oricon.co.jp/upimg/news/2452000/2452025/20260529_sample_02.jpg",
+        ]
+        assert info["entries"][1]["http_headers"]["Referer"] == "https://www.oricon.co.jp/news/2452025/photo/2/"
+
     def test_extracts_japanese_article_gallery(self, monkeypatch):
         html = """
         <html><head>

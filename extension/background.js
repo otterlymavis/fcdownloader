@@ -21,6 +21,7 @@ const DEBUG_LOGS = false;
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i;
 const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i;
 const SERVER_ONLY_RE = /youtube\.com|youtu\.be|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.com|bilibili\.com|weibo\.com|weibo\.cn|weibocdn\.com|xiaohongshu\.com|xhslink\.com|xhscdn\.com|naver\.com|naver\.me|pstatic\.net|nicovideo\.jp|nico\.ms|niconico\.com|nicochannel\.jp|tver\.jp|tver\.co\.jp|abema\.tv|abema\.io|twitcasting\.tv|openrec\.tv|video\.fc2\.com|live\.fc2\.com|nhk\.or\.jp|nhk\.jp|cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp|fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp|video\.yahoo\.co\.jp|news\.yahoo\.co\.jp|ameblo\.jp|ameba\.jp|natalie\.mu|oricon\.co\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net/;
+const PAGE_HTML_RE = /(?:^|\.)(?:oricon\.co\.jp|news\.yahoo\.co\.jp|news\.naver\.com|n\.news\.naver\.com|m\.news\.naver\.com|entertain\.naver\.com|m\.entertain\.naver\.com|sports\.news\.naver\.com|m\.sports\.naver\.com|t\.bilibili\.com|bilibili\.com|ameblo\.jp|ameba\.jp|natalie\.mu|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net)$/i;
 const PROXY_REQUIRED_RE = /(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|weibocdn\.com|xhscdn\.com|bilivideo\.com|biliimg\.com|hdslb\.com|pstatic\.net|pximg\.net|yimg\.jp|kakaocdn\.net|daumcdn\.net|img-mdpr\.freetls\.fastly\.net)/i;
 const PREFLIGHT_MEDIA_TYPES = [
   "video/",
@@ -162,9 +163,19 @@ function mediaKindForUrl(url) {
   return "direct";
 }
 
+function isLikelyThumbnailUrl(url) {
+  const u = String(url || "").toLowerCase();
+  if (!IMAGE_EXT_RE.test(u)) return false;
+  if (/(?:^|[\/_.-])(?:thumb|thumbnail|avatar|profile(?:_pic)?|cover|poster)(?:[\/_.-]|$)/i.test(u)) return true;
+  if (/[?&](?:thumb|thumbnail|preview|avatar|width|w|height|h)=/i.test(u)) return true;
+  if (/(?:^|[\/_-])(?:\d{1,3}x\d{1,3}|s\d{2,4}x\d{2,4})(?:[\/_.-]|$)/i.test(u)) return true;
+  return false;
+}
+
 function addItem(tabId, pageUrl, item) {
   const s = ensureTab(tabId, pageUrl);
   if (!item || !item.url) return;
+  if (item.kind === "image" && isLikelyThumbnailUrl(item.url)) return;
   if (item.source === "weibo-page" || item.source === "japanese-page" || /(?:^|\.)weibo\.(?:com|cn)\//i.test(item.url)) {
     s.items = s.items.filter((i) => !(i.kind === "image" || i.source === "network" || i.source === "image-tag"));
   }
@@ -229,7 +240,10 @@ function isLikelyMedia(url) {
   const u = url.toLowerCase().split("?")[0];
   if (u.endsWith(".m3u8") || u.endsWith(".mpd")) return true;
   if (u.endsWith(".mp4") || u.endsWith(".webm") || u.endsWith(".mov")) return true;
-  if (IMAGE_EXT_RE.test(u) || AUDIO_EXT_RE.test(u)) return true;
+  // Network-level image captures are overwhelmingly thumbnails, avatars, and
+  // previews. Dedicated page/gallery extractors can still return real images.
+  if (IMAGE_EXT_RE.test(u)) return false;
+  if (AUDIO_EXT_RE.test(u)) return true;
   // Known video CDNs (no extension)
   if (/googlevideo\.com\/videoplayback/.test(url)) {
     return false;
@@ -289,7 +303,7 @@ async function getSettings() {
 
 // ── Backend extract ───────────────────────────────────────────────────────
 
-async function callExtract(pageUrl, referer, cookies) {
+async function callExtract(pageUrl, referer, cookies, pageHtml) {
   const { backend } = await getSettings();
   if (!backend) {
     throw new Error(
@@ -299,6 +313,7 @@ async function callExtract(pageUrl, referer, cookies) {
   const body = { pageUrl };
   if (referer) body.referer = referer;
   if (cookies) body.cookies = cookies;
+  if (pageHtml) body.pageHtml = pageHtml;
 
   // Hard-cap the request. yt-dlp retries + generic-extractor fallback take
   // up to ~20s on hard sites; anything longer is almost certainly a hang.
@@ -331,6 +346,21 @@ function backendDownloadUrl(backend, pageUrl, referer) {
   const p = new URLSearchParams({ url: pageUrl });
   if (referer) p.set("referer", referer);
   return `${backend}/download?${p.toString()}`;
+}
+
+async function pageHtmlForTab(tabId, pageUrl) {
+  try {
+    const host = new URL(pageUrl).hostname;
+    if (!PAGE_HTML_RE.test(host)) return "";
+  } catch {
+    return "";
+  }
+  try {
+    const resp = await chrome.tabs.sendMessage(tabId, { type: "fcdl:get_page_html" });
+    return resp?.ok && typeof resp.pageHtml === "string" ? resp.pageHtml : "";
+  } catch {
+    return "";
+  }
 }
 
 function cookieHeaderList(cookies) {
@@ -477,6 +507,10 @@ async function launchLocalCompanion() {
 }
 
 async function downloadItem(tabId, item) {
+  if (item?.kind === "image" && isLikelyThumbnailUrl(item.url)) {
+    throw new Error("Skipping thumbnail image.");
+  }
+
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   const tabPageUrl = tab?.url || "";
   const tabTitle = tab?.title || "";
@@ -761,6 +795,10 @@ async function buildProxiedUrl(item, ctx) {
 }
 
 async function downloadGalleryItem(title, index, item, ctx) {
+  if (item?.kind === "image" && isLikelyThumbnailUrl(item.url)) {
+    throw new Error(`gallery item ${index} is a thumbnail`);
+  }
+
   const filename = galleryFilename(title, index, item);
   const sourceUrl = item.kind === "paired" ? (item.videoUrl || item.url) : item.url;
   if (!sourceUrl) throw new Error(`gallery item ${index} has no URL`);
@@ -876,8 +914,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const t0 = Date.now();
       try {
         const cookies = await cookieHeaderFor(msg.referer || msg.pageUrl);
-        debugLog("[fcdl] extract →", msg.pageUrl, "cookies:", cookies.length, "chars");
-        const info = await callExtract(msg.pageUrl, msg.referer || null, cookies || null);
+        const pageHtml = await pageHtmlForTab(msg.tabId, msg.pageUrl);
+        debugLog("[fcdl] extract →", msg.pageUrl, "cookies:", cookies.length, "chars", "html:", pageHtml.length, "chars");
+        const info = await callExtract(msg.pageUrl, msg.referer || null, cookies || null, pageHtml || null);
         debugLog("[fcdl] extract ←", Date.now() - t0, "ms, kind=", info?.kind);
         sendResponse({ ok: true, info });
       } catch (e) {

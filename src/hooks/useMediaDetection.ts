@@ -21,6 +21,22 @@ function guessKind(url: string, mimeType?: string | null): DetectedMedia['mediaK
   return 'video';
 }
 
+function isLikelyThumbnailUrl(url: string): boolean {
+  const u = url.toLowerCase();
+  if (!/\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(u)) return false;
+  if (/(?:^|[\/_.-])(?:thumb|thumbnail|avatar|profile(?:_pic)?|placeholder|blank|pixel)(?:[\/_.-]|$)/i.test(u)) return true;
+  if (/[?&](?:thumb|thumbnail|preview|avatar)=/i.test(u)) return true;
+  try {
+    const parsed = new URL(url);
+    const dimensions = ['width', 'w', 'height', 'h']
+      .map((key) => Number(parsed.searchParams.get(key) || 0))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (dimensions.length && Math.max(...dimensions) <= 512) return true;
+  } catch {}
+  if (/(?:^|[\/_-])(?:\d{1,3}x\d{1,3}|s\d{2,4}x\d{2,4})(?:[\/_.-]|$)/i.test(u)) return true;
+  return false;
+}
+
 function isSegmentUrl(url: string): boolean {
   const clean = url.split('#')[0].split('?')[0].toLowerCase();
   const lower = url.toLowerCase();
@@ -72,6 +88,8 @@ export function useMediaDetection() {
       if (data.event === 'MEDIA_DETECTED') {
         const url = String(data.url ?? '').trim();
         if (!url || isSegmentUrl(url)) return;
+        const mediaKind = data.mediaKind ?? guessKind(url, data.mimeType);
+        if (mediaKind === 'image' && isLikelyThumbnailUrl(url)) return;
         const item: DetectedMedia = {
           id: genId(),
           url,
@@ -80,7 +98,7 @@ export function useMediaDetection() {
           timestamp: (data.timestamp as number) ?? Date.now(),
           mimeType: data.mimeType ?? undefined,
           mediaType: (data.mediaType as MediaType) ?? guessType(url),
-          mediaKind: data.mediaKind ?? guessKind(url, data.mimeType),
+          mediaKind,
           label: data.label ?? undefined,
           confidence: typeof data.confidence === 'number' ? data.confidence : 0.5,
           provenance: (data.provenance as Provenance) ?? 'perf-observer',
@@ -130,11 +148,12 @@ export function useMediaDetection() {
         const u = url.toLowerCase();
         const isManifest  = /\.m3u8/i.test(url) || /\.mpd/i.test(url);
         const isVimeoJson = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i.test(url);
-        const isDirectMedia = /\.(mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)(\?|$)/i.test(url) &&
+        const isDirectMedia = /\.(mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac)(\?|$)/i.test(url) &&
           !/vimeocdn\.com\/.*\/v2\/range\//i.test(url);
         const isCdnVideo  = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/|weibocdn\.com\/|xhscdn\.com\/)/i.test(url);
         const isImageCdn = /(?:cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|pinimg\.com\/(?:originals|736x|1200x|564x)\/|sinaimg\.cn\/|xhscdn\.com\/)/i.test(url);
-        if (isManifest || isVimeoJson || isDirectMedia || isCdnVideo || isImageCdn) {
+        if ((isImageCdn || guessKind(url) === 'image') && isLikelyThumbnailUrl(url)) return;
+        if (isManifest || isVimeoJson || isDirectMedia || isCdnVideo) {
           const mediaType: MediaType = guessType(url);
           setDetected((prev) => {
             if (prev.some((m) => m.url === url)) return prev;
