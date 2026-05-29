@@ -107,6 +107,46 @@ export function getMediaFormat(item: DetectedMedia): string {
   return kind === 'audio' ? 'Audio' : 'Video';
 }
 
+function formatDimensions(width?: number, height?: number): string | null {
+  if (width && height) return `${width} x ${height}`;
+  if (height) return `${height}p`;
+  return null;
+}
+
+export function getMediaResolution(item: DetectedMedia): string | null {
+  const direct = formatDimensions(item.width, item.height);
+  if (direct) return direct;
+
+  const selectedFormat = item.availableFormats?.find((format) => format.id === item.formatId);
+  const selected = formatDimensions(selectedFormat?.width, selectedFormat?.height);
+  if (selected) return selected;
+
+  const bestFormat = item.availableFormats
+    ?.filter((format) => format.width || format.height)
+    .sort((a, b) => (b.height ?? 0) - (a.height ?? 0) || (b.width ?? 0) - (a.width ?? 0))[0];
+  const best = formatDimensions(bestFormat?.width, bestFormat?.height);
+  if (best) return best;
+
+  const quality = getQuality(item.url, item.label);
+  if (quality && /(?:\d{3,4}p|4k|8k)/i.test(quality)) return quality;
+
+  const urlDimensions = item.url.match(/(?:^|[\/_-])(\d{3,5})x(\d{3,5})(?:[\/_.-]|$)/i);
+  if (urlDimensions) return `${urlDimensions[1]} x ${urlDimensions[2]}`;
+
+  try {
+    const params = new URL(item.url).searchParams;
+    const width = Number(params.get('width') || params.get('w') || 0);
+    const height = Number(params.get('height') || params.get('h') || 0);
+    const fromParams = formatDimensions(
+      Number.isFinite(width) && width > 0 ? width : undefined,
+      Number.isFinite(height) && height > 0 ? height : undefined,
+    );
+    if (fromParams) return fromParams;
+  } catch {}
+
+  return getMediaKind(item) === 'audio' ? 'Audio only' : null;
+}
+
 export function getMimeFromPath(path: string): string {
   const ext = path.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? '';
   return MIME_BY_EXT[ext] ?? 'application/octet-stream';

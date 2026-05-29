@@ -44,6 +44,7 @@ import {
   getInitial,
   getMediaFormat,
   getMediaKind,
+  getMediaResolution,
   getMimeFromPath,
   getPageTitle,
   getQuality,
@@ -77,6 +78,13 @@ function formatOptionLabel(format: NonNullable<DetectedMedia['availableFormats']
     format.acodec && format.acodec !== 'none' ? format.acodec : undefined,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join('  ') : format.id;
+}
+
+function compactMediaDetails(...parts: Array<string | null | undefined>): string {
+  return parts
+    .filter((part): part is string => Boolean(part))
+    .filter((part, index, all) => all.indexOf(part) === index)
+    .join('  |  ');
 }
 
 export default function App() {
@@ -432,7 +440,14 @@ export default function App() {
             {active.length > 0 && (
               <View style={s.section}>
                 <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11) }]}>IN PROGRESS</Text>
-                {active.map((task) => (
+                {active.map((task) => {
+                  const resolution = getMediaResolution(task.media);
+                  const statusText = task.status === 'downloading' && task.totalSegments > 0
+                    ? `${task.downloadedSegments} / ${task.totalSegments} parts`
+                    : task.status === 'assembling'        ? 'Assembling…'
+                    : task.status === 'fetching_manifest' ? 'Reading stream…'
+                    : 'Starting…';
+                  return (
                   <View key={task.id} style={[s.compactCard, { backgroundColor: t.card }, subtleShadow]}>
                     <View style={s.compactRow}>
                       <Text style={[s.compactSource, { color: t.ink, fontSize: fs(14) }]}>
@@ -451,14 +466,11 @@ export default function App() {
                         width: `${Math.round(task.progress * 100)}%` as `${number}%` }]} />
                     </View>
                     <Text style={[s.compactStatus, { color: t.ink2, fontSize: fs(11) }]}>
-                      {task.status === 'downloading' && task.totalSegments > 0
-                        ? `${task.downloadedSegments} / ${task.totalSegments} parts`
-                        : task.status === 'assembling'        ? 'Assembling…'
-                        : task.status === 'fetching_manifest' ? 'Reading stream…'
-                        : 'Starting…'}
+                      {compactMediaDetails(statusText, resolution)}
                     </Text>
                   </View>
-                ))}
+                  );
+                })}
               </View>
             )}
 
@@ -626,7 +638,14 @@ export default function App() {
                   <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.sm }]}>
                     IN PROGRESS
                   </Text>
-                  {active.map((task) => (
+                  {active.map((task) => {
+                    const resolution = getMediaResolution(task.media);
+                    const statusText = task.status === 'downloading' && task.totalSegments > 0
+                      ? `${task.downloadedSegments} / ${task.totalSegments} parts`
+                      : task.status === 'assembling'        ? 'Assembling…'
+                      : task.status === 'fetching_manifest' ? 'Reading stream…'
+                      : 'Starting…';
+                    return (
                     <View key={task.id} style={[s.libraryCard, { backgroundColor: t.card }, subtleShadow]}>
                       <View style={s.libraryCardLeft}>
                         <View style={[s.sourceAvatar, { backgroundColor: t.card2 }]}>
@@ -649,11 +668,7 @@ export default function App() {
                             width: `${Math.round(task.progress * 100)}%` as `${number}%` }]} />
                         </View>
                         <Text style={[s.libraryCardSub, { color: t.ink2, fontSize: fs(11) }]}>
-                          {task.status === 'downloading' && task.totalSegments > 0
-                            ? `${task.downloadedSegments} / ${task.totalSegments} parts`
-                            : task.status === 'assembling'        ? 'Assembling…'
-                            : task.status === 'fetching_manifest' ? 'Reading stream…'
-                            : 'Starting…'}
+                          {compactMediaDetails(statusText, resolution)}
                         </Text>
                         <Pressable android_ripple={RIPPLE_BL} onPress={() => cancel(task.id)}
                           style={[s.outlineBtn, { borderColor: t.sep, marginTop: S.xs }]}>
@@ -661,7 +676,8 @@ export default function App() {
                         </Pressable>
                       </View>
                     </View>
-                  ))}
+                    );
+                  })}
                   {history.length > 0 && <View style={[s.sep, { backgroundColor: t.sep }]} />}
                 </>
               )}
@@ -675,6 +691,7 @@ export default function App() {
               {history.map((task) => {
                 const source      = getSourceName(task.media.url);
                 const quality     = getQuality(task.media.url, task.media.label);
+                const resolution  = getMediaResolution(task.media);
                 const size        = fileSizes[task.id];
                 const isDone      = task.status === 'completed';
                 const isFail      = task.status === 'failed';
@@ -718,6 +735,11 @@ export default function App() {
                          : isFail ? (task.error ?? 'Failed')
                          : 'Cancelled'}
                       </Text>
+                      {resolution && (
+                        <Text style={[s.libraryCardSub, { color: t.ink2, fontSize: fs(11) }]} numberOfLines={1}>
+                          {resolution}
+                        </Text>
+                      )}
 
                       {!libSelectMode && (
                         <View style={s.libraryActions}>
@@ -934,6 +956,14 @@ export default function App() {
                     {getMediaFormat(previewItem)}
                   </Text>
                 </View>
+                {getMediaResolution(previewItem) && (
+                  <View style={[s.metaRow, { borderBottomColor: t.sep }]}>
+                    <Text style={[s.metaKey, { color: t.ink2, fontSize: fs(13) }]}>Resolution</Text>
+                    <Text style={[s.metaVal, { color: t.ink, fontSize: fs(13) }]}>
+                      {getMediaResolution(previewItem)}
+                    </Text>
+                  </View>
+                )}
 
                 {previewItem.availableFormats && previewItem.availableFormats.length > 0 && (
                   <View style={{ marginTop: S.md }}>
@@ -998,6 +1028,7 @@ export default function App() {
                 {allVideos.map((item) => {
                   const source  = getSourceName(item.url);
                   const quality = getQuality(item.url, item.label) || getMediaFormat(item);
+                  const resolution = getMediaResolution(item);
                   return (
                     <Pressable key={item.id} android_ripple={RIPPLE}
                       style={[s.videoRow, { backgroundColor: t.card, borderBottomColor: t.sep }]}
@@ -1009,9 +1040,9 @@ export default function App() {
                       </View>
                       <View style={s.videoMeta}>
                         <Text style={[s.videoSource, { color: t.ink, fontSize: fs(14) }]}>{source}</Text>
-                        {quality && (
-                          <Text style={[s.videoQuality, { color: t.ink2, fontSize: fs(12) }]}>{quality}</Text>
-                        )}
+                        <Text style={[s.videoQuality, { color: t.ink2, fontSize: fs(12) }]}>
+                          {compactMediaDetails(quality, resolution)}
+                        </Text>
                       </View>
                       <Pressable android_ripple={RIPPLE}
                         style={[s.dlBtn, { backgroundColor: t.btn }]}
