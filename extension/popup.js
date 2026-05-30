@@ -275,9 +275,24 @@ function capturedOrder(items) {
   return [primary, ...items.filter((item) => item.url !== primary.url)];
 }
 
+function isPagePlaceholder(item) {
+  if (!item || !item.url) return false;
+  if (item.formats || item.width || item.height || item.ext) return false;
+  if (item.url === currentPageUrl) return true;
+  try {
+    const itemUrl = new URL(item.url);
+    const pageUrl = new URL(currentPageUrl);
+    if (itemUrl.origin === pageUrl.origin && /\.(?:html?)$/i.test(itemUrl.pathname)) {
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 function displayedItems(items) {
-  if (helperIsReady) return companionReadyOrder(items);
-  const visibleItems = standaloneOrder(items);
+  const filtered = (items || []).filter((item) => !isPagePlaceholder(item));
+  if (helperIsReady) return companionReadyOrder(filtered);
+  const visibleItems = standaloneOrder(filtered);
   return preferCapturedMedia ? capturedOrder(visibleItems) : visibleItems;
 }
 
