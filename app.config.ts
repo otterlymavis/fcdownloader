@@ -23,10 +23,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     package: 'com.mabisuuu.fcdownloader',
     versionCode: 21,
     allowBackup: false,
+    icon: './web/icon-512.png',
     adaptiveIcon: {
-      foregroundImage: './assets/android-icon-foreground.png',
-      backgroundImage: './assets/android-icon-background.png',
-      backgroundColor: '#000000',
+      foregroundImage: './web/icon-512.png',
+      backgroundColor: '#ffffff',
     },
     permissions: [
       'android.permission.INTERNET',
