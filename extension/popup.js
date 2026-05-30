@@ -60,15 +60,17 @@ function sendMessage(message, timeoutMs = 30000) {
   });
 }
 
-function setStatus(text, kind = "info") {
+function setStatus(text, kind = "info", detail = "") {
   if (!text) {
     statusEl.hidden = true;
     statusEl.textContent = "";
+    statusEl.title = "";
     statusEl.classList.remove("error", "success");
     return;
   }
   statusEl.hidden = false;
   statusEl.textContent = text;
+  statusEl.title = detail || "";
   statusEl.classList.remove("error", "success");
   if (kind === "error")   statusEl.classList.add("error");
   if (kind === "success") statusEl.classList.add("success");
@@ -217,6 +219,54 @@ function displayedItems(items) {
 
 function isRuntimeOnlyExtractFailure(error) {
   return /(No extractor found for this URL and the page HTML contained no detectable media|browser runtime is client-side only|server'?s IP is blocked|HTTP 403|Forbidden|geo-restricted|geo restricted|requires you to be signed in|requires a browser session|DRM|region)/i.test(String(error || ""));
+}
+
+function friendlyErrorMessage(error, fallback = "Something went wrong.") {
+  const raw = String(error || "").trim();
+  if (!raw) return fallback;
+  const pageHost = hostname(currentPageUrl);
+  const sitePrefix = pageHost ? `${pageHost}: ` : "";
+
+  if (/Background service is not responding|Extension context invalidated|Receiving end does not exist/i.test(raw)) {
+    return "The extension background service stopped. Reload FCDownloader at chrome://extensions and try again.";
+  }
+  if (/Backend URL is not configured|Backend URL isn't set/i.test(raw)) {
+    return "Backend URL is not set. Open settings and add the FCDownloader backend URL.";
+  }
+  if (/Companion is not running|Install or start FCDownloader Companion/i.test(raw)) {
+    return "Companion is not running. Open FCDownloader Companion for HD or protected server downloads.";
+  }
+  if (/Companion video tools are not ready|install tools/i.test(raw)) {
+    return "Companion needs its video tools. Click Tools, wait for setup to finish, then try again.";
+  }
+  if (/DRM|encrypted|protected/i.test(raw)) {
+    return `${sitePrefix}this player appears DRM protected. FCDownloader can only save media the browser or server can access as normal files or streams.`;
+  }
+  if (/geo-restricted|geo restricted|region|country|not available in your location/i.test(raw)) {
+    return `${sitePrefix}this media looks region locked. Open the page with the right region/VPN, start playback, then click Find media again.`;
+  }
+  if (/requires you to be signed in|requires a browser session|authentication required|login required|sign in|server'?s IP is blocked|HTTP 403|Forbidden/i.test(raw)) {
+    return `${sitePrefix}the site is blocking server access. Sign in on the page, refresh it, then click Find media so the extension can use your browser session.`;
+  }
+  if (/Backend timed out|timed out|timeout/i.test(raw)) {
+    return `${sitePrefix}the site did not answer the server in time. Start playback in the tab, then click Find media again.`;
+  }
+  if (/No extractor found|page HTML contained no detectable media|no detectable media|No usable download method/i.test(raw)) {
+    return `${sitePrefix}I could not see a downloadable file yet. Start playback for a few seconds, then click Find media again.`;
+  }
+  if (/DNS|could not resolve|Name or service not known|ERR_NAME/i.test(raw)) {
+    return `${sitePrefix}the domain could not be reached from this environment. Try again later or use the extension while the page is open in your browser.`;
+  }
+  if (/All download methods failed/i.test(raw)) {
+    return `${sitePrefix}all download routes failed. Try signing in, starting playback, or opening Companion for the browser-session route.`;
+  }
+  return raw.length > 220 ? `${raw.slice(0, 217)}...` : raw;
+}
+
+function setErrorStatus(error, fallback = "Something went wrong.") {
+  const raw = String(error || "").trim();
+  const friendly = friendlyErrorMessage(raw, fallback);
+  setStatus(friendly, "error", raw && raw !== friendly ? raw : "");
 }
 
 function needsCompanion(url, items = []) {
@@ -441,7 +491,7 @@ if (helperOpen) {
     helperOpen.disabled = false;
     renderHelperStatus(true);
     if (!resp?.ready) {
-      setStatus("Install or start FCDownloader Companion, then try again.", "error");
+      setErrorStatus("Install or start FCDownloader Companion, then try again.");
     }
   });
 }
@@ -454,7 +504,7 @@ if (helperTools) {
     helperTools.disabled = false;
     await renderHelperStatus(true);
     if (!resp?.ok) {
-      setStatus(resp?.error || "Could not install Companion video tools.", "error");
+      setErrorStatus(resp?.error, "Could not install Companion video tools.");
       return;
     }
     setStatus("Companion video tools are ready.", "success");
@@ -498,7 +548,7 @@ extractBtn.addEventListener("click", async () => {
         refresh();
         return;
       }
-      setStatus(resp?.error || "Couldn't find media on this page.", "error");
+      setErrorStatus(resp?.error, "Couldn't find media on this page.");
       return;
     }
     setStatus("", "info");
@@ -549,7 +599,7 @@ extractBtn.addEventListener("click", async () => {
     }, 5000);
     refresh();
   } catch (e) {
-    setStatus(String(e), "error");
+    setErrorStatus(e, "Couldn't find media on this page.");
   } finally {
     extractBtn.disabled = false;
   }
@@ -598,14 +648,14 @@ function renderGallery(info) {
     primaryBtn.disabled = false;
     primaryBtn.textContent = `Save all ${items.length}`;
     if (!resp?.ok) {
-      setStatus(resp?.error || "Some downloads failed.", "error");
+      setErrorStatus(resp?.error, "Some downloads failed.");
       return;
     }
     const { started = 0, failed = 0 } = resp;
     if (failed === 0) {
       setStatus(`Saved ${started} files. Check your browser's Downloads.`, "success");
     } else {
-      setStatus(`Saved ${started}, ${failed} failed. Check the SW console for details.`, "error");
+      setErrorStatus(`Saved ${started}, ${failed} failed. Check the extension console for details.`);
     }
   };
   primaryEl.hidden = false;
@@ -646,7 +696,7 @@ function renderGallery(info) {
         index: idx,
         item: it,
       }, 60_000);
-      if (!r?.ok) setStatus(r?.error || "Failed.", "error");
+      if (!r?.ok) setErrorStatus(r?.error, "Failed.");
     });
     moreList.appendChild(li);
   });
@@ -664,7 +714,7 @@ async function downloadItem(item) {
     25000,
   );
   if (!resp?.ok) {
-    setStatus(resp?.error || "Download failed.", "error");
+    setErrorStatus(resp?.error, "Download failed.");
     return;
   }
   setStatus("Download started. Check your browser's Downloads.", "success");
@@ -708,14 +758,14 @@ async function downloadSelectedItems() {
   downloadSelectedBtn.disabled = false;
   updateBulkControls();
   if (!resp?.ok) {
-    setStatus(resp?.error || "Selected downloads failed.", "error");
+    setErrorStatus(resp?.error, "Selected downloads failed.");
     return;
   }
   const { started = 0, failed = 0 } = resp;
   if (failed === 0) {
     setStatus(`Started ${started} download${started === 1 ? "" : "s"}. Check your browser's Downloads.`, "success");
   } else {
-    setStatus(`Started ${started}, ${failed} failed. Check the extension console for details.`, "error");
+    setErrorStatus(`Started ${started}, ${failed} failed. Check the extension console for details.`);
   }
 }
 
@@ -738,14 +788,14 @@ async function downloadSelectedGalleryItems() {
   downloadSelectedBtn.disabled = false;
   updateBulkControls();
   if (!resp?.ok) {
-    setStatus(resp?.error || "Selected downloads failed.", "error");
+    setErrorStatus(resp?.error, "Selected downloads failed.");
     return;
   }
   const { started = 0, failed = 0 } = resp;
   if (failed === 0) {
     setStatus(`Started ${started} download${started === 1 ? "" : "s"}. Check your browser's Downloads.`, "success");
   } else {
-    setStatus(`Started ${started}, ${failed} failed. Check the extension console for details.`, "error");
+    setErrorStatus(`Started ${started}, ${failed} failed. Check the extension console for details.`);
   }
 }
 
