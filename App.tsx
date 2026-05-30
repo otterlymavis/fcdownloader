@@ -315,6 +315,39 @@ export default function App() {
     setTab('library');
   }, [enqueue, showToast]);
 
+  const handleDownloadAllDetected = useCallback(async () => {
+    if (!allVideos.length) return;
+    setVideosOpen(false);
+    setPreviewItem(null);
+    for (const item of allVideos) await enqueue(item);
+    showToast(`Started ${allVideos.length} download${allVideos.length !== 1 ? 's' : ''}`, 'success');
+    setTab('library');
+  }, [allVideos, enqueue, showToast]);
+
+  const handleDownloadAllAudio = useCallback(async () => {
+    const audioItems = allVideos.filter((item) => getMediaKind(item) !== 'image');
+    if (!audioItems.length) return;
+    setVideosOpen(false);
+    setPreviewItem(null);
+    for (const item of audioItems) {
+      await enqueue({
+        ...item,
+        id: `${item.id}_audio_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        url: item.sourcePageUrl || item.pageUrl || item.url,
+        mediaKind: 'audio',
+        mediaType: 'direct',
+        mimeType: 'audio/mp4',
+        label: 'Audio only',
+        audioOnly: true,
+        forceServerDownload: true,
+        sourcePageUrl: item.sourcePageUrl || item.pageUrl || item.url,
+        formatId: undefined,
+      });
+    }
+    showToast(`Started ${audioItems.length} audio download${audioItems.length !== 1 ? 's' : ''}`, 'success');
+    setTab('library');
+  }, [allVideos, enqueue, showToast]);
+
   // ── Export / Gallery ──────────────────────────────────────
   const handleExport = useCallback(async (task: DownloadTask) => {
     if (!task.localPlaylistPath) return;
@@ -1068,6 +1101,27 @@ export default function App() {
                 </Pressable>
               </View>
 
+              {allVideos.length > 0 && (
+                <View style={s.bulkDownloadRow}>
+                  <Pressable android_ripple={RIPPLE}
+                    style={[s.secondaryBtn, s.bulkDownloadBtn, { borderColor: t.sep }]}
+                    onPress={handleDownloadAllDetected}>
+                    <Text style={[s.secondaryBtnLabel, { color: t.ink, fontSize: fs(13) }]}>
+                      Download all
+                    </Text>
+                  </Pressable>
+                  {allVideos.some((item) => getMediaKind(item) !== 'image') && (
+                    <Pressable android_ripple={RIPPLE}
+                      style={[s.secondaryBtn, s.bulkDownloadBtn, { borderColor: t.sep }]}
+                      onPress={handleDownloadAllAudio}>
+                      <Text style={[s.secondaryBtnLabel, { color: t.ink, fontSize: fs(13) }]}>
+                        Audio all
+                      </Text>
+                    </Pressable>
+                  )}
+                </View>
+              )}
+
               <ScrollView style={{ maxHeight: 360 }}
                 contentContainerStyle={{ paddingHorizontal: S.md, paddingBottom: S.sm }}
                 showsVerticalScrollIndicator={false}>
@@ -1197,6 +1251,16 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   secondaryBtnLabel: { fontWeight: '600' },
+  bulkDownloadRow: {
+    flexDirection: 'row',
+    gap: S.sm,
+    paddingHorizontal: S.md,
+    paddingBottom: S.sm,
+  },
+  bulkDownloadBtn: {
+    flex: 1,
+    height: 40,
+  },
   browseLink:      { alignItems: 'center', paddingVertical: S.xs },
   browseLinkLabel: { fontWeight: '400' },
   browseHint:      { alignSelf: 'center', textAlign: 'center', marginTop: 2, fontWeight: '400', opacity: 0.85 },
