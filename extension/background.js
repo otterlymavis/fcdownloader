@@ -481,6 +481,7 @@ function localHelperDownloadUrl(pageUrl, youtubeOnly = false) {
 
 // ── Download orchestration ────────────────────────────────────────────────
 
+
 // Preflight a backend /download URL: fetch the headers, abort the body. If
 // the server is going to respond with JSON (its error format), we return the
 // error text instead of saving garbage as a .mp4.
@@ -508,6 +509,8 @@ function fetchHeadersFromChromeHeaders(headers = []) {
 
 async function preflightBackendUrl(url, headers = []) {
   const ac = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ac.abort(); }, 85_000);
   try {
     const r = await fetch(url, {
       method: "GET",
@@ -529,8 +532,11 @@ async function preflightBackendUrl(url, headers = []) {
     const body = await r.text().catch(() => "");
     return { ok: false, error: backendErrorMessage(body, ct || "Unexpected response") };
   } catch (e) {
+    if (timedOut) return { ok: false, error: "Backend took too long to respond. It may be struggling to extract this media." };
     if (e.name === "AbortError") return { ok: true };  // we aborted on success
     return { ok: false, error: String(e.message || e) };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

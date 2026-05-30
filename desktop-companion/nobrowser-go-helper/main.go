@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	_ "embed"
@@ -9,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -115,6 +117,7 @@ func main() {
 	mux.HandleFunc("/formats", handleFormats)
 	mux.HandleFunc("/download", func(w http.ResponseWriter, r *http.Request) { handleDownload(w, r, false) })
 	mux.HandleFunc("/youtube-hd", func(w http.ResponseWriter, r *http.Request) { handleDownload(w, r, true) })
+	mux.HandleFunc("/download/progress", handleDownloadProgress)
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort(host, port),
@@ -172,7 +175,7 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"cacheRoot":       cacheRoot(),
 		"logPath":         logPath(),
 		"toolPinning":     toolPinningStatus(ytDlpAsset, ffmpegAsset),
-		"endpoints":       []string{"/health", "/tools", "/tools/ensure", "/tools/progress", "/formats", "/download", "/youtube-hd"},
+		"endpoints":       []string{"/health", "/tools", "/tools/ensure", "/tools/progress", "/formats", "/download", "/youtube-hd", "/download/progress"},
 		"downloadedTools": downloadedTools(),
 		"tools":           toolStatuses(),
 		"needsSetup":      toolsNeedSetup(),
@@ -244,36 +247,34 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 		return
 	}
 
+	// Flush headers immediately so the Chrome extension's download manager doesn't time out
+	// while waiting for yt-dlp to finish downloading the video.
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Content-Disposition", `attachment; filename="fcdownloader_video.mp4"`)
+	w.WriteHeader(http.StatusOK)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
 	filePath, cleanup, err := downloadMedia(r.Context(), rawURL, strings.TrimSpace(q.Get("format")), strings.TrimSpace(q.Get("max_height")))
 	if cleanup != nil {
 		defer cleanup()
 	}
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		// Headers already sent, so we can't send a JSON error payload anymore.
+		// Simply aborting the connection will let the browser know the download failed.
+		logf("download error: %v", err)
 		return
 	}
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		logf("failed to open downloaded file: %v", err)
 		return
 	}
 	defer file.Close()
 
-	info, err := file.Stat()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	name := safeName(filepath.Base(filePath))
-	ctype := mime.TypeByExtension(filepath.Ext(filePath))
-	if ctype == "" {
-		ctype = "application/octet-stream"
-	}
-	w.Header().Set("Content-Type", ctype)
-	w.Header().Set("Content-Length", fmt.Sprint(info.Size()))
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
-	http.ServeContent(w, r, name, info.ModTime(), file)
+	io.Copy(w, file)
 }
 
 func runYtDlpJSON(ctx context.Context, rawURL string) (map[string]interface{}, error) {
@@ -367,6 +368,7 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (strin
 	defer cancel()
 	args := []string{
 		"-f", format,
+		"--newline",
 		"--merge-output-format", "mp4",
 		"--remux-video", "mp4",
 		"--js-runtimes", "node",
@@ -375,7 +377,7 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (strin
 		"-o", filepath.Join(tmp, "%(title).120s-%(id)s.%(ext)s"),
 		rawURL,
 	}
-	out, err := exec.CommandContext(runCtx, ytDlp, args...).CombinedOutput()
+	out, err := runYtDlpWithProgress(runCtx, ytDlp, args, rawURL)
 	if err != nil {
 		cleanup()
 		return "", nil, fmt.Errorf("%s", tail(out))
@@ -916,4 +918,122 @@ func envDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+type mediaProgress struct {
+	URL        string  `json:"url"`
+	Percent    float64 `json:"percent"`
+	Speed      string  `json:"speed"`
+	ETA        string  `json:"eta"`
+	Status     string  `json:"status"` // "starting", "downloading", "merging", "complete", "error"
+	Downloaded string  `json:"downloaded"`
+	Total      string  `json:"total"`
+}
+
+var (
+	mediaProgressMu sync.Mutex
+	mediaDownloads  = make(map[string]*mediaProgress)
+)
+
+func setMediaProgress(url string, p *mediaProgress) {
+	mediaProgressMu.Lock()
+	defer mediaProgressMu.Unlock()
+	mediaDownloads[url] = p
+}
+
+func getMediaProgress(url string) *mediaProgress {
+	mediaProgressMu.Lock()
+	defer mediaProgressMu.Unlock()
+	return mediaDownloads[url]
+}
+
+func handleDownloadProgress(w http.ResponseWriter, r *http.Request) {
+	rawURL := strings.TrimSpace(r.URL.Query().Get("url"))
+	if rawURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "url parameter is required"})
+		return
+	}
+	prog := getMediaProgress(rawURL)
+	if prog == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no active download found for this url"})
+		return
+	}
+	writeJSON(w, http.StatusOK, prog)
+}
+
+func runYtDlpWithProgress(ctx context.Context, ytDlp string, args []string, rawURL string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, ytDlp, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = cmd.Stdout // combine stderr and stdout
+
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	var outputBuf bytes.Buffer
+	scanner := bufio.NewScanner(stdout)
+
+	setMediaProgress(rawURL, &mediaProgress{
+		URL:    rawURL,
+		Status: "starting",
+	})
+
+	percentRx := regexp.MustCompile(`\[download\]\s+([0-9.]+)%`)
+	sizeRx := regexp.MustCompile(`of\s+(\S+)`)
+	speedRx := regexp.MustCompile(`at\s+(\S+)`)
+	etaRx := regexp.MustCompile(`ETA\s+(\S+)`)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		outputBuf.WriteString(line + "\n")
+
+		if strings.Contains(line, "[download]") {
+			percentMatch := percentRx.FindStringSubmatch(line)
+			if len(percentMatch) > 1 {
+				pct, _ := strconv.ParseFloat(percentMatch[1], 64)
+				
+				prog := &mediaProgress{
+					URL:     rawURL,
+					Percent: pct,
+					Status:  "downloading",
+				}
+				
+				if sizeMatch := sizeRx.FindStringSubmatch(line); len(sizeMatch) > 1 {
+					prog.Total = sizeMatch[1]
+				}
+				if speedMatch := speedRx.FindStringSubmatch(line); len(speedMatch) > 1 {
+					prog.Speed = speedMatch[1]
+				}
+				if etaMatch := etaRx.FindStringSubmatch(line); len(etaMatch) > 1 {
+					prog.ETA = etaMatch[1]
+				}
+				setMediaProgress(rawURL, prog)
+			}
+		} else if strings.Contains(line, "[Merger]") || strings.Contains(line, "Merging formats") {
+			setMediaProgress(rawURL, &mediaProgress{
+				URL:     rawURL,
+				Percent: 100,
+				Status:  "merging",
+			})
+		}
+	}
+
+	err = cmd.Wait()
+	if err != nil {
+		setMediaProgress(rawURL, &mediaProgress{
+			URL:    rawURL,
+			Status: "error",
+		})
+		return outputBuf.Bytes(), err
+	}
+
+	setMediaProgress(rawURL, &mediaProgress{
+		URL:     rawURL,
+		Percent: 100,
+		Status:  "complete",
+	})
+	return outputBuf.Bytes(), nil
 }

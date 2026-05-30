@@ -495,6 +495,28 @@ export default function App() {
               <Text style={[s.browseHint, { color: t.ink3, fontSize: fs(11) }]}>
                 Tip: signing in via Browse unlocks HD media on more sites
               </Text>
+
+              <Pressable
+                android_ripple={{ color: 'rgba(255,255,255,0.15)', borderless: false }}
+                style={[s.outlineBtn, { borderColor: t.sep, marginTop: 16 }]}
+                onPress={async () => {
+                  try {
+                    showToast('Installing/Updating tools...', 'info');
+                    const res = await fetch('http://127.0.0.1:8765/tools/ensure', { method: 'POST' });
+                    if (res.ok) {
+                      showToast('Tools updated successfully', 'success');
+                    } else {
+                      showToast('Tools update failed', 'error');
+                    }
+                  } catch (e) {
+                    showToast('Companion not running', 'error');
+                  }
+                }}
+              >
+                <Text style={[s.outlineBtnLabel, { color: t.ink2, fontSize: fs(13) }]}>
+                  Install / Update Video Tools
+                </Text>
+              </Pressable>
             </View>
 
             {/* Active downloads (compact) */}

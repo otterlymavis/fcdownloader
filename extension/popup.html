@@ -21,7 +21,7 @@
     <section id="helper-status" class="helper-status" hidden>
       <span class="helper-dot"></span>
       <span id="helper-text">Checking companion...</span>
-      <button id="helper-tools" type="button" hidden>Tools</button>
+      <button id="helper-tools" type="button" hidden>Update Tools</button>
       <button id="helper-open" type="button">Open</button>
     </section>
 
@@ -39,7 +39,12 @@
       <button id="extract-btn" class="ghost" type="button">Find media</button>
     </section>
 
-    <div id="status" hidden></div>
+    <div id="status" hidden>
+      <div id="status-text"></div>
+      <div id="status-progress-container" class="progress-bar-container" style="display: none;">
+        <div id="status-progress-fill" class="progress-bar-fill"></div>
+      </div>
+    </div>
 
     <!-- "More media": collapsed by default, only shown when extras exist -->
     <details id="more" hidden>

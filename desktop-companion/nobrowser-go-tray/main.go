@@ -44,6 +44,18 @@ const (
 	idCache       = 1007
 	idRunAtLogin  = 1008
 	idConfig      = 1009
+
+	wsVisible       = 0x10000000
+	wsChild         = 0x40000000
+	wsCaption       = 0x00C00000
+	wsSysMenu       = 0x00080000
+	wsMinimizeBox   = 0x00020000
+	bsPushButton    = 0x00000000
+	colorWindowText = 8
+	colorWindow     = 5
+	wmCreate        = 0x0001
+	wmClose         = 0x0010
+
 )
 
 var (
@@ -127,6 +139,7 @@ type healthInfo struct {
 	YtDlpVersion  string       `json:"ytDlpVersion"`
 	FFmpegVersion string       `json:"ffmpegVersion"`
 	Tools         []toolStatus `json:"tools"`
+	NeedsSetup    bool         `json:"needsSetup"`
 }
 
 type toolStatus struct {
@@ -162,6 +175,7 @@ func main() {
 	windowHandle = hwnd
 	trayLog("window created")
 	startHelper()
+	ensureToolsSilently()
 	addTray(hwnd)
 	trayLog("tray icon added")
 	messageLoop()
@@ -171,14 +185,20 @@ func createWindow() uintptr {
 	className, _ := syscall.UTF16PtrFromString("FCDownloaderNoBrowserTray")
 	hinst, _, _ := procGetModuleHandle.Call(0)
 	wndproc := syscall.NewCallback(windowProc)
+	// actually we can just use colorWindow (5) but it's white.
+	// For simplicity, we can load a dark brush or just let it be default window color (which follows system theme in some cases, or is white).
 	wc := wndClassEx{
-		Size:      uint32(unsafe.Sizeof(wndClassEx{})),
-		WndProc:   wndproc,
-		Instance:  hinst,
-		ClassName: className,
+		Size:       uint32(unsafe.Sizeof(wndClassEx{})),
+		WndProc:    wndproc,
+		Instance:   hinst,
+		ClassName:  className,
+		Background: 2, // COLOR_BACKGROUND
 	}
 	procRegisterClassEx.Call(uintptr(unsafe.Pointer(&wc)))
-	hwnd, _, _ := procCreateWindowEx.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(className)), 0, 0, 0, 0, 0, 0, 0, hinst, 0)
+	style := uint32(wsCaption | wsSysMenu | wsMinimizeBox | wsVisible)
+	title, _ := syscall.UTF16PtrFromString("FCDownloader Companion")
+	hwnd, _, _ := procCreateWindowEx.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)), uintptr(style), 100, 100, 180, 120, 0, 0, hinst, 0)
+
 	if hwnd == 0 {
 		panic("could not create tray window")
 	}
@@ -247,6 +267,23 @@ func deleteTray(hwnd uintptr) {
 
 func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 	switch message {
+	case wmCreate:
+		hinst, _, _ := procGetModuleHandle.Call(0)
+		btnClass, _ := syscall.UTF16PtrFromString("BUTTON")
+		
+		btn1, _ := syscall.UTF16PtrFromString("▶")
+		procCreateWindowEx.Call(0, uintptr(unsafe.Pointer(btnClass)), uintptr(unsafe.Pointer(btn1)), uintptr(wsChild|wsVisible|bsPushButton), 20, 20, 40, 40, hwnd, uintptr(idStart), hinst, 0)
+		
+		btn2, _ := syscall.UTF16PtrFromString("⏹")
+		procCreateWindowEx.Call(0, uintptr(unsafe.Pointer(btnClass)), uintptr(unsafe.Pointer(btn2)), uintptr(wsChild|wsVisible|bsPushButton), 70, 20, 40, 40, hwnd, uintptr(idStop), hinst, 0)
+		
+		btn3, _ := syscall.UTF16PtrFromString("📝")
+		procCreateWindowEx.Call(0, uintptr(unsafe.Pointer(btnClass)), uintptr(unsafe.Pointer(btn3)), uintptr(wsChild|wsVisible|bsPushButton), 120, 20, 40, 40, hwnd, uintptr(idLog), hinst, 0)
+		
+		return 0
+	case wmClose:
+		procDestroyWindow.Call(hwnd)
+		return 0
 	case wmTray:
 		if lParam == wmRButtonUp {
 			showMenu(hwnd)
@@ -691,4 +728,51 @@ func message(title, body string) {
 	titlePtr, _ := syscall.UTF16PtrFromString(title)
 	bodyPtr, _ := syscall.UTF16PtrFromString(body)
 	procMessageBox.Call(0, uintptr(unsafe.Pointer(bodyPtr)), uintptr(unsafe.Pointer(titlePtr)), 0)
+}
+
+func ensureToolsSilently() {
+	go func() {
+		for i := 0; i < 20; i++ {
+			if info, ok := fetchHealth(); ok && info.OK {
+				if info.NeedsSetup {
+					trayLog("tools need setup, starting silent background install")
+					client := &http.Client{Timeout: 10 * time.Minute}
+					done := make(chan error, 1)
+					go func() {
+						resp, err := client.Get(ensureToolsURL)
+						if err != nil {
+							done <- err
+							return
+						}
+						defer resp.Body.Close()
+						if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+							done <- fmt.Errorf("tool install failed: HTTP %d", resp.StatusCode)
+							return
+						}
+						done <- nil
+					}()
+					ticker := time.NewTicker(time.Second)
+					defer ticker.Stop()
+					for {
+						select {
+						case err := <-done:
+							updateTray()
+							if err != nil {
+								trayLog("silent tool install failed: %v", err)
+							} else {
+								trayLog("silent tool install complete")
+							}
+							return
+						case <-ticker.C:
+							if progress, ok := fetchProgress(); ok {
+								updateTrayTip("Installing " + progressText(progress))
+							}
+						}
+					}
+				}
+				return
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}()
 }

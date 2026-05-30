@@ -17,6 +17,9 @@ const primaryAudioBtn = $("primary-audio-download");
 const emptyEl     = $("empty");
 const extractBtn  = $("extract-btn");
 const statusEl    = $("status");
+const statusTextEl = $("status-text");
+const statusProgressContainer = $("status-progress-container");
+const statusProgressFill = $("status-progress-fill");
 const moreEl      = $("more");
 const moreList    = $("more-list");
 const bulkActions = $("bulk-actions");
@@ -35,6 +38,7 @@ let currentVisibleItems = [];
 let selectedItemKeys = new Set();
 let pinnedExtractResult = false;
 let currentGalleryInfo = null;
+let progressPollInterval = null;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -63,17 +67,76 @@ function sendMessage(message, timeoutMs = 30000) {
 function setStatus(text, kind = "info", detail = "") {
   if (!text) {
     statusEl.hidden = true;
-    statusEl.textContent = "";
+    if (statusTextEl) statusTextEl.textContent = "";
     statusEl.title = "";
     statusEl.classList.remove("error", "success");
+    if (statusProgressContainer) statusProgressContainer.style.display = "none";
     return;
   }
   statusEl.hidden = false;
-  statusEl.textContent = text;
+  if (statusTextEl) {
+    statusTextEl.textContent = text;
+  } else {
+    statusEl.textContent = text;
+  }
   statusEl.title = detail || "";
   statusEl.classList.remove("error", "success");
-  if (kind === "error")   statusEl.classList.add("error");
-  if (kind === "success") statusEl.classList.add("success");
+  if (kind === "error") {
+    statusEl.classList.add("error");
+    if (statusProgressContainer) statusProgressContainer.style.display = "none";
+  } else if (kind === "success") {
+    statusEl.classList.add("success");
+    if (statusProgressContainer) statusProgressContainer.style.display = "none";
+  }
+}
+
+function setProgress(pct, text = "") {
+  statusEl.hidden = false;
+  if (statusProgressContainer) statusProgressContainer.style.display = "block";
+  if (statusProgressFill) statusProgressFill.style.width = `${pct}%`;
+  if (text && statusTextEl) {
+    statusTextEl.textContent = text;
+  }
+}
+
+function startProgressPolling(mediaUrl) {
+  if (progressPollInterval) {
+    clearInterval(progressPollInterval);
+  }
+
+  setProgress(0, "Connecting to companion...");
+
+  progressPollInterval = setInterval(async () => {
+    try {
+      const checkUrl = `http://127.0.0.1:8765/download/progress?${new URLSearchParams({ url: mediaUrl }).toString()}`;
+      const r = await fetch(checkUrl);
+      if (!r.ok) {
+        return;
+      }
+      const data = await r.json();
+      if (data.status === "downloading") {
+        let label = `Downloading: ${data.percent.toFixed(1)}%`;
+        if (data.speed) label += ` at ${data.speed}`;
+        if (data.eta) label += `, ETA: ${data.eta}`;
+        setProgress(data.percent, label);
+      } else if (data.status === "merging") {
+        setProgress(99, "Companion is merging formats...");
+      } else if (data.status === "complete") {
+        setProgress(100, "Download complete!");
+        setTimeout(() => {
+          setStatus("Download finished. Saved to your browser's Downloads.", "success");
+        }, 1500);
+        clearInterval(progressPollInterval);
+        progressPollInterval = null;
+      } else if (data.status === "error") {
+        setStatus("Companion download failed. Check companion logs.", "error");
+        clearInterval(progressPollInterval);
+        progressPollInterval = null;
+      }
+    } catch (e) {
+      // Ignore network errors while polling
+    }
+  }, 1000);
 }
 
 function hostname(url) {
@@ -296,7 +359,7 @@ async function renderHelperStatus(show) {
   helperEl.classList.toggle("missing", !ready);
   helperText.textContent = helperStatusText(ready, health);
   helperOpen.hidden = ready;
-  if (helperTools) helperTools.hidden = !helperNeedsSetup;
+  if (helperTools) helperTools.hidden = false;
   if (changed && currentTabId != null) {
     lastItemsKey = "";
     refresh();
@@ -709,15 +772,28 @@ function renderGallery(info) {
 async function downloadItem(item) {
   const itemWithDefaults = { pageUrl: currentPageUrl, ...item };
   setStatus("Starting download...");
+  
+  const isCompanion = isCompanionHdItem(item);
+  if (isCompanion && helperIsReady) {
+    startProgressPolling(item.url || currentPageUrl);
+  }
+
   const resp = await sendMessage(
     { type: "fcdl:download", tabId: currentTabId, item: itemWithDefaults },
-    25000,
+    90000,
   );
   if (!resp?.ok) {
+    if (progressPollInterval) {
+      clearInterval(progressPollInterval);
+      progressPollInterval = null;
+    }
     setErrorStatus(resp?.error, "Download failed.");
     return;
   }
-  setStatus("Download started. Check your browser's Downloads.", "success");
+  
+  if (!isCompanion || !helperIsReady) {
+    setStatus("Download started. Check your browser's Downloads.", "success");
+  }
 }
 
 async function downloadAudioItem(item) {
