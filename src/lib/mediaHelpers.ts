@@ -41,6 +41,8 @@ const VIMEO_JSON_RE = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i;
 const VIDEO_CDN_RE = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|threadscdn\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|fbcdn\.net\/videos|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/|weibocdn\.com\/|xhscdn\.com\/)/i;
 const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(\?|#|$)/i;
 const VIDEO_EXT_RE = /\.(m3u8|mpd|mp4|m4v|webm|mov)(\?|#|$)/i;
+const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|avif|heic)(\?|#|$)/i;
+const IMAGE_CDN_RE = /(?:cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|pinimg\.com\/(?:originals|736x|1200x|564x)\/|sinaimg\.cn\/|xhscdn\.com\/|pstatic\.net\/|imgur\.com\/|i\.redd\.it\/|pbs\.twimg\.com\/media\/)/i;
 const YT_RANGE_RE = /googlevideo\.com\/videoplayback[^#]*[?&](?:range=|sq=)\d/i;
 const YT_CDN_RE = /googlevideo\.com\/videoplayback/i;
 const TW_VIDEO_RE = /video\.twimg\.com\/(?:ext_tw_video|amplify_video)\/(\d+)\//i;
@@ -72,7 +74,7 @@ export function getMediaKind(
   if (item.mediaKind) return item.mediaKind;
   const url = item.url.toLowerCase().split('?')[0];
   const mimeType = String(item.mimeType || '').toLowerCase();
-  if (mimeType.startsWith('image/') || /\.(jpe?g|png|webp|gif|avif|heic)$/.test(url)) return 'image';
+  if (mimeType.startsWith('image/') || /\.(jpe?g|png|webp|gif|avif|heic)$/.test(url) || IMAGE_CDN_RE.test(item.url)) return 'image';
   if (mimeType.startsWith('audio/') || /\.(mp3|m4a|aac|wav|ogg|opus|flac)$/.test(url)) return 'audio';
   return 'video';
 }
@@ -192,7 +194,12 @@ export function isUseful(url: string): boolean {
 
 export function isNetworkDownloadCandidate(url: string): boolean {
   if (isSegmentMediaUrl(url)) return false;
-  return VIDEO_EXT_RE.test(url) || AUDIO_EXT_RE.test(url) || VIMEO_JSON_RE.test(url) || VIDEO_CDN_RE.test(url);
+  return VIDEO_EXT_RE.test(url) ||
+    AUDIO_EXT_RE.test(url) ||
+    IMAGE_EXT_RE.test(url) ||
+    VIMEO_JSON_RE.test(url) ||
+    VIDEO_CDN_RE.test(url) ||
+    IMAGE_CDN_RE.test(url);
 }
 
 export function isDirectMediaUrl(url: string): boolean {

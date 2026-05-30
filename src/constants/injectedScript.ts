@@ -113,6 +113,51 @@ export const INJECTED_SCRIPT = `
       /\\/(?:icons?|assets?)\\//.test(u) && !/(?:cdninstagram|fbcdn|threadscdn|pinimg|sinaimg|xhscdn|pstatic)/.test(u);
   }
 
+  function srcsetUrls(value) {
+    if (!value || typeof value !== 'string') return [];
+    return value.split(',').map(function (part) {
+      return part.trim().split(/\\s+/)[0];
+    }).filter(Boolean);
+  }
+
+  function emitElementMedia(el) {
+    if (!el) return;
+    var tag = String(el.tagName || '').toUpperCase();
+    if (tag === 'IMG' && Math.max(el.naturalWidth || 0, el.naturalHeight || 0) < 160) return;
+    var type = el.type || null;
+    var urls = [
+      el.currentSrc,
+      el.src,
+      el.getAttribute && el.getAttribute('src'),
+      el.getAttribute && el.getAttribute('data-src'),
+      el.getAttribute && el.getAttribute('data-original'),
+      el.getAttribute && el.getAttribute('data-lazy-src'),
+      el.getAttribute && el.getAttribute('data-url'),
+      el.getAttribute && el.getAttribute('data-image'),
+      el.getAttribute && el.getAttribute('data-img'),
+    ].filter(Boolean);
+    if (el.srcset) urls = urls.concat(srcsetUrls(el.srcset));
+    if (el.getAttribute) {
+      urls = urls.concat(srcsetUrls(el.getAttribute('srcset')));
+      urls = urls.concat(srcsetUrls(el.getAttribute('data-srcset')));
+    }
+    urls.forEach(function (url) { emit(url, type); log(url); });
+  }
+
+  function scanBackgroundImages(root) {
+    try {
+      (root || document).querySelectorAll('[style]').forEach(function (el) {
+        var style = el.getAttribute('style') || '';
+        var re = /url\\((['"]?)(https?:\\/\\/[^'")]+)\\1\\)/gi;
+        var m;
+        while ((m = re.exec(style))) {
+          emit(m[2], null, 'mutation-observer', 0.45);
+          log(m[2]);
+        }
+      });
+    } catch (_) {}
+  }
+
   function isNonContentUrl(url, mime) {
     var u = String(url || '').toLowerCase();
     var m = String(mime || '').toLowerCase();
@@ -125,7 +170,7 @@ export const INJECTED_SCRIPT = `
   }
 
   var LOG_SEEN = new Set();
-  var SKIP_EXT = /\\.(png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot|otf|css|js|map)(\\?|$)/i;
+  var SKIP_EXT = /\\.(svg|ico|woff2?|ttf|eot|otf|css|js|map)(\\?|$)/i;
 
   // Assign a confidence score based on URL/mime heuristics
   function confForUrl(url, mime, base) {
@@ -146,6 +191,7 @@ export const INJECTED_SCRIPT = `
     if (!url || typeof url !== 'string') return;
     url = url.trim();
     if (!url || url.startsWith('blob:') || url.startsWith('data:') || url.length < 8) return;
+    try { url = new URL(url, location.href).href; } catch (_) {}
     if (isNonContentUrl(url, mime)) return;
     var type = detectType(url, mime);
     if (!type) return;
@@ -167,6 +213,7 @@ export const INJECTED_SCRIPT = `
     if (!url || typeof url !== 'string') return;
     url = url.trim();
     if (!url || url.startsWith('blob:') || url.startsWith('data:') || url.length < 12) return;
+    try { url = new URL(url, location.href).href; } catch (_) {}
     if (SKIP_EXT.test(url.split('?')[0]) && !/\\.(jpe?g|png|webp|gif|avif|heic)(\\?|$)/i.test(url)) return;
     if (LOG_SEEN.has(url)) return;
     LOG_SEEN.add(url);
@@ -629,17 +676,13 @@ export const INJECTED_SCRIPT = `
         m.addedNodes.forEach(function (node) {
           if (node.nodeType !== 1) return;
           if (/^(VIDEO|AUDIO|SOURCE|IMG|PICTURE)$/.test(node.tagName)) {
-            var nodeSrc = node.src || node.currentSrc || node.getAttribute('src');
-            if (node.tagName !== 'IMG' || Math.max(node.naturalWidth || 0, node.naturalHeight || 0) >= 160) {
-              emit(nodeSrc, node.type || null, 'mutation-observer', 0.75);
-            }
+            emitElementMedia(node);
           }
           if (node.querySelectorAll) {
             node.querySelectorAll('video,audio,source,img,picture source').forEach(function (el) {
-              if (el.tagName !== 'IMG' || Math.max(el.naturalWidth || 0, el.naturalHeight || 0) >= 160) {
-                emit(el.src || el.currentSrc || el.getAttribute('src'), el.type || null, 'mutation-observer', 0.75);
-              }
+              emitElementMedia(el);
             });
+            scanBackgroundImages(node);
           }
         });
       });
@@ -652,9 +695,7 @@ export const INJECTED_SCRIPT = `
     if (++_ticks > 60) { clearInterval(_timer); return; }
     try {
       document.querySelectorAll('video,audio,img').forEach(function (el) {
-        if (el.tagName !== 'IMG' || Math.max(el.naturalWidth || 0, el.naturalHeight || 0) >= 160) {
-          if (el.currentSrc || el.src) emit(el.currentSrc || el.src, null);
-        }
+        emitElementMedia(el);
       });
       performance.getEntriesByType('resource').forEach(function (e) { emit(e.name, null); });
     } catch (_) {}
@@ -666,12 +707,11 @@ export const INJECTED_SCRIPT = `
   // ── 13. On-demand deep scan ───────────────────────────────────
   window.__fcdownloader_scan = function () {
     document.querySelectorAll('video,audio,source,img,picture source').forEach(function (el) {
-      if (el.tagName !== 'IMG' || Math.max(el.naturalWidth || 0, el.naturalHeight || 0) >= 160) {
-        emit(el.src || el.currentSrc || el.getAttribute('src'), el.type || null);
-      }
+      emitElementMedia(el);
     });
     try { performance.getEntriesByType('resource').forEach(function (e) { emit(e.name, null); }); }
     catch (_) {}
+    scanBackgroundImages(document);
     // Inline scripts
     document.querySelectorAll('script').forEach(function (s) {
       var text = s.textContent || '';
@@ -719,11 +759,10 @@ export const INJECTED_SCRIPT = `
   function initialScan() {
     try {
       document.querySelectorAll('video,audio,source,img,picture source').forEach(function (el) {
-        if (el.tagName !== 'IMG' || Math.max(el.naturalWidth || 0, el.naturalHeight || 0) >= 160) {
-          emit(el.src || el.currentSrc || el.getAttribute('src'), el.type || null);
-        }
+        emitElementMedia(el);
       });
       performance.getEntriesByType('resource').forEach(function (e) { emit(e.name, null); });
+      scanBackgroundImages(document);
     } catch (_) {}
     scanGlobals();
   }

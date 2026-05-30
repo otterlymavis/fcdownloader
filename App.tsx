@@ -223,6 +223,16 @@ export default function App() {
     else setLoadedUrl(url);
   }, [browserInput, loadedUrl]);
 
+  const scanBrowserPage = useCallback(() => {
+    webviewRef.current?.injectJavaScript(`
+      try {
+        if (window.__fcdownloader_scan) window.__fcdownloader_scan();
+      } catch (_) {}
+      true;
+    `);
+    showToast('Scanning this page for media', 'info');
+  }, [showToast]);
+
   // ── Home: paste → download ────────────────────────────────
   const handleHomeDownload = useCallback(async () => {
     let url = pasteUrl.trim();
@@ -541,6 +551,10 @@ export default function App() {
             <Pressable android_ripple={RIPPLE_BL} style={[s.navBtn, { backgroundColor: t.card }]}
               onPress={() => webviewRef.current?.reload()} hitSlop={S.sm}>
               <Text style={[s.navBtnIcon, { color: t.ink }]}>↻</Text>
+            </Pressable>
+            <Pressable android_ripple={RIPPLE_BL} style={[s.navBtn, { backgroundColor: t.card }]}
+              onPress={scanBrowserPage} hitSlop={S.sm}>
+              <Text style={[s.navBtnIcon, { color: t.ink }]}>◉</Text>
             </Pressable>
           </View>
 

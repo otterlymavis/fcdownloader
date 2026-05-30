@@ -9,7 +9,7 @@ const MEDIA_EXTS = new Set([
   'mp3', 'm4a', 'aac', 'wav', 'ogg', 'opus', 'flac',
 ]);
 
-function guessExt(url: string, mimeType?: string | null): string {
+function guessExt(url: string, mimeType?: string | null, mediaKind?: DetectedMedia['mediaKind']): string {
   const path = url.split('?')[0].toLowerCase();
   const m = path.match(/\.([a-z0-9]{2,5})$/);
   if (m && MEDIA_EXTS.has(m[1])) return m[1];
@@ -29,7 +29,7 @@ function guessExt(url: string, mimeType?: string | null): string {
     if (mt.includes('webm')) return 'webm';
     if (mt.includes('mov') || mt.includes('quicktime')) return 'mov';
   }
-  if (mediaIsImage(url, mimeType)) return 'jpg';
+  if (mediaKind === 'image' || mediaIsImage(url, mimeType)) return 'jpg';
   if (mediaIsAudio(url, mimeType)) return 'mp3';
   return 'mp4';
 }
@@ -87,7 +87,7 @@ export async function downloadDirect(
     if (cookies) headers['Cookie'] = cookies;
   }
 
-  const ext = guessExt(media.url, media.mimeType);
+  const ext = guessExt(media.url, media.mimeType, media.mediaKind);
   const dir = `${FileSystem.documentDirectory}downloads/${taskId}/`;
   const baseName = media.mediaKind === 'image' || mediaIsImage(media.url, media.mimeType)
     ? 'image'
