@@ -8,7 +8,9 @@ import {
   Text,
   View,
 } from 'react-native';
-import { ThemePref, FontSizePref, FONT_SCALE } from '../hooks/useSettings';
+import { ThemePref, FontSizePref, LanguagePref, FONT_SCALE } from '../hooks/useSettings';
+import { translate, TranslationKey } from '../constants/translations';
+import { CommonLanguageCode } from '../lib/languageProfiles';
 
 interface ThemeColors {
   dark: boolean;
@@ -26,8 +28,11 @@ interface Props {
   onClose: () => void;
   theme: ThemePref;
   fontSize: FontSizePref;
+  language: LanguagePref;
   onThemeChange: (v: ThemePref) => void;
   onFontSizeChange: (v: FontSizePref) => void;
+  onLanguageChange: (v: LanguagePref) => void;
+  resolvedLanguage: CommonLanguageCode;
   t: ThemeColors;
 }
 
@@ -36,36 +41,70 @@ const BLUE = '#007AFF';
 const S = { xs: 4, sm: 8, md: 16, lg: 24 } as const;
 const R = { md: 12, lg: 14, sheet: 20 } as const;
 
-const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
-  { value: 'system', label: 'System' },
-  { value: 'light',  label: 'Light'  },
-  { value: 'dark',   label: 'Dark'   },
+const THEME_OPTIONS: { value: ThemePref; labelKey: TranslationKey }[] = [
+  { value: 'system', labelKey: 'system' },
+  { value: 'light',  labelKey: 'light'  },
+  { value: 'dark',   labelKey: 'dark'   },
 ];
 
-const FONT_OPTIONS: { value: FontSizePref; label: string; preview: string }[] = [
-  { value: 'small',  label: 'Small',  preview: 'Aa' },
-  { value: 'medium', label: 'Medium', preview: 'Aa' },
-  { value: 'large',  label: 'Large',  preview: 'Aa' },
+const FONT_OPTIONS: { value: FontSizePref; labelKey: TranslationKey; preview: string }[] = [
+  { value: 'small',  labelKey: 'small',  preview: 'Aa' },
+  { value: 'medium', labelKey: 'medium', preview: 'Aa' },
+  { value: 'large',  labelKey: 'large',  preview: 'Aa' },
+];
+
+const LANGUAGE_OPTIONS: { value: LanguagePref; label: string; key?: TranslationKey }[] = [
+  { value: 'system', label: 'Auto', key: 'auto' },
+  { value: 'en', label: 'English' },
+  { value: 'es', label: 'Español' },
+  { value: 'fr', label: 'Français' },
+  { value: 'de', label: 'Deutsch' },
+  { value: 'pt', label: 'Português' },
+  { value: 'it', label: 'Italiano' },
+  { value: 'ja', label: '日本語' },
+  { value: 'ko', label: '한국어' },
+  { value: 'zh', label: '简体中文' },
+  { value: 'zh-hant', label: '繁體中文' },
+  { value: 'hi', label: 'हिन्दी' },
+  { value: 'ar', label: 'العربية' },
+  { value: 'ru', label: 'Русский' },
 ];
 
 export default function SettingsSheet({
-  visible, onClose, theme, fontSize, onThemeChange, onFontSizeChange, t,
+  visible,
+  onClose,
+  theme,
+  fontSize,
+  language,
+  onThemeChange,
+  onFontSizeChange,
+  onLanguageChange,
+  resolvedLanguage,
+  t,
 }: Props) {
+  const isRTL = resolvedLanguage === 'ar';
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose} />
       <View style={[styles.sheet, { backgroundColor: t.bg }]}>
         <View style={[styles.handle, { backgroundColor: t.ink3 }]} />
-        <Text style={[styles.title, { color: t.ink }]}>Settings</Text>
+        <Text style={[styles.title, { color: t.ink, textAlign: isRTL ? 'right' : 'left' }]}>
+          {translate('settings', resolvedLanguage)}
+        </Text>
 
         <ScrollView showsVerticalScrollIndicator={false}>
 
           {/* ── Appearance ── */}
-          <Text style={[styles.sectionLabel, { color: t.ink2 }]}>APPEARANCE</Text>
+          <Text style={[styles.sectionLabel, { color: t.ink2, textAlign: isRTL ? 'right' : 'left' }]}>
+            {translate('appearance', resolvedLanguage).toUpperCase()}
+          </Text>
           <View style={[styles.card, { backgroundColor: t.card }]}>
-            <Text style={[styles.rowLabel, { color: t.ink }]}>Theme</Text>
-            <View style={styles.segmentRow}>
-              {THEME_OPTIONS.map(({ value, label }) => {
+            <Text style={[styles.rowLabel, { color: t.ink, textAlign: isRTL ? 'right' : 'left' }]}>
+              {translate('theme', resolvedLanguage)}
+            </Text>
+            <View style={[styles.segmentRow, isRTL && { flexDirection: 'row-reverse' }]}>
+              {THEME_OPTIONS.map(({ value, labelKey }) => {
                 const active = theme === value;
                 return (
                   <Pressable
@@ -77,7 +116,7 @@ export default function SettingsSheet({
                     ]}
                   >
                     <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.ink2 }]}>
-                      {label}
+                      {translate(labelKey, resolvedLanguage)}
                     </Text>
                   </Pressable>
                 );
@@ -86,11 +125,15 @@ export default function SettingsSheet({
           </View>
 
           {/* ── Text Size ── */}
-          <Text style={[styles.sectionLabel, { color: t.ink2 }]}>TEXT SIZE</Text>
+          <Text style={[styles.sectionLabel, { color: t.ink2, textAlign: isRTL ? 'right' : 'left' }]}>
+            {translate('textSize', resolvedLanguage).toUpperCase()}
+          </Text>
           <View style={[styles.card, { backgroundColor: t.card }]}>
-            <Text style={[styles.rowLabel, { color: t.ink }]}>Font Size</Text>
-            <View style={styles.segmentRow}>
-              {FONT_OPTIONS.map(({ value, label, preview }) => {
+            <Text style={[styles.rowLabel, { color: t.ink, textAlign: isRTL ? 'right' : 'left' }]}>
+              {translate('fontSize', resolvedLanguage)}
+            </Text>
+            <View style={[styles.segmentRow, isRTL && { flexDirection: 'row-reverse' }]}>
+              {FONT_OPTIONS.map(({ value, labelKey, preview }) => {
                 const active = fontSize === value;
                 return (
                   <Pressable
@@ -108,7 +151,7 @@ export default function SettingsSheet({
                       {preview}
                     </Text>
                     <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.ink2 }]}>
-                      {label}
+                      {translate(labelKey, resolvedLanguage)}
                     </Text>
                   </Pressable>
                 );
@@ -116,9 +159,32 @@ export default function SettingsSheet({
             </View>
           </View>
 
-          {/* HD extractor section is hidden — backend URL + token are bundled
-              at build time via EXPO_PUBLIC_EXTRACTOR_URL / _TOKEN. Power users
-              can still override by writing the AsyncStorage keys directly. */}
+          {/* ── Language ── */}
+          <Text style={[styles.sectionLabel, { color: t.ink2, textAlign: isRTL ? 'right' : 'left' }]}>
+            {translate('language', resolvedLanguage).toUpperCase()}
+          </Text>
+          <View style={[styles.card, { backgroundColor: t.card }]}>
+            <View style={[styles.langGrid, isRTL && { flexDirection: 'row-reverse' }]}>
+              {LANGUAGE_OPTIONS.map(({ value, label, key }) => {
+                const active = language === value;
+                const displayText = key ? translate(key, resolvedLanguage) : label;
+                return (
+                  <Pressable
+                    key={value}
+                    onPress={() => onLanguageChange(value)}
+                    style={[
+                      styles.langChip,
+                      { backgroundColor: active ? BLUE : t.card2 },
+                    ]}
+                  >
+                    <Text style={[styles.langChipLabel, { color: active ? '#fff' : t.ink2 }]}>
+                      {displayText}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
 
         </ScrollView>
 
@@ -126,7 +192,9 @@ export default function SettingsSheet({
           style={[styles.doneButton, { backgroundColor: t.card2 }]}
           onPress={onClose}
         >
-          <Text style={[styles.doneLabel, { color: BLUE }]}>Done</Text>
+          <Text style={[styles.doneLabel, { color: BLUE }]}>
+            {translate('done', resolvedLanguage)}
+          </Text>
         </Pressable>
       </View>
     </Modal>
@@ -139,7 +207,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: R.sheet,
     borderTopRightRadius: R.sheet,
     paddingBottom: IS_ANDROID ? 16 : 0,
-    maxHeight: '70%',
+    maxHeight: '75%',
   },
   handle: {
     width: 40,
@@ -196,6 +264,25 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 18,
   },
+  langGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: S.sm,
+  },
+  langChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: R.md,
+    minWidth: '28%',
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 40,
+  },
+  langChipLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
   doneButton: {
     margin: S.md,
     paddingVertical: 14,
@@ -207,3 +294,4 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+

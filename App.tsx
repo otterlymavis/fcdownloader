@@ -20,6 +20,7 @@ import BrowserView from './src/components/BrowserView';
 import Toast, { ToastMessage } from './src/components/Toast';
 import VideoPlayerModal from './src/components/VideoPlayerModal';
 import SettingsSheet from './src/components/SettingsSheet';
+import { translate, TranslationKey } from './src/constants/translations';
 
 import { useMediaDetection } from './src/hooks/useMediaDetection';
 import { useDownloadManager } from './src/hooks/useDownloadManager';
@@ -90,11 +91,23 @@ function compactMediaDetails(...parts: Array<string | null | undefined>): string
 }
 
 export default function App() {
-  const { theme, fontSize, fontScale, setTheme, setFontSize } = useSettings();
+  const {
+    theme,
+    fontSize,
+    fontScale,
+    language,
+    resolvedLanguage,
+    setTheme,
+    setFontSize,
+    setLanguage,
+  } = useSettings();
   const t = useTheme(theme === 'system' ? undefined : theme === 'dark');
   const isDark = t.dark;
   const fs = (base: number) => base * fontScale;
   const webviewRef = useRef<WebView>(null);
+
+  const resolvedLangRef = useRef(resolvedLanguage);
+  resolvedLangRef.current = resolvedLanguage;
 
   // ── Navigation ────────────────────────────────────────────
   const [tab, setTab]               = useState<Tab>('home');
@@ -139,7 +152,7 @@ export default function App() {
       const parsed = Linking.parse(raw);
       if (parsed.path === 'share' || parsed.hostname === 'share') {
         const mediaUrl = parsed.queryParams?.url ? String(parsed.queryParams.url) : null;
-        if (mediaUrl) { setPasteUrl(mediaUrl); setTab('home'); showToast('Link received — tap Download', 'success'); }
+        if (mediaUrl) { setPasteUrl(mediaUrl); setTab('home'); showToast(translate('linkReceived', resolvedLangRef.current), 'success'); }
       }
     } catch {}
   }, [showToast]);
@@ -152,9 +165,9 @@ export default function App() {
 
   // ── Download manager ──────────────────────────────────────
   const { active, history, enqueue, retry, cancel, remove } = useDownloadManager({
-    onComplete: useCallback(() => showToast('Download complete', 'success'), [showToast]),
+    onComplete: useCallback(() => showToast(translate('downloadComplete', resolvedLangRef.current), 'success'), [showToast]),
     onError:    useCallback((task: DownloadTask) =>
-      showToast(`Failed: ${task.error ?? 'unknown error'}`, 'error'), [showToast]),
+      showToast(translate('failedError', resolvedLangRef.current, { error: task.error ?? 'unknown error' }), 'error'), [showToast]),
   });
 
   // ── Detected videos ───────────────────────────────────────
@@ -230,7 +243,7 @@ export default function App() {
       } catch (_) {}
       true;
     `);
-    showToast('Scanning this page for media', 'info');
+    showToast(translate('scanningPage', resolvedLangRef.current), 'info');
   }, [showToast]);
 
   // ── Home: paste → download ────────────────────────────────
@@ -249,7 +262,7 @@ export default function App() {
       };
       await enqueue(item);
       setPasteUrl('');
-      showToast('Download started', 'success');
+      showToast(translate('downloadStarted', resolvedLangRef.current), 'success');
       setTab('library');
       return;
     }
@@ -260,13 +273,18 @@ export default function App() {
       if (items.length > 0) {
         for (const item of items) await enqueue(item);
         setPasteUrl('');
-        showToast(`Downloading ${items.length} media item${items.length !== 1 ? 's' : ''}`, 'success');
+        showToast(
+          items.length === 1
+            ? translate('startedDownload', resolvedLangRef.current)
+            : translate('startedDownloads', resolvedLangRef.current, { count: items.length }),
+          'success'
+        );
         setTab('library');
         return;
       }
-      showToast('Opening in browser - use scan after the page loads', 'info');
+      showToast(translate('openingInBrowserScan', resolvedLangRef.current), 'info');
     } catch {
-      showToast('Opening in browser instead', 'info');
+      showToast(translate('openingInBrowser', resolvedLangRef.current), 'info');
     } finally {
       setExtracting(false);
     }
@@ -290,7 +308,7 @@ export default function App() {
         }
       : item);
     setSelectedFormatId(null);
-    showToast('Download started', 'success');
+    showToast(translate('downloadStarted', resolvedLangRef.current), 'success');
     setTab('library');
   }, [enqueue, selectedFormatId, showToast]);
 
@@ -311,7 +329,7 @@ export default function App() {
       formatId: undefined,
     });
     setSelectedFormatId(null);
-    showToast('Audio download started', 'success');
+    showToast(translate('audioDownloadStarted', resolvedLangRef.current), 'success');
     setTab('library');
   }, [enqueue, showToast]);
 
@@ -320,7 +338,12 @@ export default function App() {
     setVideosOpen(false);
     setPreviewItem(null);
     for (const item of allVideos) await enqueue(item);
-    showToast(`Started ${allVideos.length} download${allVideos.length !== 1 ? 's' : ''}`, 'success');
+    showToast(
+      allVideos.length === 1
+        ? translate('startedDownload', resolvedLangRef.current)
+        : translate('startedDownloads', resolvedLangRef.current, { count: allVideos.length }),
+      'success'
+    );
     setTab('library');
   }, [allVideos, enqueue, showToast]);
 
@@ -344,7 +367,12 @@ export default function App() {
         formatId: undefined,
       });
     }
-    showToast(`Started ${audioItems.length} audio download${audioItems.length !== 1 ? 's' : ''}`, 'success');
+    showToast(
+      audioItems.length === 1
+        ? translate('startedAudioDownload', resolvedLangRef.current)
+        : translate('startedAudioDownloads', resolvedLangRef.current, { count: audioItems.length }),
+      'success'
+    );
     setTab('library');
   }, [allVideos, enqueue, showToast]);
 
@@ -352,26 +380,26 @@ export default function App() {
   const handleExport = useCallback(async (task: DownloadTask) => {
     if (!task.localPlaylistPath) return;
     try {
-      if (!(await Sharing.isAvailableAsync())) { showToast('Sharing not available', 'error'); return; }
+      if (!(await Sharing.isAvailableAsync())) { showToast(translate('sharingNotAvailable', resolvedLangRef.current), 'error'); return; }
       const path = task.localPlaylistPath;
       const mime = getMimeFromPath(path);
-      await Sharing.shareAsync(path, { mimeType: mime, dialogTitle: 'Export media' });
-    } catch (e) { showToast(`Export failed: ${(e as Error).message}`, 'error'); }
+      await Sharing.shareAsync(path, { mimeType: mime, dialogTitle: translate('exportMedia', resolvedLangRef.current) });
+    } catch (e) { showToast(translate('exportFailed', resolvedLangRef.current, { error: (e as Error).message }), 'error'); }
   }, [showToast]);
 
   const handleGallery = useCallback(async (task: DownloadTask) => {
     if (!task.localPlaylistPath) return;
     const { status } = await MediaLibrary.requestPermissionsAsync(true, ['photo', 'video']);
-    if (status !== 'granted') { showToast('Gallery permission denied', 'error'); return; }
+    if (status !== 'granted') { showToast(translate('galleryPermissionDenied', resolvedLangRef.current), 'error'); return; }
     try {
       await MediaLibrary.saveToLibraryAsync(task.localPlaylistPath);
-      showToast('Saved to gallery', 'success');
-    } catch (e) { showToast(`Gallery save failed: ${(e as Error).message}`, 'error'); }
+      showToast(translate('savedToGallery', resolvedLangRef.current), 'success');
+    } catch (e) { showToast(translate('gallerySaveFailed', resolvedLangRef.current, { error: (e as Error).message }), 'error'); }
   }, [showToast]);
 
   const handleRetry = useCallback((task: DownloadTask) => {
     retry(task.id, task.strategy);
-    showToast('Retrying…', 'info');
+    showToast(translate('retrying', resolvedLangRef.current), 'info');
   }, [retry, showToast]);
 
   const toggleLibSelect = useCallback((id: string) => {
@@ -398,14 +426,22 @@ export default function App() {
   const deleteLibSelected = useCallback(() => {
     const ids = Array.from(libSelected);
     if (ids.length === 0) return;
-    Alert.alert('Delete', `Delete ${ids.length} item${ids.length !== 1 ? 's' : ''}?`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-        for (const id of ids) await remove(id);
-        setLibSelectMode(false);
-        setLibSelected(new Set());
-      }},
-    ]);
+    Alert.alert(
+      translate('delete', resolvedLangRef.current),
+      translate('deleteItemsConfirm', resolvedLangRef.current, { count: ids.length }),
+      [
+        { text: translate('cancel', resolvedLangRef.current), style: 'cancel' },
+        {
+          text: translate('delete', resolvedLangRef.current),
+          style: 'destructive',
+          onPress: async () => {
+            for (const id of ids) await remove(id);
+            setLibSelectMode(false);
+            setLibSelected(new Set());
+          },
+        },
+      ]
+    );
   }, [libSelected, remove]);
 
   const videoCount  = allVideos.length;
@@ -424,8 +460,8 @@ export default function App() {
         <View style={s.flex}>
           <View style={[s.topBar, { backgroundColor: t.bg, borderBottomColor: t.sep }]}>
             {IS_IOS
-              ? <Text style={[s.largeTitleIOS, { color: t.ink }]}>Downloader</Text>
-              : <Text style={[s.titleAndroid, { color: t.ink }]}>Downloader</Text>
+              ? <Text style={[s.largeTitleIOS, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('downloader', resolvedLanguage)}</Text>
+              : <Text style={[s.titleAndroid, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('downloader', resolvedLanguage)}</Text>
             }
             <Pressable android_ripple={RIPPLE_BL} style={[s.gearBtn, { backgroundColor: t.card }]}
               onPress={() => setSettingsOpen(true)} hitSlop={S.sm}>
@@ -442,11 +478,12 @@ export default function App() {
             {/* Paste card */}
             <View style={[s.pasteCard, { backgroundColor: t.bg }, subtleShadow,
               IS_ANDROID && { backgroundColor: t.card }]}>
-              <Text style={[s.pasteLabel, { color: t.ink2, fontSize: fs(12) }]}>
-                VIDEO OR PAGE LINK
+              <Text style={[s.pasteLabel, { color: t.ink2, fontSize: fs(12), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
+                {translate('videoOrPageLink', resolvedLanguage)}
               </Text>
               <TextInput
                 style={[s.pasteInput, { backgroundColor: t.card, color: t.ink, fontSize: fs(15),
+                  textAlign: resolvedLanguage === 'ar' ? 'right' : 'left',
                   ...(IS_ANDROID && { backgroundColor: t.card2 }) }]}
                 value={pasteUrl}
                 onChangeText={(text) => {
@@ -468,7 +505,7 @@ export default function App() {
                   }
                   setPasteUrl(text);
                 }}
-                placeholder="Paste URL here"
+                placeholder={translate('pastePlaceholder', resolvedLanguage)}
                 placeholderTextColor={t.ink3}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -484,16 +521,16 @@ export default function App() {
                 disabled={extracting}
               >
                 <Text style={[s.primaryBtnLabel, { color: t.btnTxt, fontSize: fs(16) }]}>
-                  {extracting ? 'Finding…' : 'Download'}
+                  {extracting ? translate('finding', resolvedLanguage) : translate('download', resolvedLanguage)}
                 </Text>
               </Pressable>
               <Pressable onPress={() => setTab('browser')} hitSlop={S.xs} style={s.browseLink}>
-                <Text style={[s.browseLinkLabel, { color: t.ink2, fontSize: fs(13) }]}>
-                  or browse for media →
+                <Text style={[s.browseLinkLabel, { color: t.ink2, fontSize: fs(13), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
+                  {translate('orBrowse', resolvedLanguage)}
                 </Text>
               </Pressable>
-              <Text style={[s.browseHint, { color: t.ink3, fontSize: fs(11) }]}>
-                Tip: signing in via Browse unlocks HD media on more sites
+              <Text style={[s.browseHint, { color: t.ink3, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
+                {translate('browseHint', resolvedLanguage)}
               </Text>
 
               <Pressable
@@ -501,20 +538,20 @@ export default function App() {
                 style={[s.outlineBtn, { borderColor: t.sep, marginTop: 16 }]}
                 onPress={async () => {
                   try {
-                    showToast('Installing/Updating tools...', 'info');
+                    showToast(translate('installingTools', resolvedLangRef.current), 'info');
                     const res = await fetch('http://127.0.0.1:8765/tools/ensure', { method: 'POST' });
                     if (res.ok) {
-                      showToast('Tools updated successfully', 'success');
+                      showToast(translate('toolsUpdated', resolvedLangRef.current), 'success');
                     } else {
-                      showToast('Tools update failed', 'error');
+                      showToast(translate('toolsUpdateFailed', resolvedLangRef.current), 'error');
                     }
                   } catch (e) {
-                    showToast('Companion not running', 'error');
+                    showToast(translate('companionNotRunning', resolvedLangRef.current), 'error');
                   }
                 }}
               >
                 <Text style={[s.outlineBtnLabel, { color: t.ink2, fontSize: fs(13) }]}>
-                  Install / Update Video Tools
+                  {translate('installUpdateTools', resolvedLanguage)}
                 </Text>
               </Pressable>
             </View>
@@ -522,18 +559,20 @@ export default function App() {
             {/* Active downloads (compact) */}
             {active.length > 0 && (
               <View style={s.section}>
-                <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11) }]}>IN PROGRESS</Text>
+                <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
+                  {translate('inProgress', resolvedLanguage).toUpperCase()}
+                </Text>
                 {active.map((task) => {
                   const resolution = getMediaResolution(task.media);
                   const statusText = task.status === 'downloading' && task.totalSegments > 0
-                    ? `${task.downloadedSegments} / ${task.totalSegments} parts`
-                    : task.status === 'assembling'        ? 'Assembling…'
-                    : task.status === 'fetching_manifest' ? 'Reading stream…'
-                    : 'Starting…';
+                    ? translate('parts', resolvedLanguage, { downloaded: task.downloadedSegments, total: task.totalSegments })
+                    : task.status === 'assembling'        ? translate('assembling', resolvedLanguage)
+                    : task.status === 'fetching_manifest' ? translate('readingStream', resolvedLanguage)
+                    : translate('starting', resolvedLanguage);
                   return (
                   <View key={task.id} style={[s.compactCard, { backgroundColor: t.card }, subtleShadow]}>
                     <View style={s.compactRow}>
-                      <Text style={[s.compactSource, { color: t.ink, fontSize: fs(14) }]}>
+                      <Text style={[s.compactSource, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
                         {getSourceName(task.media.url)}
                       </Text>
                       <Text style={[s.compactPct, { color: t.ink2, fontSize: fs(13) }]}>
@@ -541,14 +580,14 @@ export default function App() {
                       </Text>
                       <Pressable android_ripple={RIPPLE_BL} onPress={() => cancel(task.id)} hitSlop={S.xs}
                         style={[s.cancelBtn, { borderColor: t.sep }]}>
-                        <Text style={[s.cancelBtnLabel, { color: t.ink2, fontSize: fs(12) }]}>Cancel</Text>
+                        <Text style={[s.cancelBtnLabel, { color: t.ink2, fontSize: fs(12) }]}>{translate('cancel', resolvedLanguage)}</Text>
                       </Pressable>
                     </View>
                     <View style={[s.progressTrack, { backgroundColor: t.card2 }]}>
                       <View style={[s.progressFill, { backgroundColor: t.btn,
                         width: `${Math.round(task.progress * 100)}%` as `${number}%` }]} />
                     </View>
-                    <Text style={[s.compactStatus, { color: t.ink2, fontSize: fs(11) }]}>
+                    <Text style={[s.compactStatus, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
                       {compactMediaDetails(statusText, resolution)}
                     </Text>
                   </View>
@@ -562,7 +601,7 @@ export default function App() {
               <View style={s.emptyHome}>
                 <Text style={[s.emptyHomeIcon, { color: t.ink3 }]}>↓</Text>
                 <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14) }]}>
-                  Paste a link to start downloading
+                  {translate('noDownloads', resolvedLanguage)}
                 </Text>
               </View>
             )}
@@ -570,7 +609,7 @@ export default function App() {
               <Pressable android_ripple={RIPPLE} style={[s.libraryLink, { backgroundColor: t.card }, subtleShadow]}
                 onPress={() => setTab('library')}>
                 <Text style={[s.libraryLinkLabel, { color: t.ink, fontSize: fs(14) }]}>
-                  {allTasks.length} item{allTasks.length !== 1 ? 's' : ''} in Library
+                  {allTasks.length === 1 ? translate('itemInLibrary', resolvedLanguage) : translate('itemsInLibrary', resolvedLanguage, { count: allTasks.length })}
                 </Text>
                 <Text style={[{ color: t.ink2, fontSize: fs(14) }]}>→</Text>
               </Pressable>
@@ -586,11 +625,12 @@ export default function App() {
         <View style={s.flex}>
           <View style={[s.navBar, { backgroundColor: t.bg, borderBottomColor: t.sep }]}>
             <TextInput
-              style={[s.addressField, { backgroundColor: t.card, color: t.ink, fontSize: fs(14) }]}
+              style={[s.addressField, { backgroundColor: t.card, color: t.ink, fontSize: fs(14),
+                textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}
               value={browserInput}
               onChangeText={setBrowserInput}
               onSubmitEditing={navigateBrowser}
-              placeholder="Search or enter URL"
+              placeholder={translate('searchOrEnterUrl', resolvedLanguage)}
               placeholderTextColor={t.ink3}
               returnKeyType="go"
               autoCapitalize="none"
@@ -612,7 +652,7 @@ export default function App() {
             {loadedUrl === 'about:blank' ? (
               <View style={[s.flex, s.center, { backgroundColor: t.bg }]}>
                 <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14) }]}>
-                  Enter a URL above to start browsing
+                  {translate('enterUrlToBrowse', resolvedLanguage)}
                 </Text>
               </View>
             ) : (
@@ -626,7 +666,11 @@ export default function App() {
               <Pressable android_ripple={RIPPLE} style={[s.floatingBadge, { backgroundColor: t.btn }]}
                 onPress={() => setVideosOpen(true)}>
                 <Text style={[s.floatingBadgeLabel, { color: t.btnTxt }]}>
-                  {mediaCount > 0 ? `${mediaCount} media item${mediaCount !== 1 ? 's' : ''} found` : 'Stream detected'}
+                  {mediaCount > 0
+                    ? (mediaCount === 1
+                      ? translate('mediaItemFound', resolvedLanguage)
+                      : translate('mediaItemsFound', resolvedLanguage, { count: mediaCount }))
+                    : translate('streamDetected', resolvedLanguage)}
                 </Text>
               </Pressable>
             )}
@@ -657,8 +701,8 @@ export default function App() {
                 <View style={[s.activeStripFill, { backgroundColor: t.btn,
                   width: `${Math.round((active[0]?.progress ?? 0) * 100)}%` as `${number}%` }]} />
               </View>
-              <Text style={[s.activeStripLabel, { color: t.ink2, fontSize: fs(11) }]}>
-                {activeCount} download{activeCount !== 1 ? 's' : ''} in progress
+              <Text style={[s.activeStripLabel, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
+                {translate('inProgress', resolvedLanguage)}: {activeCount}
               </Text>
             </Pressable>
           )}
@@ -678,7 +722,7 @@ export default function App() {
                   hitSlop={S.sm}
                   android_ripple={RIPPLE_BL}
                   style={s.librarySelectEdge}>
-                  <Text style={[{ color: t.ink, fontSize: fs(15) }]}>Cancel</Text>
+                  <Text style={[{ color: t.ink, fontSize: fs(15) }]}>{translate('cancel', resolvedLanguage)}</Text>
                 </Pressable>
                 <Pressable
                   onPress={selectAllLib}
@@ -686,7 +730,7 @@ export default function App() {
                   android_ripple={RIPPLE_BL}
                   style={s.librarySelectCenter}>
                   <Text style={[{ color: t.btn, fontSize: fs(15), fontWeight: '500' }]}>
-                    {libSelected.size === history.length && history.length > 0 ? 'Deselect All' : 'Select All'}
+                    {libSelected.size === history.length && history.length > 0 ? translate('deselectAll', resolvedLanguage) : translate('selectAll', resolvedLanguage)}
                   </Text>
                 </Pressable>
                 <Pressable
@@ -697,20 +741,20 @@ export default function App() {
                   style={[s.librarySelectEdge, { alignItems: 'flex-end' }]}>
                   <Text style={[{ fontSize: fs(15), fontWeight: '500',
                     color: libSelected.size > 0 ? t.red : t.ink3 }]}>
-                    Delete
+                    {translate('delete', resolvedLanguage)}
                   </Text>
                 </Pressable>
               </>
             ) : (
               <>
                 {IS_IOS
-                  ? <Text style={[s.largeTitleIOS, { color: t.ink }]}>Library</Text>
-                  : <Text style={[s.titleAndroid, { color: t.ink }]}>Library</Text>
+                  ? <Text style={[s.largeTitleIOS, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('library', resolvedLanguage)}</Text>
+                  : <Text style={[s.titleAndroid, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('library', resolvedLanguage)}</Text>
                 }
                 {history.length > 0 && (
                   <Pressable onPress={() => { setLibSelectMode(true); setLibSelected(new Set()); }}
                     hitSlop={S.sm} android_ripple={RIPPLE_BL}>
-                    <Text style={[{ color: t.ink2, fontSize: fs(14) }]}>Select</Text>
+                    <Text style={[{ color: t.ink2, fontSize: fs(14) }]}>{translate('select', resolvedLanguage)}</Text>
                   </Pressable>
                 )}
               </>
@@ -720,10 +764,10 @@ export default function App() {
           {allTasks.length === 0 ? (
             <View style={[s.flex, s.center, { backgroundColor: t.bg }]}>
               <Text style={[s.emptyHomeIcon, { color: t.ink3 }]}>⊘</Text>
-              <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14) }]}>No downloads yet</Text>
+              <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14) }]}>{translate('noDownloads', resolvedLanguage)}</Text>
               <Pressable onPress={() => setTab('home')} hitSlop={S.xs} style={{ marginTop: S.sm }}>
                 <Text style={[s.browseLinkLabel, { color: t.ink2, fontSize: fs(13) }]}>
-                  Go to Home →
+                  {translate('goHome', resolvedLanguage)}
                 </Text>
               </Pressable>
             </View>
@@ -734,16 +778,16 @@ export default function App() {
               {/* Active downloads */}
               {active.length > 0 && (
                 <>
-                  <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.sm }]}>
-                    IN PROGRESS
+                  <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.sm, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
+                    {translate('inProgress', resolvedLanguage).toUpperCase()}
                   </Text>
                   {active.map((task) => {
                     const resolution = getMediaResolution(task.media);
                     const statusText = task.status === 'downloading' && task.totalSegments > 0
-                      ? `${task.downloadedSegments} / ${task.totalSegments} parts`
-                      : task.status === 'assembling'        ? 'Assembling…'
-                      : task.status === 'fetching_manifest' ? 'Reading stream…'
-                      : 'Starting…';
+                      ? translate('parts', resolvedLanguage, { downloaded: task.downloadedSegments, total: task.totalSegments })
+                      : task.status === 'assembling'        ? translate('assembling', resolvedLanguage)
+                      : task.status === 'fetching_manifest' ? translate('readingStream', resolvedLanguage)
+                      : translate('starting', resolvedLanguage);
                     return (
                     <View key={task.id} style={[s.libraryCard, { backgroundColor: t.card }, subtleShadow]}>
                       <View style={s.libraryCardLeft}>
@@ -755,7 +799,7 @@ export default function App() {
                       </View>
                       <View style={s.libraryCardBody}>
                         <View style={s.libraryCardRow}>
-                          <Text style={[s.libraryCardTitle, { color: t.ink, fontSize: fs(14) }]}>
+                          <Text style={[s.libraryCardTitle, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
                             {getSourceName(task.media.url)}
                           </Text>
                           <Text style={[s.libraryCardPct, { color: t.ink2, fontSize: fs(13) }]}>
@@ -766,12 +810,12 @@ export default function App() {
                           <View style={[s.progressFill, { backgroundColor: t.btn,
                             width: `${Math.round(task.progress * 100)}%` as `${number}%` }]} />
                         </View>
-                        <Text style={[s.libraryCardSub, { color: t.ink2, fontSize: fs(11) }]}>
+                        <Text style={[s.libraryCardSub, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
                           {compactMediaDetails(statusText, resolution)}
                         </Text>
                         <Pressable android_ripple={RIPPLE_BL} onPress={() => cancel(task.id)}
                           style={[s.outlineBtn, { borderColor: t.sep, marginTop: S.xs }]}>
-                          <Text style={[s.outlineBtnLabel, { color: t.ink2, fontSize: fs(12) }]}>Cancel</Text>
+                          <Text style={[s.outlineBtnLabel, { color: t.ink2, fontSize: fs(12) }]}>{translate('cancel', resolvedLanguage)}</Text>
                         </Pressable>
                       </View>
                     </View>
@@ -783,8 +827,8 @@ export default function App() {
 
               {/* Completed / failed / cancelled */}
               {history.length > 0 && active.length > 0 && (
-                <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.sm }]}>
-                  COMPLETED
+                <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.sm, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
+                  {translate('completed', resolvedLanguage).toUpperCase()}
                 </Text>
               )}
               {history.map((task) => {
@@ -819,7 +863,7 @@ export default function App() {
                     </View>
                     <View style={s.libraryCardBody}>
                       <View style={s.libraryCardRow}>
-                        <Text style={[s.libraryCardTitle, { color: t.ink, fontSize: fs(14) }]}>
+                        <Text style={[s.libraryCardTitle, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
                           {source}
                         </Text>
                         {quality && (
@@ -829,38 +873,38 @@ export default function App() {
                         )}
                       </View>
                       <Text style={[s.libraryCardSub,
-                        { color: isFail ? t.red : t.ink2, fontSize: fs(12) }]} numberOfLines={1}>
-                        {isDone   ? `Saved${size ? `  ·  ${size}` : ''}`
-                         : isFail ? (task.error ?? 'Failed')
-                         : 'Cancelled'}
+                        { color: isFail ? t.red : t.ink2, fontSize: fs(12), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
+                        {isDone   ? `${translate('saved', resolvedLanguage)}${size ? `  ·  ${size}` : ''}`
+                         : isFail ? (task.error ?? translate('failedError', resolvedLanguage, { error: '' }).replace(': ', '').replace('：', ''))
+                         : translate('cancel', resolvedLanguage)}
                       </Text>
                       {resolution && (
-                        <Text style={[s.libraryCardSub, { color: t.ink2, fontSize: fs(11) }]} numberOfLines={1}>
+                        <Text style={[s.libraryCardSub, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
                           {resolution}
                         </Text>
                       )}
 
                       {!libSelectMode && (
-                        <View style={s.libraryActions}>
+                        <View style={[s.libraryActions, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
                           {isDone && task.localPlaylistPath && (
                             <>
                               {isPlayable && (
                                 <Pressable android_ripple={RIPPLE_BL}
                                   style={[s.outlineBtn, { borderColor: t.sep }]}
                                   onPress={() => setPlayingPath(task.localPlaylistPath!)}>
-                                  <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>Play</Text>
+                                  <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>{translate('play', resolvedLanguage)}</Text>
                                 </Pressable>
                               )}
                               <Pressable android_ripple={RIPPLE_BL}
                                 style={[s.outlineBtn, { borderColor: t.sep }]}
                                 onPress={() => handleExport(task)}>
-                                <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>Share</Text>
+                                <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>{translate('share', resolvedLanguage)}</Text>
                               </Pressable>
                               {canSaveToLibrary && (
                                 <Pressable android_ripple={RIPPLE_BL}
                                   style={[s.outlineBtn, { borderColor: t.sep }]}
                                   onPress={() => handleGallery(task)}>
-                                  <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>Gallery</Text>
+                                  <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>{translate('gallery', resolvedLanguage)}</Text>
                                 </Pressable>
                               )}
                             </>
@@ -869,16 +913,16 @@ export default function App() {
                             <Pressable android_ripple={RIPPLE_BL}
                               style={[s.outlineBtn, { borderColor: t.sep }]}
                               onPress={() => handleRetry(task)}>
-                              <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>Retry</Text>
+                              <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>{translate('retry', resolvedLanguage)}</Text>
                             </Pressable>
                           )}
                           <Pressable android_ripple={RIPPLE_BL}
                             style={[s.outlineBtn, { borderColor: t.redBg }]}
-                            onPress={() => Alert.alert('Delete', 'Remove this download?', [
-                              { text: 'Cancel', style: 'cancel' },
-                              { text: 'Delete', style: 'destructive', onPress: () => remove(task.id) },
+                            onPress={() => Alert.alert(translate('delete', resolvedLangRef.current), translate('removeBookmarkConfirm', resolvedLangRef.current, { title: source }), [
+                              { text: translate('cancel', resolvedLangRef.current), style: 'cancel' },
+                              { text: translate('delete', resolvedLangRef.current), style: 'destructive', onPress: () => remove(task.id) },
                             ])}>
-                            <Text style={[s.outlineBtnLabel, { color: t.red, fontSize: fs(12) }]}>Delete</Text>
+                            <Text style={[s.outlineBtnLabel, { color: t.red, fontSize: fs(12) }]}>{translate('delete', resolvedLanguage)}</Text>
                           </Pressable>
                         </View>
                       )}
@@ -911,8 +955,8 @@ export default function App() {
         <View style={s.flex}>
           <View style={[s.topBar, { backgroundColor: t.bg, borderBottomColor: t.sep }]}>
             {IS_IOS
-              ? <Text style={[s.largeTitleIOS, { color: t.ink }]}>Bookmarks</Text>
-              : <Text style={[s.titleAndroid, { color: t.ink }]}>Bookmarks</Text>
+              ? <Text style={[s.largeTitleIOS, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('bookmarks', resolvedLanguage)}</Text>
+              : <Text style={[s.titleAndroid, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('bookmarks', resolvedLanguage)}</Text>
             }
             {bookmarks.length > 0 && (
               <Text style={[s.topBarCount, { color: t.ink2, fontSize: fs(13) }]}>
@@ -925,11 +969,11 @@ export default function App() {
             <View style={[s.flex, s.center, { backgroundColor: t.bg }]}>
               <Text style={[s.emptyHomeIcon, { color: t.ink3 }]}>☆</Text>
               <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14) }]}>
-                No bookmarks yet
+                {translate('noBookmarks', resolvedLanguage)}
               </Text>
               <Pressable onPress={() => setTab('browser')} hitSlop={S.xs} style={{ marginTop: S.sm }}>
                 <Text style={[s.browseLinkLabel, { color: t.ink2, fontSize: fs(13) }]}>
-                  Browse and tap ★ to save →
+                  {translate('browseToSave', resolvedLanguage)}
                 </Text>
               </Pressable>
             </View>
@@ -943,9 +987,9 @@ export default function App() {
                   <Pressable key={bm.id} android_ripple={RIPPLE}
                     style={[s.bmRow, { backgroundColor: t.card }, subtleShadow]}
                     onPress={() => { setLoadedUrl(bm.url); setBrowserInput(bm.url); setTab('browser'); }}
-                    onLongPress={() => Alert.alert('Remove Bookmark', `Remove "${bm.title || domain}"?`, [
-                      { text: 'Cancel', style: 'cancel' },
-                      { text: 'Remove', style: 'destructive', onPress: () => removeBM(bm.id) },
+                    onLongPress={() => Alert.alert(translate('removeBookmark', resolvedLangRef.current), translate('removeBookmarkConfirm', resolvedLangRef.current, { title: bm.title || domain }), [
+                      { text: translate('cancel', resolvedLangRef.current), style: 'cancel' },
+                      { text: translate('remove', resolvedLangRef.current), style: 'destructive', onPress: () => removeBM(bm.id) },
                     ])}>
                     <View style={[s.bmRowAvatar, { backgroundColor: t.card2 }]}>
                       <Text style={[s.bmRowAvatarText, { color: t.ink, fontSize: fs(16) }]}>
@@ -953,11 +997,11 @@ export default function App() {
                       </Text>
                     </View>
                     <View style={s.bmRowBody}>
-                      <Text style={[s.bmRowTitle, { color: t.ink, fontSize: fs(14) }]} numberOfLines={1}>
+                      <Text style={[s.bmRowTitle, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
                         {bm.title || domain}
                       </Text>
                       {domain ? (
-                        <Text style={[s.bmRowUrl, { color: t.ink2, fontSize: fs(12) }]} numberOfLines={1}>
+                        <Text style={[s.bmRowUrl, { color: t.ink2, fontSize: fs(12), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
                           {domain}
                         </Text>
                       ) : null}
@@ -972,14 +1016,16 @@ export default function App() {
       )}
 
       {/* ── Tab bar ─────────────────────────────────────── */}
-      <View style={[s.tabBar, { backgroundColor: t.bg, borderTopColor: t.sep, paddingBottom: BOTTOM_PAD }]}>
+      <View style={[s.tabBar, { backgroundColor: t.bg, borderTopColor: t.sep, paddingBottom: BOTTOM_PAD }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
         {(['home', 'browser', 'library', 'bookmarks'] as Tab[]).map((id, idx) => {
-          const labels: Record<Tab, string> = {
-            home:      activeCount > 0 ? `Home  ${activeCount}` : 'Home',
-            browser:   mediaCount  > 0 ? `Browse  ${mediaCount}` : 'Browse',
-            library:   allTasks.length > 0 ? `Library  ${allTasks.length}` : 'Library',
-            bookmarks: bookmarks.length > 0 ? `Saved  ${bookmarks.length}` : 'Saved',
-          };
+          const transKey: TranslationKey = id === 'bookmarks' ? 'saved' : id as TranslationKey;
+          const translatedLabel = translate(transKey, resolvedLanguage);
+          const countSuffix = id === 'home' && activeCount > 0 ? `  ${activeCount}`
+            : id === 'browser' && mediaCount > 0 ? `  ${mediaCount}`
+            : id === 'library' && allTasks.length > 0 ? `  ${allTasks.length}`
+            : id === 'bookmarks' && bookmarks.length > 0 ? `  ${bookmarks.length}`
+            : '';
+          const labelText = `${translatedLabel}${countSuffix}`;
           const isActive = tab === id;
           return (
             <React.Fragment key={id}>
@@ -988,7 +1034,7 @@ export default function App() {
                 {IS_ANDROID && isActive && <View style={[s.tabPill, { backgroundColor: `${t.btn}12` }]} />}
                 <Text style={[s.tabLabel, { color: isActive ? t.ink : t.ink2,
                   fontWeight: isActive ? '600' : '400', fontSize: fs(13) }]}>
-                  {labels[id]}
+                  {labelText}
                 </Text>
                 {IS_IOS && isActive && <View style={[s.tabDot, { backgroundColor: t.ink }]} />}
               </Pressable>
@@ -1009,9 +1055,9 @@ export default function App() {
           {previewItem ? (
             /* ── Preview detail view ── */
             <>
-              <View style={[s.sheetHead, { backgroundColor: t.bg }]}>
+              <View style={[s.sheetHead, { backgroundColor: t.bg }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
                 <Pressable android_ripple={RIPPLE_BL} onPress={() => setPreviewItem(null)} hitSlop={S.sm}>
-                  <Text style={[s.sheetBackLabel, { color: t.ink2, fontSize: fs(14) }]}>← Back</Text>
+                  <Text style={[s.sheetBackLabel, { color: t.ink2, fontSize: fs(14) }]}>{translate('back', resolvedLanguage)}</Text>
                 </Pressable>
                 <Pressable android_ripple={RIPPLE_BL}
                   style={[s.closeRound, { backgroundColor: t.card }]}
@@ -1042,22 +1088,22 @@ export default function App() {
 
                 {/* Metadata */}
                 {getQuality(previewItem.url, previewItem.label) && (
-                  <View style={[s.metaRow, { borderBottomColor: t.sep }]}>
-                    <Text style={[s.metaKey, { color: t.ink2, fontSize: fs(13) }]}>Quality</Text>
+                  <View style={[s.metaRow, { borderBottomColor: t.sep }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
+                    <Text style={[s.metaKey, { color: t.ink2, fontSize: fs(13) }]}>{translate('quality', resolvedLanguage)}</Text>
                     <Text style={[s.metaVal, { color: t.ink, fontSize: fs(13) }]}>
                       {getQuality(previewItem.url, previewItem.label)}
                     </Text>
                   </View>
                 )}
-                <View style={[s.metaRow, { borderBottomColor: t.sep }]}>
-                  <Text style={[s.metaKey, { color: t.ink2, fontSize: fs(13) }]}>Format</Text>
+                <View style={[s.metaRow, { borderBottomColor: t.sep }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
+                  <Text style={[s.metaKey, { color: t.ink2, fontSize: fs(13) }]}>{translate('format', resolvedLanguage)}</Text>
                   <Text style={[s.metaVal, { color: t.ink, fontSize: fs(13) }]}>
                     {getMediaFormat(previewItem)}
                   </Text>
                 </View>
                 {getMediaResolution(previewItem) && (
-                  <View style={[s.metaRow, { borderBottomColor: t.sep }]}>
-                    <Text style={[s.metaKey, { color: t.ink2, fontSize: fs(13) }]}>Resolution</Text>
+                  <View style={[s.metaRow, { borderBottomColor: t.sep }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
+                    <Text style={[s.metaKey, { color: t.ink2, fontSize: fs(13) }]}>{translate('resolution', resolvedLanguage)}</Text>
                     <Text style={[s.metaVal, { color: t.ink, fontSize: fs(13) }]}>
                       {getMediaResolution(previewItem)}
                     </Text>
@@ -1066,8 +1112,8 @@ export default function App() {
 
                 {previewItem.availableFormats && previewItem.availableFormats.length > 0 && (
                   <View style={{ marginTop: S.md }}>
-                    <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.xs }]}>
-                      FORMATS
+                    <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.xs, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
+                      {translate('formats', resolvedLanguage)}
                     </Text>
                     {previewItem.availableFormats.slice(0, 8).map((format) => {
                       const selected = selectedFormatId === format.id || (!selectedFormatId && format.id === previewItem.formatId);
@@ -1076,9 +1122,9 @@ export default function App() {
                           key={format.id}
                           android_ripple={RIPPLE}
                           onPress={() => setSelectedFormatId(format.id)}
-                          style={[s.metaRow, { borderBottomColor: t.sep }]}>
+                          style={[s.metaRow, { borderBottomColor: t.sep }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
                           <Text style={[s.metaKey, { color: selected ? t.ink : t.ink2, fontSize: fs(13) }]}>
-                            {selected ? 'Selected' : format.id}
+                            {selected ? translate('selected', resolvedLanguage) : format.id}
                           </Text>
                           <Text style={[s.metaVal, { color: t.ink, fontSize: fs(13) }]} numberOfLines={2}>
                             {formatOptionLabel(format)}
@@ -1094,7 +1140,7 @@ export default function App() {
                   style={[s.primaryBtn, { backgroundColor: t.btn, marginTop: S.lg }]}
                   onPress={() => handleDetectedDownload(previewItem)}>
                   <Text style={[s.primaryBtnLabel, { color: t.btnTxt, fontSize: fs(16) }]}>
-                    Download
+                    {translate('download', resolvedLanguage)}
                   </Text>
                 </Pressable>
                 {getMediaKind(previewItem) !== 'image' && (
@@ -1103,7 +1149,7 @@ export default function App() {
                     style={[s.secondaryBtn, { borderColor: t.sep, marginTop: S.sm }]}
                     onPress={() => handleDetectedAudioDownload(previewItem)}>
                     <Text style={[s.secondaryBtnLabel, { color: t.ink, fontSize: fs(15) }]}>
-                      Download Audio
+                      {translate('downloadAudio', resolvedLanguage)}
                     </Text>
                   </Pressable>
                 )}
@@ -1112,9 +1158,11 @@ export default function App() {
           ) : (
             /* ── Video list ── */
             <>
-              <View style={[s.sheetHead, { backgroundColor: t.bg }]}>
+              <View style={[s.sheetHead, { backgroundColor: t.bg }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
                 <Text style={[s.sheetTitle, { color: t.ink, fontSize: fs(20) }]}>
-                  {mediaCount > 0 ? `${mediaCount} Media Item${mediaCount !== 1 ? 's' : ''} Found` : 'Media'}
+                  {mediaCount > 0
+                    ? (mediaCount === 1 ? translate('mediaItemFound', resolvedLanguage) : translate('mediaItemsFound', resolvedLanguage, { count: mediaCount }))
+                    : translate('media', resolvedLanguage)}
                 </Text>
                 <Pressable android_ripple={RIPPLE_BL}
                   style={[s.closeRound, { backgroundColor: t.card }]}
@@ -1124,12 +1172,12 @@ export default function App() {
               </View>
 
               {allVideos.length > 0 && (
-                <View style={s.bulkDownloadRow}>
+                <View style={[s.bulkDownloadRow, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
                   <Pressable android_ripple={RIPPLE}
                     style={[s.secondaryBtn, s.bulkDownloadBtn, { borderColor: t.sep }]}
                     onPress={handleDownloadAllDetected}>
                     <Text style={[s.secondaryBtnLabel, { color: t.ink, fontSize: fs(13) }]}>
-                      Download all
+                      {translate('downloadAll', resolvedLanguage)}
                     </Text>
                   </Pressable>
                   {allVideos.some((item) => getMediaKind(item) !== 'image') && (
@@ -1137,7 +1185,7 @@ export default function App() {
                       style={[s.secondaryBtn, s.bulkDownloadBtn, { borderColor: t.sep }]}
                       onPress={handleDownloadAllAudio}>
                       <Text style={[s.secondaryBtnLabel, { color: t.ink, fontSize: fs(13) }]}>
-                        Audio all
+                        {translate('audioAll', resolvedLanguage)}
                       </Text>
                     </Pressable>
                   )}
@@ -1151,7 +1199,7 @@ export default function App() {
                   <View style={s.center}>
                     <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14), textAlign: 'center',
                       paddingVertical: S.xl }]}>
-                      Browse to a page with media — it will appear here.
+                      {translate('browseForMedia', resolvedLanguage)}
                     </Text>
                   </View>
                 )}
@@ -1161,23 +1209,23 @@ export default function App() {
                   const resolution = getMediaResolution(item);
                   return (
                     <Pressable key={item.id} android_ripple={RIPPLE}
-                      style={[s.videoRow, { backgroundColor: t.card, borderBottomColor: t.sep }]}
+                      style={[s.videoRow, { backgroundColor: t.card, borderBottomColor: t.sep }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}
                       onPress={() => setPreviewItem(item)}>
                       <View style={[s.videoAvatar, { backgroundColor: t.card2 }]}>
                         <Text style={[s.videoAvatarText, { color: t.ink, fontSize: fs(15) }]}>
                           {getInitial(source)}
                         </Text>
                       </View>
-                      <View style={s.videoMeta}>
-                        <Text style={[s.videoSource, { color: t.ink, fontSize: fs(14) }]}>{source}</Text>
-                        <Text style={[s.videoQuality, { color: t.ink2, fontSize: fs(12) }]}>
+                      <View style={[s.videoMeta, resolvedLanguage === 'ar' && { alignItems: 'flex-end' }]}>
+                        <Text style={[s.videoSource, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{source}</Text>
+                        <Text style={[s.videoQuality, { color: t.ink2, fontSize: fs(12), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
                           {compactMediaDetails(quality, resolution)}
                         </Text>
                       </View>
                       <Pressable android_ripple={RIPPLE}
                         style={[s.dlBtn, { backgroundColor: t.btn }]}
                         onPress={() => handleDetectedDownload(item)}>
-                        <Text style={[s.dlBtnLabel, { color: t.btnTxt, fontSize: fs(13) }]}>Download</Text>
+                        <Text style={[s.dlBtnLabel, { color: t.btnTxt, fontSize: fs(13) }]}>{translate('download', resolvedLanguage)}</Text>
                       </Pressable>
                     </Pressable>
                   );
@@ -1185,12 +1233,12 @@ export default function App() {
               </ScrollView>
 
               {/* Manual paste */}
-              <View style={[s.sheetPasteRow, { borderTopColor: t.sep, backgroundColor: t.bg }]}>
+              <View style={[s.sheetPasteRow, { borderTopColor: t.sep, backgroundColor: t.bg }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
                 <TextInput
-                  style={[s.sheetPasteInput, { backgroundColor: t.card, color: t.ink, fontSize: fs(14) }]}
+                  style={[s.sheetPasteInput, { backgroundColor: t.card, color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}
                   value={pasteUrl}
                   onChangeText={setPasteUrl}
-                  placeholder="Paste a media or page URL…"
+                  placeholder={translate('pasteMediaUrlPlaceholder', resolvedLanguage)}
                   placeholderTextColor={t.ink3}
                   autoCapitalize="none" autoCorrect={false}
                   keyboardType="url" returnKeyType="done"
@@ -1202,7 +1250,7 @@ export default function App() {
                   onPress={() => { setVideosOpen(false); handleHomeDownload(); }}
                   disabled={extracting}>
                   <Text style={[s.dlBtnLabel, { color: t.btnTxt, fontSize: fs(14) }]}>
-                    {extracting ? '…' : 'Add'}
+                    {extracting ? '…' : translate('add', resolvedLanguage)}
                   </Text>
                 </Pressable>
               </View>
@@ -1213,8 +1261,10 @@ export default function App() {
 
       {/* ── Modals ──────────────────────────────────────── */}
       <SettingsSheet visible={settingsOpen} onClose={() => setSettingsOpen(false)}
-        theme={theme} fontSize={fontSize} onThemeChange={setTheme} onFontSizeChange={setFontSize} t={t} />
-      {playingPath && <VideoPlayerModal path={playingPath} onClose={() => setPlayingPath(null)} />}
+        theme={theme} fontSize={fontSize} language={language}
+        onThemeChange={setTheme} onFontSizeChange={setFontSize} onLanguageChange={setLanguage}
+        resolvedLanguage={resolvedLanguage} t={t} />
+      {playingPath && <VideoPlayerModal path={playingPath} onClose={() => setPlayingPath(null)} language={resolvedLanguage} />}
       <Toast message={toast} />
     </View>
   );
