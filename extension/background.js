@@ -34,6 +34,7 @@ const PREFLIGHT_MEDIA_TYPES = [
   "application/dash+xml",
   "application/octet-stream",
 ];
+const NETWORK_CAPTURE_MEDIA_TYPES = PREFLIGHT_MEDIA_TYPES.filter((type) => type !== "image/");
 
 function debugLog(...args) {
   if (DEBUG_LOGS) console.log(...args);
@@ -290,7 +291,7 @@ try {
         const u = details.url;
         if (!u || u.length < 12) return;
         const contentType = details.responseHeaders?.find((h) => /content-type/i.test(h.name))?.value || "";
-        const mediaByType = PREFLIGHT_MEDIA_TYPES.some((type) =>
+        const mediaByType = NETWORK_CAPTURE_MEDIA_TYPES.some((type) =>
           contentType.toLowerCase().startsWith(type.toLowerCase())
         );
         if (!isLikelyMedia(u) && !mediaByType) return;

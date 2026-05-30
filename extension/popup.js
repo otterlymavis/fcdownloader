@@ -32,6 +32,7 @@ let preferCapturedMedia = false;
 let waitingForCapturedMedia = false;
 let currentVisibleItems = [];
 let selectedItemKeys = new Set();
+let pinnedExtractResult = false;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -342,6 +343,7 @@ function refresh() {
     if (!resp) return;
     const items = resp.items || [];
     renderHelperStatus(needsCompanion(currentPageUrl, items));
+    if (pinnedExtractResult) return;
     if (waitingForCapturedMedia && items.some(isCapturedVideo)) {
       waitingForCapturedMedia = false;
       preferCapturedMedia = true;
@@ -456,6 +458,7 @@ if (downloadSelectedBtn) {
 
 extractBtn.addEventListener("click", async () => {
   extractBtn.disabled = true;
+  pinnedExtractResult = false;
   setStatus("Looking for media...");
   try {
     const resp = await sendMessage({
@@ -550,6 +553,8 @@ function describeGallery(items) {
 
 function renderGallery(info) {
   const items = info.items;
+  pinnedExtractResult = true;
+  lastItemsKey = `gallery:${items.map((item) => item.url || item.videoUrl || "").join("|")}`;
   primaryTitle.textContent = info.title || `${items.length} items`;
   primaryMeta.textContent  = describeGallery(items);
   primaryBtn.textContent   = `Save all ${items.length}`;
