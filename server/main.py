@@ -329,7 +329,22 @@ def _to_gallery_response(info: dict[str, Any]) -> dict[str, Any]:
 
         url = entry.get("url")
         if not url and entry.get("formats"):
-            url = entry["formats"][-1].get("url")
+            usable_formats = [
+                f for f in entry["formats"]
+                if isinstance(f, dict) and f.get("url")
+            ]
+            picked = max(
+                usable_formats,
+                key=lambda f: (
+                    int(f.get("height") or 0),
+                    int(f.get("width") or 0),
+                    int(f.get("tbr") or f.get("abr") or 0),
+                ),
+                default={},
+            )
+            if picked:
+                entry = {**entry, **picked}
+            url = entry.get("url")
         if not url:
             continue
 

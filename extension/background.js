@@ -299,12 +299,16 @@ try {
         chrome.tabs.get(details.tabId).then((tab) => {
           if (!tab?.url) return;
           const replay = requestHeadersByUrl.get(u)?.headers || {};
+          const width = Number(details.responseHeaders?.find((h) => /^x-fcdl-video-width$/i.test(h.name))?.value || 0);
+          const height = Number(details.responseHeaders?.find((h) => /^x-fcdl-video-height$/i.test(h.name))?.value || 0);
           addItem(details.tabId, tab.url, {
             url: u,
             kind: mediaKindForResponse(u, contentType),
             source: "network",
             headers: replay,
             mime: contentType,
+            width: Number.isFinite(width) && width > 0 ? width : undefined,
+            height: Number.isFinite(height) && height > 0 ? height : undefined,
           });
         }).catch(() => {});
       },

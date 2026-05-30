@@ -109,6 +109,10 @@ function mediaResolution(item = {}) {
   const direct = formatDimensions(item.width, item.height);
   if (direct) return direct;
 
+  if (typeof item.resolution === "string" && item.resolution && item.resolution !== "audio only") {
+    return item.resolution;
+  }
+
   const selectedFormat = Array.isArray(item.formats)
     ? item.formats.find((format) => String(format.id || format.formatId || "") === String(item.formatId || ""))
     : null;
@@ -127,6 +131,11 @@ function mediaResolution(item = {}) {
   if (/(?:\d{3,4}p|4k|8k)/i.test(label)) return label.match(/(?:\d{3,4}p|4k|8k)/i)[0];
 
   const url = String(item.url || item.videoUrl || "");
+  const ytHeight = url.match(/[?&]height=(\d+)/i);
+  if (ytHeight) return `${ytHeight[1]}p`;
+  if (/[?&]itag=18(?:&|$)/i.test(url)) return "360p";
+  const pathHeight = url.match(/(?:^|[\/_.-])(?:h|height)?([1-9]\d{2,3})p(?:[\/_.-]|$)/i);
+  if (pathHeight) return `${pathHeight[1]}p`;
   const urlDimensions = url.match(/(?:^|[\/_-])(\d{3,5})x(\d{3,5})(?:[\/_.-]|$)/i);
   if (urlDimensions) return `${urlDimensions[1]} x ${urlDimensions[2]}`;
   try {
