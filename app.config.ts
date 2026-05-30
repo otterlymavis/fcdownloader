@@ -8,7 +8,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     name: 'FCDownloader',
   slug: 'fcdownloader',
   owner: 'mabisuuu',
-  version: '1.5.9',
+  version: '1.5.10',
   orientation: 'default',
   userInterfaceStyle: 'automatic', // dark mode support
   platforms: ['ios', 'android'],
@@ -21,7 +21,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   },
   android: {
     package: 'com.mabisuuu.fcdownloader',
-    versionCode: 20,
+    versionCode: 21,
     allowBackup: false,
     adaptiveIcon: {
       foregroundImage: './assets/android-icon-foreground.png',

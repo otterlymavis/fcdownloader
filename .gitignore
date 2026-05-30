@@ -81,6 +81,9 @@ replace.txt
 .claude/
 
 # Companion generated helper binary and PyInstaller work dirs
+desktop-companion/build/
+desktop-companion/dist-*/
+desktop-companion/nobrowser-*/
 desktop-companion/build/helper/
 desktop-companion/build/electron-cache/
 desktop-companion/build/electron-builder-cache/

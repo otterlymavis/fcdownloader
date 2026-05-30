@@ -1,7 +1,7 @@
 {
-  "release": "1.5.9",
-  "mobile": "1.5.9",
-  "extension": "1.5.9",
+  "release": "1.5.10",
+  "mobile": "1.5.10",
+  "extension": "1.5.10",
   "companion": "0.2.1",
   "backendApi": "v1",
   "localHelperApi": "v1"

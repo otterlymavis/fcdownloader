@@ -34,11 +34,13 @@ const MIME_BY_EXT: Record<string, string> = {
   ogg: 'audio/ogg',
 };
 
-const SEGMENT_RE = /\.(ts|m4s|aac|m4a|cmfv|cmfa)(\?|#|$)/i;
+const SEGMENT_RE = /\.(ts|m4s|cmfv|cmfa)(\?|#|$)/i;
 const VIMEO_RANGE_RE = /vimeocdn\.com\/.*\/v2\/range\/.*\/avf\//i;
 const USEFUL_EXT_RE = /\.(m3u8|mpd|mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)(\?|#|$)/i;
 const VIMEO_JSON_RE = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i;
 const VIDEO_CDN_RE = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|threadscdn\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|fbcdn\.net\/videos|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/|weibocdn\.com\/|xhscdn\.com\/)/i;
+const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(\?|#|$)/i;
+const VIDEO_EXT_RE = /\.(m3u8|mpd|mp4|m4v|webm|mov)(\?|#|$)/i;
 const YT_RANGE_RE = /googlevideo\.com\/videoplayback[^#]*[?&](?:range=|sq=)\d/i;
 const YT_CDN_RE = /googlevideo\.com\/videoplayback/i;
 const TW_VIDEO_RE = /video\.twimg\.com\/(?:ext_tw_video|amplify_video)\/(\d+)\//i;
@@ -184,18 +186,50 @@ export function getInitial(name: string): string {
 }
 
 export function isUseful(url: string): boolean {
-  const clean = url.split('#')[0];
-  if (SEGMENT_RE.test(clean)) return false;
-  if (VIMEO_RANGE_RE.test(url)) return false;
-  if (YT_RANGE_RE.test(url)) return false;
+  if (isSegmentMediaUrl(url)) return false;
   return USEFUL_EXT_RE.test(url) || VIMEO_JSON_RE.test(url) || VIDEO_CDN_RE.test(url);
 }
 
+export function isNetworkDownloadCandidate(url: string): boolean {
+  if (isSegmentMediaUrl(url)) return false;
+  return VIDEO_EXT_RE.test(url) || AUDIO_EXT_RE.test(url) || VIMEO_JSON_RE.test(url) || VIDEO_CDN_RE.test(url);
+}
+
 export function isDirectMediaUrl(url: string): boolean {
-  const clean = url.split('#')[0];
-  if (SEGMENT_RE.test(clean)) return false;
-  if (YT_RANGE_RE.test(url)) return false;
+  if (isSegmentMediaUrl(url)) return false;
   return USEFUL_EXT_RE.test(url) || VIMEO_JSON_RE.test(url) || VIDEO_CDN_RE.test(url);
+}
+
+export function isSegmentMediaUrl(url: string): boolean {
+  const clean = url.split('#')[0];
+  return SEGMENT_RE.test(clean) || VIMEO_RANGE_RE.test(url) || YT_RANGE_RE.test(url);
+}
+
+export function isLikelyThumbnailUrl(url: string): boolean {
+  const u = url.toLowerCase();
+  if (!/\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(u)) return false;
+  if (/(?:^|[\/_.-])(?:thumb|thumbnail|avatar|profile(?:_pic)?|placeholder|blank|pixel|beacon|tracking|tracker|counter|spacer|sprite|logo|icon|button|banner|ads?)(?:[\/_.-]|$)/i.test(u)) return true;
+  if (/[?&](?:thumb|thumbnail|preview|avatar)=/i.test(u)) return true;
+  try {
+    const parsed = new URL(url);
+    const dimensions = ['width', 'w', 'height', 'h']
+      .map((key) => Number(parsed.searchParams.get(key) || 0))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (dimensions.length && Math.max(...dimensions) <= 512) return true;
+  } catch {}
+  if (/(?:^|[\/_-])(?:\d{1,3}x\d{1,3}|s\d{2,4}x\d{2,4})(?:[\/_.-]|$)/i.test(u)) return true;
+  return false;
+}
+
+export function isNonContentMediaUrl(url: string, mimeType?: string | null): boolean {
+  const u = url.toLowerCase();
+  const mt = String(mimeType || '').toLowerCase();
+  if (/\.(?:html?|php|aspx?)(?:[?#]|$)/i.test(u)) return true;
+  if (mt.includes('text/html') || mt.includes('application/xhtml') || mt.includes('application/json')) return true;
+  if (/(?:doubleclick|googlesyndication|google-analytics|analytics|adservice|scorecardresearch|outbrain|taboola|treasuredata|bidswitch)/i.test(u)) return true;
+  if (/(?:^|[\/_.-])(?:ad|ads|banner|beacon|tracking|tracker|counter|spacer|sprite|logo|icon|button|common|header|footer|gnb|nav|placeholder|blank|pixel)(?:[\/_.-]|$)/i.test(u)) return true;
+  if (/\.gif(?:[?#]|$)/i.test(u) && !/(?:article|photo|gallery|image|upimg|contents|media|original|large)/i.test(u)) return true;
+  return false;
 }
 
 export function guessMediaType(url: string): DetectedMedia['mediaType'] {

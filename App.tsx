@@ -52,7 +52,7 @@ import {
   getSourceName,
   guessMediaType,
   isDirectMediaUrl,
-  isUseful,
+  isNetworkDownloadCandidate,
   smartDedup,
 } from './src/lib/mediaHelpers';
 
@@ -161,7 +161,7 @@ export default function App() {
   const allVideos = useMemo<DetectedMedia[]>(() => {
     const seen = new Set(detected.map((m) => m.url));
     const fromNet: DetectedMedia[] = networkLog
-      .filter((url) => isUseful(url) && !seen.has(url))
+      .filter((url) => isNetworkDownloadCandidate(url) && !seen.has(url))
       .map((url) => ({
         id: `net_${url}`, url, pageUrl: loadedUrl, userAgent: '',
         timestamp: Date.now(),
@@ -588,16 +588,28 @@ export default function App() {
           <View style={[s.topBar, { backgroundColor: t.bg, borderBottomColor: t.sep }]}>
             {libSelectMode ? (
               <>
-                <Pressable onPress={exitLibSelectMode} hitSlop={S.sm} android_ripple={RIPPLE_BL}>
+                <Pressable
+                  onPress={exitLibSelectMode}
+                  hitSlop={S.sm}
+                  android_ripple={RIPPLE_BL}
+                  style={s.librarySelectEdge}>
                   <Text style={[{ color: t.ink, fontSize: fs(15) }]}>Cancel</Text>
                 </Pressable>
-                <Pressable onPress={selectAllLib} hitSlop={S.sm} android_ripple={RIPPLE_BL} style={{ flex: 1, alignItems: 'center' }}>
+                <Pressable
+                  onPress={selectAllLib}
+                  hitSlop={S.sm}
+                  android_ripple={RIPPLE_BL}
+                  style={s.librarySelectCenter}>
                   <Text style={[{ color: t.btn, fontSize: fs(15), fontWeight: '500' }]}>
                     {libSelected.size === history.length && history.length > 0 ? 'Deselect All' : 'Select All'}
                   </Text>
                 </Pressable>
-                <Pressable onPress={deleteLibSelected} hitSlop={S.sm} android_ripple={RIPPLE_BL}
-                  disabled={libSelected.size === 0}>
+                <Pressable
+                  onPress={deleteLibSelected}
+                  hitSlop={S.sm}
+                  android_ripple={RIPPLE_BL}
+                  disabled={libSelected.size === 0}
+                  style={[s.librarySelectEdge, { alignItems: 'flex-end' }]}>
                   <Text style={[{ fontSize: fs(15), fontWeight: '500',
                     color: libSelected.size > 0 ? t.red : t.ink3 }]}>
                     Delete
@@ -1251,6 +1263,17 @@ const s = StyleSheet.create({
   libraryCardPct:   { fontWeight: '400' },
   libraryCardSub:   { fontWeight: '400' },
   libraryActions: { flexDirection: 'row', flexWrap: 'wrap', gap: S.sm, marginTop: S.xs },
+  librarySelectEdge: {
+    width: 88,
+    minHeight: 36,
+    justifyContent: 'center',
+  },
+  librarySelectCenter: {
+    flex: 1,
+    minHeight: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   selectCircle: {
     width: 24,
