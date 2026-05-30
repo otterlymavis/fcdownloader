@@ -109,6 +109,28 @@
       background: #ffffff;
     }
 
+    button.danger {
+      border-color: #552727;
+      background: #2c1a1a;
+      color: #fca5a5;
+    }
+
+    button.danger:hover {
+      border-color: #883a3a;
+      background: #3d2222;
+    }
+
+    button.active {
+      border-color: #243e56;
+      background: #142535;
+      color: #93c5fd;
+    }
+
+    button.active:hover {
+      border-color: #3b6285;
+      background: #1a3248;
+    }
+
     .log-panel {
       display: none;
       overflow: hidden;
@@ -145,7 +167,7 @@
 
     <div class="actions">
       <button id="startBtn" class="primary" type="button">Start</button>
-      <button id="stopBtn" type="button">Stop</button>
+      <button id="stopBtn" class="danger" type="button">Stop</button>
       <button id="logBtn" type="button">Log</button>
     </div>
 
@@ -184,6 +206,7 @@
 
     logButton.addEventListener("click", () => {
       logPanel.classList.toggle("open");
+      logButton.classList.toggle("active");
     });
 
     window.fcdl.onStatus(renderStatus);
