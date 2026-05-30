@@ -39,6 +39,7 @@ let selectedItemKeys = new Set();
 let pinnedExtractResult = false;
 let currentGalleryInfo = null;
 let progressPollInterval = null;
+let hasAutoExtracted = false;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -487,6 +488,15 @@ function refresh() {
       setStatus("Media found from page playback.", "success");
     }
     const visibleItems = displayedItems(items);
+
+    // Auto-extract if no concrete media items (streams or direct videos) exist yet.
+    // This allows immediately finding the media on load without user intervention!
+    const hasConcreteMedia = visibleItems.some((item) => item.kind !== "embed" && item.kind !== "image");
+    if (!hasConcreteMedia && !hasAutoExtracted && !waitingForCapturedMedia) {
+      hasAutoExtracted = true;
+      runExtraction();
+    }
+
     const key = `${helperIsReady ? "helper:" : "standalone:"}${preferCapturedMedia ? "capture:" : ""}${visibleItems.map((i) => i.url).join("|")}`;
     if (key !== lastItemsKey) {
       lastItemsKey = key;
@@ -593,7 +603,7 @@ if (downloadSelectedBtn) {
   downloadSelectedBtn.addEventListener("click", downloadSelectedItems);
 }
 
-extractBtn.addEventListener("click", async () => {
+async function runExtraction() {
   extractBtn.disabled = true;
   pinnedExtractResult = false;
   setStatus("Looking for media...");
@@ -666,7 +676,9 @@ extractBtn.addEventListener("click", async () => {
   } finally {
     extractBtn.disabled = false;
   }
-});
+}
+
+extractBtn.addEventListener("click", runExtraction);
 
 // ---------------------------------------------------------------------------
 // Gallery rendering
@@ -770,6 +782,14 @@ function renderGallery(info) {
 // Per-item Download
 
 async function downloadItem(item) {
+  // If this is a page placeholder URL instead of a concrete video file/stream,
+  // trigger extraction automatically instead of downloading the webpage HTML!
+  if (item?.kind === "embed" && item?.url === currentPageUrl) {
+    setStatus("Extracting media first...");
+    await runExtraction();
+    return;
+  }
+
   const itemWithDefaults = { pageUrl: currentPageUrl, ...item };
   setStatus("Starting download...");
   
