@@ -33,6 +33,7 @@ let waitingForCapturedMedia = false;
 let currentVisibleItems = [];
 let selectedItemKeys = new Set();
 let pinnedExtractResult = false;
+let currentGalleryInfo = null;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -254,6 +255,7 @@ function helperStatusText(ready, health) {
 let lastItemsKey = "";
 
 function render(items) {
+  currentGalleryInfo = null;
   currentVisibleItems = items || [];
   if (!items || !items.length) {
     primaryEl.hidden = true;
@@ -554,6 +556,8 @@ function describeGallery(items) {
 function renderGallery(info) {
   const items = info.items;
   pinnedExtractResult = true;
+  currentGalleryInfo = info;
+  currentVisibleItems = items;
   lastItemsKey = `gallery:${items.map((item) => item.url || item.videoUrl || "").join("|")}`;
   primaryTitle.textContent = info.title || `${items.length} items`;
   primaryMeta.textContent  = describeGallery(items);
@@ -586,20 +590,30 @@ function renderGallery(info) {
 
   // Per-item list: collapsed by default
   moreEl.hidden = false;
-  if (bulkActions) bulkActions.hidden = true;
-  selectedItemKeys = new Set();
-  moreEl.querySelector("summary").textContent = `Show individual items (${items.length})`;
+  if (bulkActions) bulkActions.hidden = false;
+  selectedItemKeys = new Set(items.map(itemKey).filter(Boolean));
+  moreEl.querySelector("summary").textContent = `Select items (${items.length})`;
   moreList.innerHTML = "";
   items.forEach((it, idx) => {
+    const key = itemKey(it);
     const li = document.createElement("li");
     const label = it.kind === "image" ? "Photo" : "Video";
     li.innerHTML = `
+      <label class="media-select">
+        <input type="checkbox" ${selectedItemKeys.has(key) ? "checked" : ""}>
+      </label>
       <div class="row-meta">
         <div class="row-title">${escapeHtml(label)} ${idx + 1}</div>
         <div class="row-sub">${escapeHtml([(it.ext || "").toUpperCase() || it.kind, mediaResolution(it)].filter(Boolean).join(" - "))}</div>
       </div>
       <button type="button">Save</button>
     `;
+    const checkbox = li.querySelector('input[type="checkbox"]');
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedItemKeys.add(key);
+      else selectedItemKeys.delete(key);
+      updateBulkControls();
+    });
     li.querySelector("button").addEventListener("click", async () => {
       const r = await sendMessage({
         type: "fcdl:download_gallery_item",
@@ -613,6 +627,7 @@ function renderGallery(info) {
     });
     moreList.appendChild(li);
   });
+  updateBulkControls();
 }
 
 // ---------------------------------------------------------------------------
@@ -636,6 +651,11 @@ async function downloadItem(item) {
 // Settings
 
 async function downloadSelectedItems() {
+  if (currentGalleryInfo) {
+    await downloadSelectedGalleryItems();
+    return;
+  }
+
   const items = currentVisibleItems
     .filter((item) => selectedItemKeys.has(itemKey(item)))
     .map((item) => ({ pageUrl: currentPageUrl, ...item }));
@@ -650,6 +670,36 @@ async function downloadSelectedItems() {
     { type: "fcdl:download_many", tabId: currentTabId, items },
     Math.max(60_000, items.length * 35_000),
   );
+  downloadSelectedBtn.disabled = false;
+  updateBulkControls();
+  if (!resp?.ok) {
+    setStatus(resp?.error || "Selected downloads failed.", "error");
+    return;
+  }
+  const { started = 0, failed = 0 } = resp;
+  if (failed === 0) {
+    setStatus(`Started ${started} download${started === 1 ? "" : "s"}. Check your browser's Downloads.`, "success");
+  } else {
+    setStatus(`Started ${started}, ${failed} failed. Check the extension console for details.`, "error");
+  }
+}
+
+async function downloadSelectedGalleryItems() {
+  const items = currentVisibleItems.filter((item) => selectedItemKeys.has(itemKey(item)));
+  if (!items.length) {
+    setStatus("Select at least one media item.", "error");
+    return;
+  }
+
+  downloadSelectedBtn.disabled = true;
+  setStatus(`Starting ${items.length} gallery download${items.length === 1 ? "" : "s"}...`);
+  const resp = await sendMessage({
+    type: "fcdl:download_gallery",
+    tabId: currentTabId,
+    pageUrl: currentPageUrl,
+    title: currentGalleryInfo.title,
+    items,
+  }, Math.max(60_000, items.length * 35_000));
   downloadSelectedBtn.disabled = false;
   updateBulkControls();
   if (!resp?.ok) {
