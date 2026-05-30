@@ -71,6 +71,7 @@ function mediaKindFromUrl(url: string): NonNullable<DetectedMedia['mediaKind']> 
 
 function makeItem(url: string, pageUrl: string, label?: string, provenance: Provenance = 'social-extractor', confidence = 0.85): DetectedMedia {
   const clean = url
+    .replace(/&amp;/g, '&')
     .replace(/\\u0026/g, '&')
     .replace(/\\\//g, '/')
     .replace(/\\/g, '')
@@ -663,17 +664,22 @@ async function extractJapaneseGeneric(pageUrl: string): Promise<DetectedMedia[]>
       /(https?:\/\/[^"'\\<>\s]+?\.m3u8[^"'\\<>\s]*)/gi,
       /(https?:\/\/[^"'\\<>\s]+?\.mpd[^"'\\<>\s]*)/gi,
       /(https?:\/\/[^"'\\<>\s]+?\.mp4[^"'\\<>\s]*)/gi,
+      /(https?:\/\/[^"'\\<>\s]+?\.(?:jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/gi,
+      /(https?:\/\/[^"'\\<>\s]*(?:contents\.oricon\.co\.jp|img-mdpr\.freetls\.fastly\.net|mdpr\.jp\/photo|ogre\.natalie\.mu|img\.thetv\.jp|img\.mantan-web\.jp|img\.cinematoday\.jp)[^"'\\<>\s]*)/gi,
     ];
     patterns.forEach(re => {
-      extractUrls(html, re).forEach(u => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.6)));
+      extractUrls(html, re)
+        .filter((u) => !isLikelyNonContentMediaUrl(u))
+        .forEach(u => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.6)));
     });
 
-    // OG/twitter card
+    // OG/twitter card, including article lead images.
     extractUrls(
       html,
-      /<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream)["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
+      /<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream|og:image(?::secure_url)?|twitter:image(?::src)?)["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
     )
       .filter(u => u.startsWith('http'))
+      .filter((u) => !isLikelyNonContentMediaUrl(u))
       .forEach(u => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.55)));
 
     return results;

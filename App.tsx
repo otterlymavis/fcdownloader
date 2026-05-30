@@ -26,7 +26,7 @@ import { useDownloadManager } from './src/hooks/useDownloadManager';
 import { useBookmarks } from './src/hooks/useBookmarks';
 import { useSettings } from './src/hooks/useSettings';
 import { DetectedMedia, DownloadTask } from './src/types';
-import { extractFromSocialUrl, isSocialPageUrl } from './src/lib/platformExtractors';
+import { extractionManager } from './src/lib/extractionManager';
 import {
   BOTTOM_PAD,
   IS_ANDROID,
@@ -239,26 +239,6 @@ export default function App() {
     if (!url || extracting) return;
     if (!url.startsWith('http')) url = `https://${url}`;
 
-    if (isSocialPageUrl(url)) {
-      setExtracting(true);
-      try {
-        const items = await extractFromSocialUrl(url);
-        if (items.length > 0) {
-          for (const item of items) await enqueue(item);
-          setPasteUrl('');
-          showToast(`Downloading ${items.length} media item${items.length !== 1 ? 's' : ''}`, 'success');
-          setTab('library');
-        } else {
-          showToast('Opening in browser — tap the video button when it appears', 'info');
-          setLoadedUrl(url); setBrowserInput(url); setTab('browser');
-        }
-      } catch {
-        showToast('Opening in browser instead', 'info');
-        setLoadedUrl(url); setBrowserInput(url); setTab('browser');
-      } finally { setExtracting(false); }
-      return;
-    }
-
     if (isDirectMediaUrl(url)) {
       const item: DetectedMedia = {
         id: `home_${Date.now()}`, url, pageUrl: url, userAgent: '',
@@ -274,7 +254,22 @@ export default function App() {
       return;
     }
 
-    showToast('Opening in browser', 'info');
+    setExtracting(true);
+    try {
+      const items = await extractionManager.extractMedia(url);
+      if (items.length > 0) {
+        for (const item of items) await enqueue(item);
+        setPasteUrl('');
+        showToast(`Downloading ${items.length} media item${items.length !== 1 ? 's' : ''}`, 'success');
+        setTab('library');
+        return;
+      }
+      showToast('Opening in browser - use scan after the page loads', 'info');
+    } catch {
+      showToast('Opening in browser instead', 'info');
+    } finally {
+      setExtracting(false);
+    }
     setLoadedUrl(url); setBrowserInput(url); setTab('browser');
   }, [pasteUrl, extracting, enqueue, showToast]);
 
