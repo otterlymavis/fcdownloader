@@ -167,6 +167,12 @@ main {
   margin-top: 4px;
   width: 100%;
 }
+#primary .ghost {
+  width: 100%;
+}
+#primary .ghost[hidden] {
+  display: none;
+}
 
 /* ── Empty state ─────────────────────────────────────────────────────── */
 
@@ -349,6 +355,9 @@ button, .primary, .ghost {
   color: var(--ink-2);
   border: 1px solid var(--border);
   flex-shrink: 0;
+}
+#more-list .audio-btn {
+  color: var(--ink);
 }
 #more-list button:hover {
   background: var(--surface-2);

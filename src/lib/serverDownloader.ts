@@ -40,7 +40,7 @@ export async function downloadViaServer(
   // a /ytdl-stream?page_url=... URL. Download it directly using
   // the streaming download path — do NOT re-route through /download, which
   // would discard this URL and re-extract (double download, wrong path).
-  if (media.url.includes('/ytdl-stream?')) {
+  if (!media.audioOnly && media.url.includes('/ytdl-stream?')) {
     return _downloadYtdlStream(media, taskId, opts);
   }
 
@@ -58,6 +58,9 @@ export async function downloadViaServer(
       referer: media.pageUrl && media.pageUrl !== sourceUrl ? media.pageUrl : undefined,
       cookies: cookies || undefined,
       formatId: media.formatId || undefined,
+      audioOnly: media.audioOnly || undefined,
+      subtitles: media.subtitles || undefined,
+      subLangs: media.subLangs || undefined,
     }),
     signal,
   });

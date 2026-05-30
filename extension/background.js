@@ -427,9 +427,10 @@ async function callExtract(pageUrl, referer, cookies, pageHtml, mediaHints) {
   }
 }
 
-function backendDownloadUrl(backend, pageUrl, referer, replayHeaders) {
+function backendDownloadUrl(backend, pageUrl, referer, replayHeaders, options = {}) {
   const p = new URLSearchParams({ url: pageUrl });
   if (referer) p.set("referer", referer);
+  if (options.audioOnly) p.set("audioOnly", "1");
   const encodedHeaders = encodeReplayHeaders(replayHeaders);
   if (encodedHeaders) p.set("headers", encodedHeaders);
   return `${backend}/download?${p.toString()}`;
@@ -673,7 +674,9 @@ async function downloadItem(tabId, item) {
     if (!backend) {
       throw new Error("Backend URL is not configured.");
     }
-    const dlUrl = backendDownloadUrl(backend, pageForBackend, referer, item.headers || null);
+    const dlUrl = backendDownloadUrl(backend, pageForBackend, referer, item.headers || null, {
+      audioOnly: item.audioOnly,
+    });
     const headers = cookieHeaderList(cookies);
     debugLog("[fcdl] → backend for", (pageForBackend || "").slice(0, 100), "cookies?", !!cookies);
     const check = await preflightBackendUrl(dlUrl, headers);
@@ -737,6 +740,11 @@ async function downloadItem(tabId, item) {
       debugWarn("[fcdl] ytdl-stream watcher error:", e?.message || e)
     );
     return dlId;
+  });
+
+  addRoute("audio only", item.audioOnly, async () => {
+    debugLog("[fcdl] → backend audio only");
+    return viaBackend(downloadPageUrl || urlForBackend || item.url);
   });
 
   addRoute("local helper", isYoutubeHdHelperItem && helperCanTry, async () => {

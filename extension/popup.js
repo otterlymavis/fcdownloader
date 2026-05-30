@@ -13,6 +13,7 @@ const primaryEl   = $("primary");
 const primaryTitle= $("primary-title");
 const primaryMeta = $("primary-meta");
 const primaryBtn  = $("primary-download");
+const primaryAudioBtn = $("primary-audio-download");
 const emptyEl     = $("empty");
 const extractBtn  = $("extract-btn");
 const statusEl    = $("status");
@@ -154,6 +155,10 @@ function itemKey(item) {
   return item?.url || "";
 }
 
+function canDownloadAudio(item) {
+  return Boolean(item && item.kind !== "image" && !item.audioOnly);
+}
+
 function isCapturedVideo(item) {
   if (!item || item.kind === "image" || item.kind === "audio" || item.kind === "embed") return false;
   return item.source === "network" ||
@@ -259,6 +264,7 @@ function render(items) {
   currentVisibleItems = items || [];
   if (!items || !items.length) {
     primaryEl.hidden = true;
+    if (primaryAudioBtn) primaryAudioBtn.hidden = true;
     emptyEl.hidden   = false;
     moreEl.hidden    = true;
     if (bulkActions) bulkActions.hidden = true;
@@ -274,6 +280,10 @@ function render(items) {
   primaryBtn.textContent   = "Download";
   primaryBtn.disabled      = false;
   primaryBtn.onclick       = () => downloadItem(first);
+  if (primaryAudioBtn) {
+    primaryAudioBtn.hidden = !canDownloadAudio(first);
+    primaryAudioBtn.onclick = canDownloadAudio(first) ? () => downloadAudioItem(first) : null;
+  }
   primaryEl.hidden = false;
   emptyEl.hidden   = true;
 
@@ -302,6 +312,7 @@ function render(items) {
         <div class="row-title">${escapeHtml(titleOf(item, hostname(item.url)))}${idx === 0 ? ' <span class="best-badge">Best</span>' : ""}</div>
         <div class="row-sub">${escapeHtml(itemMeta(item))}</div>
       </div>
+      ${canDownloadAudio(item) ? '<button class="audio-btn" type="button">Audio</button>' : ""}
       <button type="button">Save</button>
     `;
     const checkbox = li.querySelector('input[type="checkbox"]');
@@ -310,7 +321,9 @@ function render(items) {
       else selectedItemKeys.delete(key);
       updateBulkControls();
     });
-    li.querySelector("button").addEventListener("click", () => downloadItem(item));
+    const audioButton = li.querySelector(".audio-btn");
+    if (audioButton) audioButton.addEventListener("click", () => downloadAudioItem(item));
+    li.querySelector("button:last-child").addEventListener("click", () => downloadItem(item));
     moreList.appendChild(li);
   });
   updateBulkControls();
@@ -562,6 +575,7 @@ function renderGallery(info) {
   primaryTitle.textContent = info.title || `${items.length} items`;
   primaryMeta.textContent  = describeGallery(items);
   primaryBtn.textContent   = `Save all ${items.length}`;
+  if (primaryAudioBtn) primaryAudioBtn.hidden = true;
   primaryBtn.onclick = async () => {
     primaryBtn.disabled = true;
     setStatus(`Downloading 0 of ${items.length}...`);
@@ -645,6 +659,18 @@ async function downloadItem(item) {
     return;
   }
   setStatus("Download started. Check your browser's Downloads.", "success");
+}
+
+async function downloadAudioItem(item) {
+  await downloadItem({
+    ...item,
+    audioOnly: true,
+    kind: "audio",
+    ext: "m4a",
+    label: "Audio only",
+    backendRouted: true,
+    pageUrl: item.pageUrl || currentPageUrl || item.url,
+  });
 }
 
 // ---------------------------------------------------------------------------

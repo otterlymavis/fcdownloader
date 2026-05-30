@@ -21,6 +21,7 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
   const url  = media.url;
   const mime = media.mimeType ?? '';
 
+  if (media.audioOnly) return 'server-download';
   if (media.forceServerDownload) return 'server-download';
   if (media.mediaKind === 'image' || media.mediaKind === 'audio') return 'direct';
   if (/^(image|audio)\//i.test(mime)) return 'direct';

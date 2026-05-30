@@ -289,6 +289,27 @@ export default function App() {
     setTab('library');
   }, [enqueue, selectedFormatId, showToast]);
 
+  const handleDetectedAudioDownload = useCallback(async (item: DetectedMedia) => {
+    setVideosOpen(false);
+    setPreviewItem(null);
+    await enqueue({
+      ...item,
+      id: `${item.id}_audio_${Date.now()}`,
+      url: item.sourcePageUrl || item.pageUrl || item.url,
+      mediaKind: 'audio',
+      mediaType: 'direct',
+      mimeType: 'audio/mp4',
+      label: 'Audio only',
+      audioOnly: true,
+      forceServerDownload: true,
+      sourcePageUrl: item.sourcePageUrl || item.pageUrl || item.url,
+      formatId: undefined,
+    });
+    setSelectedFormatId(null);
+    showToast('Audio download started', 'success');
+    setTab('library');
+  }, [enqueue, showToast]);
+
   // ── Export / Gallery ──────────────────────────────────────
   const handleExport = useCallback(async (task: DownloadTask) => {
     if (!task.localPlaylistPath) return;
@@ -1012,6 +1033,16 @@ export default function App() {
                     Download
                   </Text>
                 </Pressable>
+                {getMediaKind(previewItem) !== 'image' && (
+                  <Pressable
+                    android_ripple={RIPPLE}
+                    style={[s.secondaryBtn, { borderColor: t.sep, marginTop: S.sm }]}
+                    onPress={() => handleDetectedAudioDownload(previewItem)}>
+                    <Text style={[s.secondaryBtnLabel, { color: t.ink, fontSize: fs(15) }]}>
+                      Download Audio
+                    </Text>
+                  </Pressable>
+                )}
               </ScrollView>
             </>
           ) : (
@@ -1149,6 +1180,14 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   primaryBtnLabel: { fontWeight: '600' },
+  secondaryBtn: {
+    height: 48,
+    borderRadius: R.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  secondaryBtnLabel: { fontWeight: '600' },
   browseLink:      { alignItems: 'center', paddingVertical: S.xs },
   browseLinkLabel: { fontWeight: '400' },
   browseHint:      { alignSelf: 'center', textAlign: 'center', marginTop: 2, fontWeight: '400', opacity: 0.85 },

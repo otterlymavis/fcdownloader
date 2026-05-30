@@ -71,6 +71,9 @@ export interface DetectedMedia {
   formatId?: string;
   availableFormats?: FormatOption[];
   forceServerDownload?: boolean;
+  audioOnly?: boolean;
+  subtitles?: boolean;
+  subLangs?: string;
   /** Exact HTTP headers to replay for all download requests (set by extractors). When present, downloaders must use these verbatim instead of building their own. */
   httpHeaders?: Record<string, string>;
 }
