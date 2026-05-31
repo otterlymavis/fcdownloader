@@ -24,12 +24,16 @@ name: Build Android APK
 
 on:
   push:
+    tags: ["v*.*.*"]
     branches: [master, backend-version, plus-version]
     paths-ignore:
       - '**.md'
       - 'server/**'
       - '.gitignore'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -171,3 +175,12 @@ jobs:
           path: android/app/build/outputs/apk/release/fcdownloader-v${{ steps.apkinfo.outputs.version }}-${{ steps.apkinfo.outputs.short_sha }}.apk
           retention-days: 30
           if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "FCDownloader $tag" --notes "FCDownloader release bundle." || true
+          gh release upload "$tag" android/app/build/outputs/apk/release/fcdownloader-v${{ steps.apkinfo.outputs.version }}-${{ steps.apkinfo.outputs.short_sha }}.apk --clobber
