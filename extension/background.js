@@ -346,6 +346,9 @@ function isLikelyMedia(url) {
 
 async function cookieHeaderFor(url) {
   try {
+    const { allowCookies } = await getSettings();
+    if (!allowCookies) return "";
+    
     if (/(?:youtube\.com|youtu\.be|googlevideo\.com)/i.test(url || "")) {
       return youtubeCookieHeader();
     }
@@ -382,10 +385,11 @@ async function youtubeCookieHeader() {
 // ── Settings ──────────────────────────────────────────────────────────────
 
 async function getSettings() {
-  const stored = await chrome.storage.sync.get({ backend: "", muxRemote: true });
+  const stored = await chrome.storage.sync.get({ backend: "", muxRemote: true, allowCookies: false });
   return {
     backend: (stored.backend || DEFAULT_BACKEND).trim().replace(/\/+$/, ""),
     muxRemote: stored.muxRemote !== false,
+    allowCookies: stored.allowCookies === true,
   };
 }
 
