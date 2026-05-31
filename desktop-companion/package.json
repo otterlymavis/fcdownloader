@@ -4,6 +4,10 @@
   "description": "FCDownloader desktop companion for local YouTube HD downloads.",
   "author": "FCDownloader",
   "main": "src/main.cjs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/otterlymavis/fcdownloader.git"
+  },
   "private": true,
   "scripts": {
     "start": "electron .",
