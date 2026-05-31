@@ -91,17 +91,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG exists — uploading asset"
-            gh release upload "$TAG" "${{ steps.pack.outputs.zip }}" --clobber
-          else
-            echo "Creating release $TAG"
-            gh release create "$TAG" \
-              --title "FCDownloader extension $TAG" \
-              --notes "Browser extension build for $TAG.
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
+            --title "FCDownloader extension $TAG" \
+            --notes "Browser extension build for $TAG.
 
           Install: download the .zip, unpack, and load as 'unpacked extension' in
           chrome://extensions (developer mode). Backend URL is baked in — no
-          manual configuration needed on first run." \
-              "${{ steps.pack.outputs.zip }}"
-          fi
+          manual configuration needed on first run." || true
+          
+          echo "Uploading $TAG asset..."
+          gh release upload "$TAG" "${{ steps.pack.outputs.zip }}" --clobber

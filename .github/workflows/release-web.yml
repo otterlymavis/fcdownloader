@@ -58,5 +58,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "FCDownloader $tag" --notes "FCDownloader release bundle."
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "FCDownloader $tag" --notes "FCDownloader release bundle." || true
           gh release upload "$tag" fcdownloader-web.zip --clobber

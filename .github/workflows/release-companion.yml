@@ -20,8 +20,6 @@ jobs:
 
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      CSC_LINK: ${{ secrets.COMPANION_CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.COMPANION_CSC_KEY_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -50,7 +48,17 @@ jobs:
 
       - name: Build installer
         working-directory: desktop-companion
-        run: npm run dist
+        env:
+          CSC_LINK: ${{ secrets.COMPANION_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.COMPANION_CSC_KEY_PASSWORD }}
+        run: |
+          # If CSC_LINK is empty, unset it to avoid electron-builder failing with "not a file"
+          if [ -z "$CSC_LINK" ]; then
+            unset CSC_LINK
+            unset CSC_KEY_PASSWORD
+          fi
+          npm run dist
+        shell: bash
 
       - name: Build NoBrowser Go companion
         if: runner.os == 'Windows'
@@ -93,7 +101,7 @@ jobs:
         shell: bash
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "FCDownloader $tag" --notes "FCDownloader release bundle."
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "FCDownloader $tag" --notes "FCDownloader release bundle." || true
           find desktop-companion/dist -maxdepth 1 \( -name '*.exe' -o -name '*.dmg' -o -name '*.blockmap' -o -name 'latest*.yml' \) -print0 \
             | xargs -0 -I{} gh release upload "$tag" "{}" --clobber
           if [ -d desktop-companion/dist-nobrowser-go-ver ]; then
