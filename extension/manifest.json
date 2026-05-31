@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "FCDownloader",
+  "name": "__MSG_extensionName__",
   "version": "1.5.11",
-  "description": "Save media you own, control, or have permission to access from supported websites.",
+  "description": "__MSG_extensionDescription__",
+  "default_locale": "en",
   "permissions": [
     "downloads",
     "notifications",
