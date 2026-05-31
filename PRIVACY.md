@@ -16,9 +16,9 @@ FCDownloader helps you save media that you own, control, or have permission to a
 
 Depending on which FCDownloader surface you use, the app may process:
 
-- Page URLs that you paste, share, open, or ask the extension to inspect.
-- Media URLs, manifests, thumbnails, titles, durations, and format labels discovered on a page.
-- Browser cookies or session headers for the current site when authenticated access is needed. This can include HttpOnly cookies read by the browser extension or cookies read from the in-app WebView.
+- **Web history (Active Tab URL):** Page URLs that you paste, share, open, or ask the extension to inspect. The extension reads the URL of the active tab to detect media.
+- **Website content & User activity (Network Monitoring):** The extension scans the page DOM (content) to discover media URLs, thumbnails, titles, and formats. It also passively observes network traffic in the background to detect media manifests (like HLS/DASH) that are not visible in the DOM.
+- **Authentication information (Cookies):** Browser cookies or session headers for the current site when authenticated access is needed. This can include HttpOnly cookies read by the browser extension or cookies read from the in-app WebView.
 - Download state stored locally on your device, such as task status, filenames, local file paths, bookmarks, backend URL settings, and extension preferences.
 - Basic technical request metadata handled by the backend or hosting provider, such as IP address, timestamp, request path, response status, and user agent.
 
