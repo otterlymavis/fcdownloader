@@ -264,6 +264,30 @@ def _strategy_platform_extractors(
                 return _result(name, True, media=info)
             return _result(name, False, reason="Naver Blog extractor found no media")
 
+        if any(h in page_url for h in ("xiaohongshu.com", "xhslink.com", "xhscdn.com")):
+            info = extractors.extract_xiaohongshu(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            return _result(name, False, reason="Xiaohongshu extractor found no media")
+
+        if any(h in page_url for h in ("bilibili.com", "b23.tv", "bilibili.tv")):
+            info = extractors.extract_bilibili(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            return _result(name, False, reason="Bilibili extractor found no media")
+
+        if any(h in page_url for h in ("tiktok.com", "tiktokv.com", "douyin.com", "iesdouyin.com")):
+            info = extractors.extract_tiktok(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            return _result(name, False, reason="TikTok extractor found no media")
+
+        if any(h in page_url for h in ("reddit.com", "redd.it")):
+            info = extractors.extract_reddit(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            return _result(name, False, reason="Reddit extractor found no media")
+
         info = extractors.extract_curated_site(page_url, cookies)
         if info:
             return _result(name, True, media=info)

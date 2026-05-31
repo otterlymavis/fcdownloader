@@ -167,8 +167,41 @@ function isLikelyNonContentMediaUrl(url: string): boolean {
 // ── TikTok ────────────────────────────────────────────────────────
 async function extractTikTok(pageUrl: string): Promise<DetectedMedia[]> {
   try {
-    const html = await fetchHtml(pageUrl, MOBILE_UA);
+    let targetUrl = pageUrl;
+    if (targetUrl.includes('vm.tiktok.com') || targetUrl.includes('vt.tiktok.com')) {
+      const res = await fetch(targetUrl, { redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
+      targetUrl = res.url;
+    }
+    
     const results: DetectedMedia[] = [];
+
+    // Attempt direct API resolution if we can parse the ID
+    const idMatch = targetUrl.match(/(?:video|photo|v|item)\/(\d+)/);
+    if (idMatch) {
+      try {
+        const videoId = idMatch[1];
+        const res = await fetch(`https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id=${videoId}`, {
+          headers: { 'User-Agent': MOBILE_UA }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const aweme = data.aweme_list?.[0];
+          if (aweme?.video?.play_addr?.url_list?.length > 0) {
+            results.push(makeItem(aweme.video.play_addr.url_list[0], pageUrl, 'TikTok Video', 'social-extractor', 0.95));
+          } else if (aweme?.image_post_info?.images) {
+            aweme.image_post_info.images.forEach((img: any) => {
+              const url = img?.display_image?.url_list?.[0];
+              if (url) results.push(makeItem(url, pageUrl, 'TikTok Photo', 'social-extractor', 0.95));
+            });
+          }
+          if (results.length > 0) return results;
+        }
+      } catch (e) {
+        debugWarn('[extractTikTok] API fallback failed:', String(e).slice(0, 100));
+      }
+    }
+
+    const html = await fetchHtml(targetUrl, MOBILE_UA);
 
     // TikTok embeds rehydration data in a script tag
     const scriptMatch = html.match(
@@ -197,10 +230,38 @@ async function extractTikTok(pageUrl: string): Promise<DetectedMedia[]> {
   } catch { return []; }
 }
 
+// ── Reddit ────────────────────────────────────────────────────────
+async function extractReddit(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    let targetUrl = pageUrl;
+    if (targetUrl.includes('/s/')) {
+      const res = await fetch(targetUrl, { redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
+      targetUrl = res.url;
+    }
+    
+    const jsonUrl = targetUrl.split('?')[0].replace(/\/$/, '') + '/.json';
+    const res = await fetch(jsonUrl, { headers: { 'User-Agent': DESKTOP_UA } });
+    if (!res.ok) return [];
+    
+    const data = await res.json();
+    const post = data[0]?.data?.children?.[0]?.data;
+    const results: DetectedMedia[] = [];
+    
+    if (post?.secure_media?.reddit_video?.fallback_url) {
+       results.push(makeItem(post.secure_media.reddit_video.fallback_url, pageUrl, 'Reddit Video', 'social-extractor', 0.9));
+    } else if (post?.url && /\.(jpe?g|png|gif)$/i.test(post.url)) {
+       results.push(makeItem(post.url, pageUrl, 'Reddit Image', 'social-extractor', 0.9));
+    }
+    
+    return results;
+  } catch { return []; }
+}
+
 // ── Twitter / X ───────────────────────────────────────────────────
 async function extractTwitter(pageUrl: string): Promise<DetectedMedia[]> {
   try {
-    const html = await fetchHtml(pageUrl);
+    let targetUrl = pageUrl;
+    const html = await fetchHtml(targetUrl);
     const results: DetectedMedia[] = [];
 
     const scriptMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
@@ -476,8 +537,29 @@ async function extractWeibo(pageUrl: string): Promise<DetectedMedia[]> {
   }
 
   try {
-    const html = await fetchHtml(pageUrl, DESKTOP_UA);
+    let targetUrl = pageUrl;
+    if (targetUrl.includes('mapp.api.weibo.cn')) {
+      const res = await fetch(targetUrl, { redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
+      targetUrl = res.url;
+    }
+    const html = await fetchHtml(targetUrl, MOBILE_UA);
     const results: DetectedMedia[] = [];
+
+    // Extract JSON data embedded in mobile page
+    const renderDataMatch = html.match(/window\.\$render_data\s*=\s*(\[[\s\S]+?\])\[0\]/);
+    if (renderDataMatch) {
+      try {
+        const data = JSON.parse(renderDataMatch[1])[0];
+        const pics = data?.status?.pics || data?.pics;
+        if (Array.isArray(pics)) {
+          pics.forEach((pic: any) => {
+            const url = pic?.large?.url || pic?.url;
+            if (url) pushUnique(results, makeItem(url, pageUrl, 'Weibo Image', 'social-extractor', 0.85));
+          });
+        }
+      } catch {}
+    }
+
     extractUrls(
       html,
       /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:weibocdn\.com|sinaimg\.cn)[^"'\\<>\s]*\.(?:mp4|m3u8|mov|jpe?g|png|webp|gif|heic)[^"'\\<>\s]*)/g,
@@ -499,14 +581,54 @@ async function extractXiaohongshu(pageUrl: string): Promise<DetectedMedia[]> {
   }
 
   try {
-    const html = await fetchHtml(pageUrl, MOBILE_UA);
+    let targetUrl = pageUrl;
+    if (targetUrl.includes('xhslink.com')) {
+      const res = await fetch(targetUrl, { redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
+      targetUrl = res.url;
+    }
+    const html = await fetchHtml(targetUrl, MOBILE_UA);
     const results: DetectedMedia[] = [];
-    extractUrls(
-      html,
-      /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:xhscdn\.com|xhslink\.com)[^"'\\<>\s]*\.(?:mp4|m3u8|mov|jpe?g|png|webp|gif|heic)[^"'\\<>\s]*)/g,
-    ).forEach(u => {
-      pushUnique(results, makeItem(u, pageUrl, 'Xiaohongshu', 'social-extractor', 0.70));
-    });
+    
+    // Parse window.__INITIAL_STATE__
+    const stateMatch = html.match(/window\.__INITIAL_STATE__=({.+?})<\/script>/);
+    if (stateMatch) {
+      try {
+        const state = JSON.parse(stateMatch[1].replace(/undefined/g, 'null'));
+        const noteDetailMap = state?.note?.noteDetailMap || {};
+        for (const key of Object.keys(noteDetailMap)) {
+          const note = noteDetailMap[key]?.note;
+          if (!note) continue;
+          
+          if (Array.isArray(note.imageList)) {
+            note.imageList.forEach((img: any) => {
+              const url = img?.urlDefault || img?.url;
+              if (url && url.startsWith('http')) {
+                pushUnique(results, makeItem(url, pageUrl, 'Xiaohongshu Image', 'social-extractor', 0.85));
+              }
+            });
+          }
+          
+          const videoMasterUrl = note.video?.media?.stream?.h264?.[0]?.masterUrl;
+          if (videoMasterUrl && videoMasterUrl.startsWith('http')) {
+             pushUnique(results, makeItem(videoMasterUrl, pageUrl, 'Xiaohongshu Video', 'social-extractor', 0.90));
+          }
+        }
+      } catch {}
+    }
+
+    if (results.length === 0) {
+      // Fallback regex if __INITIAL_STATE__ parsing fails
+      extractUrls(
+        html,
+        /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:xhscdn\.com|xhslink\.com)[^"'\\<>\s]*)/g,
+      ).forEach(u => {
+        // filter out js/css/html
+        if (!/\.(?:js|css|html?|json)(?:[?#]|$)/i.test(u) && !u.includes('fe-static') && !u.includes('fe-video')) {
+          pushUnique(results, makeItem(u, pageUrl, 'Xiaohongshu', 'social-extractor', 0.60));
+        }
+      });
+    }
+
     return results;
   } catch { return []; }
 }
@@ -700,7 +822,7 @@ async function extractOgVideo(pageUrl: string): Promise<DetectedMedia[]> {
 
 // ── Platform registry ─────────────────────────────────────────────
 const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[]> }> = [
-  { re: /tiktok\.com\/@[^/]+\/video\/\d+|tiktok\.com\/t\/[A-Za-z0-9]+/,          fn: extractTikTok      },
+  { re: /tiktok\.com\/@[^/]+\/(?:video|photo|item)\/\d+|tiktok\.com\/(?:t|v)\/[A-Za-z0-9]+|vm\.tiktok\.com\/[A-Za-z0-9]+/, fn: extractTikTok },
   { re: /(?:twitter|x)\.com\/[^/]+\/status\/\d+/,                                  fn: extractTwitter     },
   { re: /instagram\.com\/(?:(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+|share\/(?:p|reel)\/[A-Za-z0-9_-]+)/, fn: extractInstagram   },
   { re: /threads\.net\/@[^/]+\/post\/[A-Za-z0-9_-]+/,                              fn: extractInstagram   },
@@ -708,9 +830,10 @@ const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[
   { re: /(?:youtube\.com\/(?:watch|shorts)|youtu\.be\/)[?/]?[A-Za-z0-9_-]{11}/,   fn: extractYouTube     },
   { re: /facebook\.com\/(?:watch|reel|video)|fb\.watch/,                            fn: extractFacebook    },
   { re: /pinterest\.(?:com|[a-z]{2,3})\/pin\/\d+/,                                 fn: extractPinterest   },
+  { re: /reddit\.com\/(?:r\/[^/]+\/s\/[A-Za-z0-9]+|r\/[^/]+\/comments\/[A-Za-z0-9]+)/, fn: extractReddit  },
   { re: /tver\.jp\/episodes\/ep[A-Za-z0-9]+/,                                       fn: extractTVer        },
   { re: /(?:bilibili\.com\/video\/[ABab][Vv][A-Za-z0-9]+|m\.bilibili\.com\/video\/[ABab][Vv][A-Za-z0-9]+|b23\.tv\/[A-Za-z0-9]+|bilibili\.tv\/(?:[a-z]{2}\/)?video\/\d+)/, fn: extractBilibili    },
-  { re: /(?:weibo\.com\/(?:tv\/show\/|u\/\d+|(?:\d+|0)\/[A-Za-z0-9]+)|m\.weibo\.cn\/(?:status|detail)\/[A-Za-z0-9]+|video\.weibo\.com\/show\?)/, fn: extractWeibo },
+  { re: /(?:weibo\.com\/(?:tv\/show\/|u\/\d+|(?:\d+|0)\/[A-Za-z0-9]+)|m\.weibo\.cn\/(?:status|detail)\/[A-Za-z0-9]+|video\.weibo\.com\/show\?|mapp\.api\.weibo\.cn\/)/, fn: extractWeibo },
   { re: /(?:xiaohongshu\.com\/(?:explore|discovery\/item)\/[\da-f]+|xhslink\.com\/[A-Za-z0-9/?=&._-]+)/i, fn: extractXiaohongshu },
   // ── Japanese sites ──────────────────────────────────────────────────────────
   { re: /(?:nicovideo\.jp\/watch\/|nico\.ms\/)[a-zA-Z0-9]+/,                       fn: extractNicoNico    },

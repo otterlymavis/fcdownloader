@@ -60,11 +60,11 @@ _REGISTRY: list[ExtractorCapabilities] = [
         max_duration_hint=7200,
     ),
     ExtractorCapabilities(
-        hosts=("bilibili.com", "bilivideo.com", "biliapi.com"),
-        hls_common=True,
-        dash_common=True,
+        hosts=("bilibili.com", "b23.tv", "bilibili.tv"),
+        requires_auth_on_datacenter=True,
         requires_referer=True,
-        max_duration_hint=14400,
+        dash_common=True,
+        has_platform_extractor=True,
     ),
     ExtractorCapabilities(
         hosts=("weibo.com", "weibo.cn", "video.weibo.com", "weibocdn.com", "sinaimg.cn"),
@@ -82,6 +82,7 @@ _REGISTRY: list[ExtractorCapabilities] = [
     ExtractorCapabilities(
         hosts=("xiaohongshu.com", "xhslink.com", "xhscdn.com"),
         requires_referer=True,
+        has_platform_extractor=True,
     ),
     ExtractorCapabilities(
         hosts=("nicovideo.jp", "nico.ms", "niconico.com", "nicochannel.jp"),
@@ -199,13 +200,17 @@ _REGISTRY: list[ExtractorCapabilities] = [
         requires_referer=True,
     ),
     ExtractorCapabilities(
-        hosts=("reddit.com", "redd.it", "redditmedia.com"),
+        hosts=("reddit.com", "redd.it"),
+        hls_common=True,
+        has_platform_extractor=True,
     ),
     ExtractorCapabilities(
         hosts=("twitter.com", "x.com", "t.co"),
     ),
     ExtractorCapabilities(
-        hosts=("tiktok.com", "vm.tiktok.com"),
+        hosts=("tiktok.com", "tiktokv.com", "douyin.com", "iesdouyin.com"),
+        requires_auth_on_datacenter=True,
+        has_platform_extractor=True,
     ),
     ExtractorCapabilities(
         hosts=("facebook.com", "fb.com", "fb.watch", "fbcdn.net"),

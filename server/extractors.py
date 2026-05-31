@@ -1154,11 +1154,21 @@ def _download_weibo_json(
     page_url = normalize_url(page_url)
     if query:
         url = f"{url}?{urllib.parse.urlencode(query)}"
+        
+    headers = _weibo_headers(page_url, cookies)
+    if "m.weibo.cn" in url:
+        headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+        headers["Referer"] = page_url if "m.weibo.cn" in page_url else "https://m.weibo.cn/"
+        headers["Origin"] = "https://m.weibo.cn"
+    else:
+        headers["Referer"] = "https://weibo.com/"
+        headers["Origin"] = "https://weibo.com"
+
     try:
         req = urllib.request.Request(
             url,
             data=data,
-            headers=safe_headers(_weibo_headers(page_url, cookies)),
+            headers=safe_headers(headers),
             method="POST" if data is not None else "GET",
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -1353,6 +1363,44 @@ def _weibo_parse_post(
     add_video_from_media_info(top_media_info)
 
     if not entries:
+        pics = meta.get("pics")
+        if isinstance(pics, list) and pics:
+            for idx, pic in enumerate(pics):
+                if not isinstance(pic, dict):
+                    continue
+                pic_url = _json_get_path(pic, "large", "url") or pic.get("url")
+                if not pic_url:
+                    continue
+                entries.append({
+                    "id": f"{meta.get('id') or meta.get('mid')}_{idx+1}",
+                    "title": meta.get("text_raw") or f"Weibo Image #{idx+1}",
+                    "url": pic_url,
+                    "ext": guess_ext_from_url(pic_url) or "jpg",
+                    "protocol": "https",
+                    "http_headers": {
+                        "Referer": "https://weibo.com/",
+                        "User-Agent": _WEIBO_DESKTOP_UA,
+                    },
+                    "thumbnail": pic.get("url"),
+                    "extractor": "weibo",
+                })
+        elif isinstance(meta.get("original_pic"), str):
+            pic_url = meta["original_pic"]
+            entries.append({
+                "id": str(meta.get('id') or meta.get('mid') or cache_key(pic_url)),
+                "title": meta.get("text_raw") or "Weibo Image",
+                "url": pic_url,
+                "ext": guess_ext_from_url(pic_url) or "jpg",
+                "protocol": "https",
+                "http_headers": {
+                    "Referer": "https://weibo.com/",
+                    "User-Agent": _WEIBO_DESKTOP_UA,
+                },
+                "thumbnail": meta.get("bmiddle_pic") or pic_url,
+                "extractor": "weibo",
+            })
+
+    if not entries:
         return None
 
     title = (
@@ -1361,6 +1409,11 @@ def _weibo_parse_post(
         or _json_get_path(meta, "page_info", "media_info", "name")
         or meta.get("text_raw")
     )
+    if isinstance(title, str):
+        import html
+        title = html.unescape(title)
+        title = re.sub(r"<[^>]+>", "", title).strip()
+
     thumb = thumbnail_url()
     post_id = str(
         meta.get("id") or meta.get("id_str") or meta.get("mid") or cache_key(page_url)
@@ -1387,6 +1440,15 @@ def _weibo_parse_post(
 
 
 def extract_weibo(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    import urllib.request
+    if "mapp.api.weibo.cn" in page_url:
+        try:
+            req = urllib.request.Request(page_url, headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                page_url = resp.url
+        except Exception:
+            pass
+
     video_id = _weibo_id_from_url(page_url)
     if not video_id:
         return None
@@ -1414,7 +1476,7 @@ def extract_weibo(page_url: str, cookies: str | None) -> dict[str, Any] | None:
         cookies,
         query={"id": video_id},
     )
-    if not meta:
+    if not meta or meta.get("ok") == -100 or ("id" not in meta and "data" not in meta):
         meta = _download_weibo_json(
             "https://m.weibo.cn/statuses/show",
             page_url,
@@ -1429,3 +1491,10 @@ def extract_weibo(page_url: str, cookies: str | None) -> dict[str, Any] | None:
         count = len(parsed.get("entries") or [parsed])
         print(f"[weibo] extracted {count} media item(s) via ajax/statuses/show")
     return parsed
+                "protocol": "https",
+                "http_headers": {},
+            }
+    except Exception:
+        pass
+
+    return None
