@@ -93,7 +93,7 @@ const REGISTRY: SiteEntry[] = [
   },
   // ── Xiaohongshu ───────────────────────────────────────────────────────────
   {
-    pattern: /(?:xiaohongshu\.com|xhslink\.com)/i,
+    pattern: /(?:xiaohongshu\.com|rednote\.com|xhslink\.com)/i,
     caps: {
       preferredStrategies: ['server-download', 'direct'],
       requiresAuth: true,

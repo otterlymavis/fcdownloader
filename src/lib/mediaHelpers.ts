@@ -14,7 +14,7 @@ const SOURCE_NAMES: Array<[RegExp, string]> = [
   [/pinimg\.com|pinterest\.com/i, 'Pinterest'],
   [/bilivideo\.com|bilibili\.com|bilibili\.tv|b23\.tv/i, 'Bilibili'],
   [/weibo\.com|weibo\.cn|weibocdn\.com|sinaimg\.cn/i, 'Weibo'],
-  [/xiaohongshu\.com|xhslink\.com|xhscdn\.com/i, 'Xiaohongshu'],
+  [/xiaohongshu\.com|rednote\.com|xhslink\.com|xhscdn\.com/i, 'Xiaohongshu'],
 ];
 
 const MIME_BY_EXT: Record<string, string> = {

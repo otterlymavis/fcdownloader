@@ -269,7 +269,7 @@ def _strategy_platform_extractors(
                 return _result(name, True, media=info)
             return _result(name, False, reason="Naver Blog extractor found no media")
 
-        if any(h in page_url for h in ("xiaohongshu.com", "xhslink.com", "xhscdn.com")):
+        if any(h in page_url for h in ("xiaohongshu.com", "rednote.com", "xhslink.com", "xhscdn.com")):
             info = extractors.extract_xiaohongshu(page_url, cookies)
             if info:
                 return _result(name, True, media=info)
@@ -725,7 +725,7 @@ def run_extraction(
         http_headers["Referer"]    = "https://weibo.com/"
         http_headers["Origin"]     = "https://weibo.com"
         http_headers["User-Agent"] = _DESKTOP_UA
-    elif any(h in page_url for h in ("xiaohongshu.com", "xhslink.com", "xhscdn.com")):
+    elif any(h in page_url for h in ("xiaohongshu.com", "rednote.com", "xhslink.com", "xhscdn.com")):
         http_headers["Referer"]    = "https://www.xiaohongshu.com/"
         http_headers["Origin"]     = "https://www.xiaohongshu.com"
         http_headers["User-Agent"] = MOBILE_UA
@@ -870,7 +870,7 @@ def run_extraction(
         # - Reddit: yt-dlp doesn't follow /s/<id> share redirects to the canonical post
         platform_first = any(h in page_url for h in (
             "weibo.com", "weibo.cn", "video.weibo.com",
-            "xiaohongshu.com", "xhslink.com", "xhscdn.com",
+            "xiaohongshu.com", "rednote.com", "xhslink.com", "xhscdn.com",
             "tiktok.com", "vm.tiktok.com",
             "reddit.com", "redd.it",
         ))

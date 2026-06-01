@@ -415,7 +415,7 @@ _HEADERED_DIRECT_HOSTS = (
     "bilibili.com", "bilivideo.com",
     "instagram.com", "cdninstagram.com", "fbcdn.net", "threadscdn.com",
     "weibo.com", "weibo.cn", "sinaimg.cn", "weibocdn.com",
-    "xiaohongshu.com", "xhscdn.com",
+    "xiaohongshu.com", "rednote.com", "xhscdn.com",
     "naver.com", "naver.net", "pstatic.net",
     "mdpr.jp", "modelpress.jp",
     "ameblo.jp", "ameba.jp", "stat.ameba.jp",
@@ -568,7 +568,7 @@ def _download_headers(
     elif page_url and any(h in page_url for h in ("weibo.com", "weibo.cn", "weibocdn.com")):
         headers["Referer"] = "https://weibo.com/"
         headers["Origin"]  = "https://weibo.com"
-    elif page_url and any(h in page_url for h in ("xiaohongshu.com", "xhscdn.com")):
+    elif page_url and any(h in page_url for h in ("xiaohongshu.com", "rednote.com", "xhscdn.com")):
         headers["Referer"] = "https://www.xiaohongshu.com/"
         headers["Origin"]  = "https://www.xiaohongshu.com"
     elif page_url and "blog.naver.com" in page_url:
@@ -1756,7 +1756,7 @@ def _default_proxy_headers(target_url: str, referer: str | None) -> dict[str, st
     elif "weibocdn" in host or "weibo" in host:
         h["Referer"] = "https://weibo.com/"
         h["Origin"]  = "https://weibo.com"
-    elif "xhscdn" in host or "xiaohongshu" in host:
+    elif "xhscdn" in host or "xiaohongshu" in host or "rednote" in host:
         h["Referer"] = "https://www.xiaohongshu.com/"
         h["Origin"]  = "https://www.xiaohongshu.com"
     elif "postfiles.pstatic" in host:

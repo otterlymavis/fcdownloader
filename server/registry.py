@@ -80,7 +80,7 @@ _REGISTRY: list[ExtractorCapabilities] = [
         has_platform_extractor=True,
     ),
     ExtractorCapabilities(
-        hosts=("xiaohongshu.com", "xhslink.com", "xhscdn.com"),
+        hosts=("xiaohongshu.com", "rednote.com", "xhslink.com", "xhscdn.com"),
         requires_referer=True,
         has_platform_extractor=True,
     ),
