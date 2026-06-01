@@ -36,6 +36,15 @@ const EXPECTED_HELPER_VERSION = "0.3.0-go";
 const DIRECT_MEDIA_RE = /\.(?:mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif)(?:[?#]|$)|googlevideo\.com\/videoplayback|(?:video|audio)\.twimg\.com|cdninstagram\.com|fbcdn\.net|v\.redd\.it|vod\.pstatic\.net/i;
 const YOUTUBE_RE = /(?:youtube\.com\/(?:watch|shorts|embed)|youtu\.be\/|youtube-nocookie\.com\/embed)/i;
 const WEB_PROXY_REQUIRED_RE = /(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|weibocdn\.com|xhscdn\.com|bilivideo\.com|biliimg\.com|hdslb\.com|pstatic\.net|pximg\.net|yimg\.jp|kakaocdn\.net|daumcdn\.net|img-mdpr\.freetls\.fastly\.net)/i;
+
+function isXhsPageUrl(url) {
+  try {
+    const host = new URL(url).hostname;
+    return /(?:^|\.)(?:xiaohongshu|rednote)\.com$/i.test(host) || /(?:^|\.)xhslink\.com$/i.test(host);
+  } catch {
+    return false;
+  }
+}
 const DEBUG_LOGS = false;
 
 let sharedReferer = "";
@@ -142,7 +151,7 @@ function buildBookmarklet() {
     `var v=null;` +
     `var host=location.hostname||"";` +
     `var re=/https?:\\/\\/(?:player\\.vimeo\\.com\\/video\\/\\d+|www\\.youtube\\.com\\/embed\\/[\\w-]+|youtube\\.com\\/embed\\/[\\w-]+|player\\.twitch\\.tv\\/[^\\s"']+|(?:www\\.)?dailymotion\\.com\\/embed\\/[\\w-]+|fast\\.wistia\\.net\\/embed\\/[^\\s"']+)/;` +
-    `var pageRe=/(?:^|\\.)(?:instagram\\.com|bilibili\\.com|bilibili\\.tv|b23\\.tv|weibo\\.com|weibo\\.cn|xiaohongshu\\.com|naver\\.com|naver\\.me|pstatic\\.net|mdpr\\.jp|modelpress\\.jp|ameblo\\.jp|ameba\\.jp|natalie\\.mu|oricon\\.co\\.jp|kstyle\\.com|tistory\\.com|daum\\.net|kakao\\.com|livedoor\\.jp|pixiv\\.net|fanbox\\.cc|bunshun\\.jp|dailyshincho\\.jp|news-postseven\\.com|josei7\\.com|gendai\\.media|withonline\\.jp|vivi\\.tv|cancam\\.jp|hpplus\\.jp|fashion-press\\.net|fashionsnap\\.com|wwdjapan\\.com|thetv\\.jp|mantan-web\\.jp|crank-in\\.net|cinematoday\\.jp|eiga\\.com|realsound\\.jp|jprime\\.jp|smart-flash\\.jp|mainichi\\.jp|asahi\\.com|yomiuri\\.co\\.jp|sankei\\.com|47news\\.jp|jiji\\.com|itmedia\\.co\\.jp|impress\\.co\\.jp|ascii\\.jp|gigazine\\.net)$/i;` +
+    `var pageRe=/(?:^|\\.)(?:instagram\\.com|bilibili\\.com|bilibili\\.tv|b23\\.tv|weibo\\.com|weibo\\.cn|xiaohongshu\\.com|rednote\\.com|naver\\.com|naver\\.me|pstatic\\.net|mdpr\\.jp|modelpress\\.jp|ameblo\\.jp|ameba\\.jp|natalie\\.mu|oricon\\.co\\.jp|kstyle\\.com|tistory\\.com|daum\\.net|kakao\\.com|livedoor\\.jp|pixiv\\.net|fanbox\\.cc|bunshun\\.jp|dailyshincho\\.jp|news-postseven\\.com|josei7\\.com|gendai\\.media|withonline\\.jp|vivi\\.tv|cancam\\.jp|hpplus\\.jp|fashion-press\\.net|fashionsnap\\.com|wwdjapan\\.com|thetv\\.jp|mantan-web\\.jp|crank-in\\.net|cinematoday\\.jp|eiga\\.com|realsound\\.jp|jprime\\.jp|smart-flash\\.jp|mainichi\\.jp|asahi\\.com|yomiuri\\.co\\.jp|sankei\\.com|47news\\.jp|jiji\\.com|itmedia\\.co\\.jp|impress\\.co\\.jp|ascii\\.jp|gigazine\\.net)$/i;` +
     `if(pageRe.test(host))v=u;` +
     `function dec(s){return String(s||"").replace(/\\\\u0026/g,"&").replace(/\\\\u003d/g,"=").replace(/\\\\\\//g,"/").replace(/&amp;/g,"&");}` +
     `function hint(u,k){u=dec(u);if(!u||!/^https?:/i.test(u))return;for(var i=0;i<hints.length;i++)if(hints[i].url===u)return;hints.push({url:u,kind:k||(/\\.m3u8(?:[?#]|$)/i.test(u)?"hls":/\\.mpd(?:[?#]|$)/i.test(u)?"dash":"direct"),referer:location.href,title:document.title});}` +
@@ -857,7 +866,11 @@ window.addEventListener("message", (event) => {
   if (typeof data.cookies === "string") sharedCookies = data.cookies;
   if (typeof data.referer === "string" && !sharedReferer) sharedReferer = data.referer;
   if (typeof data.pageHtml === "string") sharedPageHtml = data.pageHtml;
-  if (Array.isArray(data.mediaHints)) sharedMediaHints = data.mediaHints.slice(0, 20);
+  if (Array.isArray(data.mediaHints)) {
+    sharedMediaHints = isXhsPageUrl(sharedReferer || initUrl)
+      ? []
+      : data.mediaHints.slice(0, 20);
+  }
   submitInitialUrl();
 });
 

@@ -286,9 +286,47 @@ function isLikelyThumbnailUrl(url) {
   return false;
 }
 
+function isXhsPageUrl(url) {
+  try {
+    return /(?:^|\.)(?:xiaohongshu|rednote)\.com$/i.test(new URL(url).hostname)
+      || /(?:^|\.)xhslink\.com$/i.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isXhsExtractorItem(item) {
+  return item?.source === "xhs-state" || item?.source === "xhs-page";
+}
+
+function xhsFallbackItem(pageUrl) {
+  return {
+    url: pageUrl,
+    pageUrl,
+    kind: "embed",
+    source: "xhs-page",
+    label: "Xiaohongshu",
+    backendRouted: true,
+  };
+}
+
+function pruneXhsTabState(tabId, pageUrl) {
+  if (tabId == null || !isXhsPageUrl(pageUrl)) return [];
+  const s = ensureTab(tabId, pageUrl);
+  s.items = s.items.filter(isXhsExtractorItem);
+  if (!s.items.length) {
+    const item = xhsFallbackItem(pageUrl);
+    s.items.push({ ...item, capturedAt: Date.now(), priority: itemPriority(item, s.preferCapturedMedia) });
+  }
+  s.updatedAt = Date.now();
+  updateBadge(tabId, s.items.length);
+  return s.items;
+}
+
 function addItem(tabId, pageUrl, item) {
   const s = ensureTab(tabId, pageUrl);
   if (!item || !item.url) return;
+  if (isXhsPageUrl(pageUrl) && item.source === "network") return;
   if (item.kind === "image" && isLikelyThumbnailUrl(item.url)) return;
   auditSourceCandidate(tabId, pageUrl, {
     url: item.url,
@@ -301,6 +339,9 @@ function addItem(tabId, pageUrl, item) {
   });
   if (item.source === "weibo-page" || item.source === "japanese-page" || /(?:^|\.)weibo\.(?:com|cn)\//i.test(item.url)) {
     s.items = s.items.filter((i) => !(i.kind === "image" || i.source === "network" || i.source === "image-tag"));
+  }
+  if (isXhsPageUrl(pageUrl) && isXhsExtractorItem(item)) {
+    s.items = s.items.filter((i) => isXhsExtractorItem(i));
   }
   // De-dupe by URL (strip range / rn so byte-segment requests collapse onto
   // their master URL).
@@ -372,6 +413,7 @@ try {
 
         chrome.tabs.get(details.tabId).then((tab) => {
           if (!tab?.url) return;
+          if (isXhsPageUrl(tab.url)) return;
           const replay = requestHeadersByUrl.get(u)?.headers || {};
           const width = Number(details.responseHeaders?.find((h) => /^x-fcdl-video-width$/i.test(h.name))?.value || 0);
           const height = Number(details.responseHeaders?.find((h) => /^x-fcdl-video-height$/i.test(h.name))?.value || 0);
@@ -1513,7 +1555,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const tabId = msg.tabId ?? sender.tab?.id;
       const tab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : null;
       const s = tabId != null ? tabState.get(tabId) : null;
-      sendResponse({ pageUrl: tab?.url || "", items: s?.items || [], settings: await getSettings() });
+      const pageUrl = tab?.url || "";
+      const items = isXhsPageUrl(pageUrl) ? pruneXhsTabState(tabId, pageUrl) : (s?.items || []);
+      sendResponse({ pageUrl, items, settings: await getSettings() });
       return;
     }
     if (msg.type === "fcdl:helper_status") {

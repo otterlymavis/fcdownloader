@@ -412,7 +412,7 @@ function render(items) {
   // Primary card
   primaryTitle.textContent = titleOf(first, hostname(currentPageUrl));
   primaryMeta.textContent  = itemMeta(first);
-  primaryBtn.textContent   = "Download";
+  primaryBtn.title         = "Download";
   primaryBtn.disabled      = false;
   primaryBtn.onclick       = () => downloadItem(first);
   if (primaryAudioBtn) {
@@ -447,8 +447,8 @@ function render(items) {
         <div class="row-title">${escapeHtml(titleOf(item, hostname(item.url)))}${idx === 0 ? ' <span class="best-badge">Best</span>' : ""}</div>
         <div class="row-sub">${escapeHtml(itemMeta(item))}</div>
       </div>
-      ${canDownloadAudio(item) ? '<button class="audio-btn" type="button">Audio</button>' : ""}
-      <button type="button">Save</button>
+      ${canDownloadAudio(item) ? '<button class="audio-btn" type="button" title="Audio" aria-label="Audio"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/></svg></button>' : ""}
+      <button type="button" title="Save" aria-label="Save"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></button>
     `;
     const checkbox = li.querySelector('input[type="checkbox"]');
     checkbox.addEventListener("change", () => {
@@ -474,8 +474,8 @@ function updateBulkControls() {
   if (!downloadSelectedBtn || !selectAllBtn) return;
   const selectedCount = currentVisibleItems.filter((item) => selectedItemKeys.has(itemKey(item))).length;
   downloadSelectedBtn.disabled = selectedCount === 0;
-  downloadSelectedBtn.textContent = selectedCount <= 1 ? "Download selected" : `Download ${selectedCount} selected`;
-  selectAllBtn.textContent = selectedCount === currentVisibleItems.length ? "Clear" : "Select all";
+  downloadSelectedBtn.title = selectedCount <= 1 ? "Download selected" : `Download ${selectedCount} selected`;
+  selectAllBtn.title = selectedCount === currentVisibleItems.length ? "Clear" : "Select all";
 }
 
 function refreshSelectionUI() {
@@ -545,7 +545,8 @@ function refresh() {
       const text = emptyEl.querySelector(".empty-text");
       if (text) text.textContent = "Backend URL isn't set yet.";
       if (extractBtn) {
-        extractBtn.textContent = "Open settings";
+        extractBtn.title = "Open settings";
+        extractBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
         extractBtn.onclick = (e) => {
           e.preventDefault();
           if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
@@ -711,7 +712,7 @@ function renderGallery(info) {
   lastItemsKey = `gallery:${items.map((item) => item.url || item.videoUrl || "").join("|")}`;
   primaryTitle.textContent = info.title || `${items.length} items`;
   primaryMeta.textContent  = describeGallery(items);
-  primaryBtn.textContent   = `Save all ${items.length}`;
+  primaryBtn.title         = `Save all ${items.length}`;
   if (primaryAudioBtn) primaryAudioBtn.hidden = true;
   primaryBtn.onclick = async () => {
     primaryBtn.disabled = true;
@@ -724,7 +725,7 @@ function renderGallery(info) {
       items,
     }, 120_000);
     primaryBtn.disabled = false;
-    primaryBtn.textContent = `Save all ${items.length}`;
+    primaryBtn.title = `Save all ${items.length}`;
     if (!resp?.ok) {
       setErrorStatus(resp?.error, "Some downloads failed.");
       return;
@@ -757,7 +758,7 @@ function renderGallery(info) {
         <div class="row-title">${escapeHtml(label)} ${idx + 1}</div>
         <div class="row-sub">${escapeHtml([(it.ext || "").toUpperCase() || it.kind, mediaResolution(it)].filter(Boolean).join(" - "))}</div>
       </div>
-      <button type="button">Save</button>
+      <button type="button" title="Save" aria-label="Save"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></button>
     `;
     const checkbox = li.querySelector('input[type="checkbox"]');
     checkbox.addEventListener("change", () => {

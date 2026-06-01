@@ -4,8 +4,10 @@ import { DetectedMedia, MediaType, Provenance } from '../types';
 import { debugLog } from '../lib/releaseLogger';
 import {
   isLikelyThumbnailUrl,
-  isNetworkDownloadCandidate,
   isNonContentMediaUrl,
+  isRuntimeDownloadCandidate,
+  isXhsPageUrl,
+  isXhsMediaCandidate,
   isSegmentMediaUrl,
 } from '../lib/mediaHelpers';
 
@@ -68,13 +70,16 @@ export function useMediaDetection() {
       if (data.event === 'MEDIA_DETECTED') {
         const url = String(data.url ?? '').trim();
         if (!url || isSegmentMediaUrl(url)) return;
+        const pageUrl = (data.pageUrl as string) ?? currentPageUrl.current;
+        const fromXhsPage = isXhsPageUrl(pageUrl);
+        if (fromXhsPage && !isXhsMediaCandidate(url)) return;
         if (isNonContentMediaUrl(url, data.mimeType)) return;
         const mediaKind = data.mediaKind ?? guessKind(url, data.mimeType);
         if (mediaKind === 'image' && isLikelyThumbnailUrl(url)) return;
         const item: DetectedMedia = {
           id: genId(),
           url,
-          pageUrl: (data.pageUrl as string) ?? currentPageUrl.current,
+          pageUrl,
           userAgent: (data.userAgent as string) ?? '',
           timestamp: (data.timestamp as number) ?? Date.now(),
           mimeType: data.mimeType ?? undefined,
@@ -83,6 +88,7 @@ export function useMediaDetection() {
           label: data.label ?? undefined,
           confidence: typeof data.confidence === 'number' ? data.confidence : 0.5,
           provenance: (data.provenance as Provenance) ?? 'perf-observer',
+          sourcePageUrl: fromXhsPage ? pageUrl : undefined,
           // Bilibili and other paired-track streams
           audioTrackUrl: data.audioTrackUrl ?? undefined,
           audioTrackCodecs: data.audioTrackCodecs ?? undefined,
@@ -121,6 +127,8 @@ export function useMediaDetection() {
       if (data.event === 'URL_CAPTURED') {
         const url = String(data.url ?? '').trim();
         if (!url) return;
+        const fromXhsPage = isXhsPageUrl(currentPageUrl.current);
+        if (fromXhsPage && !isXhsMediaCandidate(url)) return;
         if (isNonContentMediaUrl(url)) return;
         setNetworkLog((prev) => {
           if (prev.includes(url)) return prev;
@@ -129,7 +137,7 @@ export function useMediaDetection() {
         // Auto-promote manifests, direct media files, and known media CDN URLs
         const isImageCdn = /(?:cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|pinimg\.com\/(?:originals|736x|1200x|564x)\/|sinaimg\.cn\/|xhscdn\.com\/)/i.test(url);
         if ((isImageCdn || guessKind(url) === 'image') && isLikelyThumbnailUrl(url)) return;
-        if (isNetworkDownloadCandidate(url)) {
+        if (isRuntimeDownloadCandidate(url, currentPageUrl.current)) {
           const mediaType: MediaType = guessType(url);
           setDetected((prev) => {
             if (prev.some((m) => m.url === url)) return prev;
@@ -142,6 +150,7 @@ export function useMediaDetection() {
               mediaKind: guessKind(url),
               confidence: 0.4,
               provenance: 'perf-observer' as const,
+              sourcePageUrl: fromXhsPage ? currentPageUrl.current : undefined,
             }, ...prev];
           });
         }

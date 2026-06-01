@@ -284,6 +284,7 @@ export const INJECTED_SCRIPT = `
       '__DEFAULT_SCOPE__',
       '__NUXT__',
       '__staticRouterHydrationData',
+      '__INITIAL_STATE__',
     ].forEach(function (key) {
       try {
         if (window[key]) scanText(JSON.stringify(window[key]));

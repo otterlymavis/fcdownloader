@@ -43,6 +43,16 @@ const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(\?|#|$)/i;
 const VIDEO_EXT_RE = /\.(m3u8|mpd|mp4|m4v|webm|mov)(\?|#|$)/i;
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|avif|heic)(\?|#|$)/i;
 const IMAGE_CDN_RE = /(?:cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|pinimg\.com\/(?:originals|736x|1200x|564x)\/|sinaimg\.cn\/|xhscdn\.com\/|pstatic\.net\/|imgur\.com\/|i\.redd\.it\/|pbs\.twimg\.com\/media\/)/i;
+const XHS_MEDIA_MARKERS = [
+  'sns-webpic',
+  'sns-img-',
+  'sns-video-',
+  'ci.xiaohongshu.com',
+  'xhscdn.com/spectrum/',
+  'xhscdn.com/media/',
+  '/notes_pre_post/',
+  '/note_pre_post',
+];
 const YT_RANGE_RE = /googlevideo\.com\/videoplayback[^#]*[?&](?:range=|sq=)\d/i;
 const YT_CDN_RE = /googlevideo\.com\/videoplayback/i;
 const TW_VIDEO_RE = /video\.twimg\.com\/(?:ext_tw_video|amplify_video)\/(\d+)\//i;
@@ -66,6 +76,27 @@ export function getSourceName(url: string): string {
   } catch {
     return 'Video';
   }
+}
+
+export function isXhsPageUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return /(?:^|\.)(?:xiaohongshu|rednote)\.com$/i.test(host)
+      || /(?:^|\.)xhslink\.com$/i.test(host);
+  } catch {
+    return false;
+  }
+}
+
+export function isXhsMediaCandidate(url: string): boolean {
+  const lower = String(url || '').replace(/\\\//g, '/').toLowerCase();
+  if (!lower) return false;
+  if (/(?:sns-avatar|\/avatar\/|avatar|profile|favicon|logo|sprite|placeholder|blank|pixel|tracking|beacon)/i.test(lower)) {
+    return false;
+  }
+  if (XHS_MEDIA_MARKERS.some(marker => lower.includes(marker))) return true;
+  return /(?:^|\.)xhscdn\.com\//i.test(lower) &&
+    /\.(?:m3u8|mpd|mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(lower);
 }
 
 export function getMediaKind(
@@ -200,6 +231,11 @@ export function isNetworkDownloadCandidate(url: string): boolean {
     VIMEO_JSON_RE.test(url) ||
     VIDEO_CDN_RE.test(url) ||
     IMAGE_CDN_RE.test(url);
+}
+
+export function isRuntimeDownloadCandidate(url: string, pageUrl?: string): boolean {
+  if (pageUrl && isXhsPageUrl(pageUrl) && !isXhsMediaCandidate(url)) return false;
+  return isNetworkDownloadCandidate(url);
 }
 
 export function isDirectMediaUrl(url: string): boolean {

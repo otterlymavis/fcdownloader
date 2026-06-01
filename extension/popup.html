@@ -7,7 +7,10 @@
 </head>
 <body>
   <header>
-    <div class="brand">FCDownloader</div>
+    <div class="brand">
+      <img src="icons/icon-32.png" alt="" width="18" height="18" style="vertical-align: middle; margin-right: 6px; border-radius: 4px;">
+      FCDownloader
+    </div>
     <button id="settings-btn" type="button" aria-label="Settings" title="Settings">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3"/>
@@ -21,22 +24,31 @@
     <section id="helper-status" class="helper-status" hidden>
       <span class="helper-dot"></span>
       <span id="helper-text">Checking companion...</span>
-      <button id="helper-tools" type="button" hidden>Update Tools</button>
-      <button id="helper-open" type="button">Open</button>
+      <button id="helper-tools" type="button" hidden title="Update Tools" aria-label="Update Tools">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+      </button>
+      <button id="helper-open" type="button" title="Open Companion" aria-label="Open Companion">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+      </button>
     </section>
 
     <!-- Primary card: the single best detection -->
     <section id="primary" hidden>
       <h2 id="primary-title">Media</h2>
       <p id="primary-meta" class="meta"></p>
-      <button id="primary-download" class="primary" type="button">Download</button>
-      <button id="primary-audio-download" class="ghost" type="button" hidden>Audio</button>
+      <div class="primary-actions">
+        <button id="primary-download" class="primary" type="button" title="Download" aria-label="Download">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12v9"/><path d="m8 17 4 4 4-4"/><path d="M20.39 10.2A5 5 0 0 0 11 7.3a5.4 5.4 0 0 0-8 4.7 4 4 0 0 0 4 4h14a3 3 0 0 0 1.39-5.8z"/></svg>
+        </button>
+        <button id="primary-audio-download" class="ghost" type="button" hidden title="Audio" aria-label="Audio">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/></svg>
+        </button>
+      </div>
     </section>
 
     <!-- Empty / fallback state -->
     <section id="empty">
       <p class="empty-text">Always click Find media to get best results!</p>
-      <button id="extract-btn" class="ghost" type="button">Find media</button>
     </section>
 
     <div id="status" hidden>
@@ -50,15 +62,25 @@
     <details id="more" hidden>
       <summary>Show other media</summary>
       <div id="bulk-actions" class="bulk-actions" hidden>
-        <button id="select-all" class="ghost" type="button">Select all</button>
-        <button id="download-selected" class="primary" type="button">Download selected</button>
+        <button id="select-all" class="ghost" type="button" title="Select all" aria-label="Select all">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>
+        </button>
+        <button id="download-selected" class="primary" type="button" title="Download selected" aria-label="Download selected">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+        </button>
       </div>
       <ul id="more-list"></ul>
     </details>
+
+    <button id="extract-btn" class="primary extract-btn-large" type="button" title="Find media" aria-label="Find media">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+    </button>
   </main>
 
   <footer>
-    <a href="https://github.com/otterlymavis/fcdownloader" target="_blank" rel="noopener">Help</a>
+    <a href="https://github.com/otterlymavis/fcdownloader" target="_blank" rel="noopener" title="Help" aria-label="Help">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    </a>
   </footer>
 
   <script src="popup.js"></script>

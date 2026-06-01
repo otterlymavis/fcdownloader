@@ -1,6 +1,6 @@
 # FCDownloader Privacy Policy
 
-Last updated: May 28, 2026
+Last updated: June 1, 2026
 
 FCDownloader helps you save media that you own, control, or have permission to access. This policy covers the FCDownloader mobile app, browser extension, static web page, and optional extractor backend.
 
@@ -8,7 +8,7 @@ FCDownloader helps you save media that you own, control, or have permission to a
 
 - FCDownloader does not include analytics, advertising SDKs, or telemetry.
 - FCDownloader does not sell personal information.
-- Media page URLs and media URLs are processed only to find and download media.
+- Media page URLs, rendered page content snippets, media hints, and media URLs are processed only to find and download media.
 - Cookies are used only when you ask FCDownloader to access media from a signed-in session.
 - If you configure or use a hosted backend, that backend receives the request data needed to perform extraction or proxying.
 
@@ -17,7 +17,7 @@ FCDownloader helps you save media that you own, control, or have permission to a
 Depending on which FCDownloader surface you use, the app may process:
 
 - **Web history (Active Tab URL):** Page URLs that you paste, share, open, or ask the extension to inspect. The extension reads the URL of the active tab to detect media.
-- **Website content & User activity (Network Monitoring):** The extension scans the page DOM (content) to discover media URLs, thumbnails, titles, and formats. It also passively observes network traffic in the background to detect media manifests (like HLS/DASH) that are not visible in the DOM.
+- **Website content & User activity (Page and Network Monitoring):** The extension and bookmarklet may scan rendered page content, page metadata, media hints, thumbnails, titles, and formats to discover downloadable media. The extension also passively observes network traffic in the background to detect media manifests (like HLS/DASH) that are not visible in the DOM.
 - **Authentication information (Cookies):** Browser cookies or session headers for the current site when authenticated access is needed. This can include HttpOnly cookies read by the browser extension or cookies read from the in-app WebView.
 - Download state stored locally on your device, such as task status, filenames, local file paths, bookmarks, backend URL settings, and extension preferences.
 - Basic technical request metadata handled by the backend or hosting provider, such as IP address, timestamp, request path, response status, and user agent.
@@ -35,7 +35,7 @@ FCDownloader uses this information to:
 
 ## Backend Processing
 
-The backend may receive page URLs, media URLs, referer headers, user-agent headers, cookies, and optional filenames. It uses this data to call extraction tools, fetch manifests, proxy media responses, or stream muxed media files.
+The backend may receive page URLs, media URLs, referer headers, user-agent headers, cookies, rendered page HTML snippets, media hints, source-audit diagnostics, and optional filenames. It uses this data to call extraction tools, fetch manifests, proxy media responses, or stream muxed media files.
 
 If you use the public hosted backend, requests are processed by that deployment and its infrastructure provider. If you configure your own backend, your backend operator controls how logs and request metadata are handled.
 

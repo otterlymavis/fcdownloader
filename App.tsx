@@ -54,7 +54,7 @@ import {
   getSourceName,
   guessMediaType,
   isDirectMediaUrl,
-  isNetworkDownloadCandidate,
+  isRuntimeDownloadCandidate,
   smartDedup,
 } from './src/lib/mediaHelpers';
 
@@ -180,7 +180,7 @@ export default function App() {
   const allVideos = useMemo<DetectedMedia[]>(() => {
     const seen = new Set(detected.map((m) => m.url));
     const fromNet: DetectedMedia[] = networkLog
-      .filter((url) => isNetworkDownloadCandidate(url) && !seen.has(url))
+      .filter((url) => isRuntimeDownloadCandidate(url, loadedUrl) && !seen.has(url))
       .map((url) => ({
         id: `net_${url}`, url, pageUrl: loadedUrl, userAgent: '',
         timestamp: Date.now(),
@@ -251,6 +251,30 @@ export default function App() {
     `);
     showToast(translate('scanningPage', resolvedLangRef.current), 'info');
   }, [showToast]);
+
+  const extractBrowserPage = useCallback(async (pageUrl = loadedUrl) => {
+    const url = pageUrl.trim();
+    if (!url || url === 'about:blank' || extracting) return;
+    setExtracting(true);
+    try {
+      const items = await extractionManager.extractMedia(url);
+      if (items.length > 0) {
+        for (const item of items) await enqueue(item);
+        showToast(
+          items.length === 1
+            ? translate('startedDownload', resolvedLangRef.current)
+            : translate('startedDownloads', resolvedLangRef.current, { count: items.length }),
+          'success'
+        );
+        setTab('library');
+        return;
+      }
+      showToast(translate('scanningPage', resolvedLangRef.current), 'info');
+      scanBrowserPage();
+    } finally {
+      setExtracting(false);
+    }
+  }, [enqueue, extracting, loadedUrl, scanBrowserPage, showToast]);
 
   // ── Home: paste → download ────────────────────────────────
   const handleHomeDownload = useCallback(async () => {
@@ -665,6 +689,7 @@ export default function App() {
               <BrowserView ref={webviewRef} initialUrl={loadedUrl} key={loadedUrl}
                 onMessage={onMessage}
                 onNavigationChange={(url) => { setBrowserInput(url); onPageChange(url); }}
+                onExtractPage={extractBrowserPage}
                 style={StyleSheet.absoluteFill} />
             )}
 
@@ -1039,7 +1064,10 @@ export default function App() {
               <Pressable android_ripple={RIPPLE} style={s.tabItem} onPress={() => setTab(id)}>
                 {IS_ANDROID && isActive && <View style={[s.tabPill, { backgroundColor: `${t.btn}12` }]} />}
                 <Text style={[s.tabLabel, { color: isActive ? t.ink : t.ink2,
-                  fontWeight: isActive ? '600' : '400', fontSize: fs(13) }]}>
+                  fontWeight: isActive ? '600' : '400', fontSize: fs(13) }]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.75}>
                   {labelText}
                 </Text>
                 {IS_IOS && isActive && <View style={[s.tabDot, { backgroundColor: t.ink }]} />}

@@ -66,9 +66,10 @@ options.html/.js    - backend URL override and route-through-backend toggle.
 
 FCDownloader does not include analytics, advertising, or telemetry. The
 extension may process the current page URL, detected media URLs, media
-metadata, and cookies for the current site when authenticated access is
-needed. That data is sent only to the backend URL configured in the extension
-and to the media CDNs the browser downloads from.
+metadata, rendered page HTML snippets, source-audit diagnostics, and cookies
+for the current site when authenticated access is needed. That data is sent
+only to the backend URL configured in the extension and to the media CDNs the
+browser downloads from.
 
 See the repository-level `PRIVACY.md` before publishing, and link that policy
 from the Chrome Web Store, Firefox Add-ons, and any public web page.

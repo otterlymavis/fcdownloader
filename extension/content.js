@@ -154,7 +154,7 @@
   ];
 
   function isXhsPage() {
-    return /(?:^|\.)xiaohongshu\.com$/i.test(location.hostname);
+    return /(?:^|\.)(?:xiaohongshu|rednote)\.com$/i.test(location.hostname);
   }
 
   function isXhsPostPage() {
@@ -570,15 +570,20 @@
   // X/Twitter image posts). On every OTHER site — especially YouTube,
   // Bilibili, news sites — running it pollutes the popup with thumbnails of
   // recommended videos, channel avatars, og:image cards, and ad creatives.
-  const IMAGE_HOSTS = /(?:^|\.)(instagram\.com|threads\.com|threads\.net|pinterest\.|reddit\.com|redd\.it|twitter\.com|x\.com|facebook\.com|tumblr\.com|xiaohongshu\.com)$/i;
+  const IMAGE_HOSTS = /(?:^|\.)(instagram\.com|threads\.com|threads\.net|pinterest\.|reddit\.com|redd\.it|twitter\.com|x\.com|facebook\.com|tumblr\.com|xiaohongshu\.com|rednote\.com)$/i;
   function shouldScanImages() {
     try { return IMAGE_HOSTS.test(location.hostname); } catch { return false; }
   }
 
   function scanAll() {
     const out = [];
-    const xhsItems = scanXiaohongshu();
-    if (xhsItems.length) return xhsItems;
+    // On XHS / rednote pages, trust ONLY the XHS-specific extractor. The
+    // generic scanners (image tags, og:image meta) otherwise pick up
+    // sidebar avatars and recommended-note thumbnails, especially when the
+    // user is not logged in and the page falls back to a profile view.
+    if (isXhsPage()) {
+      return scanXiaohongshu();
+    }
     out.push(...scanIframes());
     out.push(...scanVideoTags());
     if (shouldScanImages()) out.push(...scanImageTags());
