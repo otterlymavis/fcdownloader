@@ -437,14 +437,43 @@ async function cookieHeaderFor(url) {
   try {
     const { allowCookies } = await getSettings();
     if (!allowCookies) return "";
-    
+
     if (/(?:youtube\.com|youtu\.be|googlevideo\.com)/i.test(url || "")) {
       return youtubeCookieHeader();
+    }
+    // XHS rebranded internationally as rednote.com — login session lives under
+    // xiaohongshu.com (and vice versa). Merge cookies from both domains so the
+    // server can authenticate against the XHS API regardless of which surface
+    // the user is browsing on.
+    if (/(?:xiaohongshu\.com|rednote\.com|xhscdn\.com|xhslink\.com)/i.test(url || "")) {
+      return xhsCookieHeader();
     }
     const cookies = await chrome.cookies.getAll({ url });
     if (!cookies || !cookies.length) return "";
     // Format as Cookie: name=value; name=value
     return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  } catch {
+    return "";
+  }
+}
+
+async function xhsCookieHeader() {
+  try {
+    const byName = new Map();
+    for (const url of [
+      "https://www.xiaohongshu.com/",
+      "https://xiaohongshu.com/",
+      "https://www.rednote.com/",
+      "https://rednote.com/",
+    ]) {
+      const cookies = await chrome.cookies.getAll({ url }).catch(() => []);
+      for (const c of cookies || []) byName.set(c.name, c.value);
+    }
+    for (const domain of ["xiaohongshu.com", ".xiaohongshu.com", "rednote.com", ".rednote.com"]) {
+      const cookies = await chrome.cookies.getAll({ domain }).catch(() => []);
+      for (const c of cookies || []) byName.set(c.name, c.value);
+    }
+    return Array.from(byName, ([name, value]) => `${name}=${value}`).join("; ");
   } catch {
     return "";
   }
