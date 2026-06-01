@@ -344,8 +344,10 @@ function sourceAuditDetail(audit) {
 }
 
 function needsCompanion(url, items = []) {
-  if (/youtube\.com\/(?:watch|shorts)|youtu\.be\//i.test(url || "")) return true;
-  return items.some((item) => item.source === "youtube-hd-local");
+  // Always show the helper bar so users can install/start the companion or
+  // update its bundled tools without first navigating to a YouTube video.
+  // The bar itself shows current readiness (Open / Update Tools / ready).
+  return true;
 }
 
 async function renderHelperStatus(show) {

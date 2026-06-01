@@ -863,7 +863,17 @@ def run_extraction(
         ]
     else:
         # Non-YouTube pipeline — full strategy sweep.
-        platform_first = any(h in page_url for h in ("weibo.com", "weibo.cn", "video.weibo.com"))
+        # Platforms where our custom extractor is more reliable than yt-dlp:
+        # - Weibo: yt-dlp lacks an image-post extractor and returns "No video formats"
+        # - XHS: yt-dlp picks up profile avatars from related sections in __INITIAL_STATE__
+        # - TikTok: yt-dlp doesn't handle photo/slideshow posts (no /video/ in URL)
+        # - Reddit: yt-dlp doesn't follow /s/<id> share redirects to the canonical post
+        platform_first = any(h in page_url for h in (
+            "weibo.com", "weibo.cn", "video.weibo.com",
+            "xiaohongshu.com", "xhslink.com", "xhscdn.com",
+            "tiktok.com", "vm.tiktok.com",
+            "reddit.com", "redd.it",
+        ))
         platform_strategy = ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies))
         ytdlp_strategy = ("yt-dlp", lambda: _strategy_ydl(page_url, ydl_opts, False))
 
