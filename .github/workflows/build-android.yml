@@ -25,7 +25,7 @@ name: Build Android APK
 on:
   push:
     tags: ["v*.*.*"]
-    branches: [master, backend-version, plus-version]
+    branches: [master, backend-version, plus-version, helper-version]
     paths-ignore:
       - '**.md'
       - 'server/**'
@@ -124,8 +124,8 @@ jobs:
           } > android/gradle.release.properties
           ls -l "android/app/$store_file"
 
-      - name: Inline server URL into .env.local (backend-version and plus-version)
-        if: github.ref_name == 'backend-version' || github.ref_name == 'plus-version'
+      - name: Inline server URL into .env.local (backend-version, plus-version, helper-version)
+        if: github.ref_name == 'backend-version' || github.ref_name == 'plus-version' || github.ref_name == 'helper-version'
         env:
           EXTRACTOR_URL: ${{ secrets.EXPO_PUBLIC_EXTRACTOR_URL }}
         run: |

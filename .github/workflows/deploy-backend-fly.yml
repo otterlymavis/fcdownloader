@@ -2,7 +2,7 @@ name: Deploy Backend to Fly
 
 on:
   push:
-    branches: [master, backend-version, plus-version]
+    branches: [master, backend-version, plus-version, helper-version]
     paths:
       - "server/**"
       - ".github/workflows/deploy-backend-fly.yml"
