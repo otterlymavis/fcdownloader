@@ -45,6 +45,12 @@
     <label for="allowCookies" style="margin: 0;">Allow sending my session cookies to the remote backend to download restricted videos (Warning: Security Risk)</label>
   </div>
 
+  <div class="checkbox-row">
+    <input id="removeWatermark" type="checkbox" />
+    <label for="removeWatermark" style="margin: 0;">Try to remove watermarks via third-party proxy (snapwc.com)</label>
+  </div>
+  <p class="hint">Adds ~20&nbsp;s per extraction. Works for some video overlays. Platform-baked image watermarks (e.g.&nbsp;Weibo static images) cannot be removed this way.</p>
+
   <div class="save-row">
     <button id="save" class="primary" type="button" style="margin: 0; width: auto;">Save</button>
     <span id="saved"></span>
