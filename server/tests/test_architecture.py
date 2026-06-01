@@ -22,6 +22,7 @@ import auth
 import classifier
 import extractors
 import registry
+import source_audit
 import telemetry
 import models
 from utils import (
@@ -247,6 +248,63 @@ class TestRegistry:
 
 # ── telemetry.RequestContext ──────────────────────────────────────────────────
 
+class TestWeiboExtractor:
+    def test_extracts_rendered_weibo_images_from_tab_html(self):
+        html = r'''
+        <html><head>
+          <meta property="og:title" content="Sample Weibo Post">
+        </head><body>
+        <script>
+          window.$render_data = [{
+            "status": {
+              "id": "1234567890",
+              "text_raw": "Sample text",
+              "pics": [
+                {"url": "https:\/\/wx1.sinaimg.cn\/orj360\/abc123.jpg"},
+                {"large": {"url": "https:\/\/wx2.sinaimg.cn\/large\/def456.webp?foo=1"}}
+              ]
+            }
+          }][0];
+        </script>
+        </body></html>
+        '''
+
+        info = extractors.extract_weibo_from_html("https://m.weibo.cn/status/1234567890", html)
+
+        assert info is not None
+        assert info["_type"] == "playlist"
+        assert info["title"] == "Sample Weibo Post"
+        assert [entry["url"] for entry in info["entries"]] == [
+            "https://wx1.sinaimg.cn/original/abc123.jpg",
+            "https://wx2.sinaimg.cn/original/def456.webp?foo=1",
+        ]
+        assert info["entries"][0]["http_headers"]["Referer"] == "https://m.weibo.cn/status/1234567890"
+        audit = info.get("_source_audit") or []
+        assert any(item.get("strategy") == "html-metadata" for item in audit)
+        assert any(item.get("strategy") == "cdn-variant" and item.get("variant") == "woriginal" for item in audit)
+
+    def test_weibo_post_parser_uses_large_image_urls(self):
+        meta = {
+            "id": "999",
+            "text_raw": "Photos",
+            "pics": [
+                {"url": "https://wx3.sinaimg.cn/mw690/one.jpg"},
+                {"large": {"url": "https://wx4.sinaimg.cn/large/two.png"}},
+            ],
+        }
+
+        audit = []
+        info = extractors._weibo_parse_post(meta, "https://weibo.com/123/abc", audit=audit)
+
+        assert info is not None
+        assert info["_type"] == "playlist"
+        assert [entry["url"] for entry in info["entries"]] == [
+            "https://wx3.sinaimg.cn/original/one.jpg",
+            "https://wx4.sinaimg.cn/original/two.png",
+        ]
+        assert any(item.get("fieldPath") == "pics[0].url" for item in info["_source_audit"])
+
+
 class TestRequestContext:
     def test_records_strategy(self):
         ctx = telemetry.RequestContext(endpoint="/extract")
@@ -372,6 +430,28 @@ class TestUtils:
         assert "naver.net" in _DOH_CDN_SUFFIXES
 
 
+class TestSourceAudit:
+    def test_sanitizes_sensitive_headers(self):
+        audit = source_audit.sanitize_audit([{
+            "strategy": "test",
+            "source": "unit",
+            "url": "https://cdn.example.com/video.mp4",
+            "headersNeeded": {
+                "Referer": "https://example.com/",
+                "Cookie": "secret=yes",
+                "Authorization": "Bearer secret",
+            },
+        }])
+
+        assert audit[0]["headersNeeded"] == {"Referer": "https://example.com/"}
+
+    def test_scores_complete_higher_than_video_only(self):
+        complete = {"height": 480, "width": 854, "hasVideo": True, "hasAudio": True}
+        video_only = {"height": 1080, "width": 1920, "hasVideo": True, "hasAudio": False}
+
+        assert source_audit.score_candidate(complete) > source_audit.score_candidate(video_only)
+
+
 class TestModelpressExtractor:
     def test_extracts_gzip_article_images(self, monkeypatch):
         import gzip
@@ -488,6 +568,63 @@ class TestNaverBlogExtractor:
         assert info["entries"][0]["http_headers"]["Referer"].startswith(
             "https://blog.naver.com/PostView.naver?"
         )
+
+
+class TestXiaohongshuExtractor:
+    def test_extracts_note_images_not_avatar_from_initial_state(self, monkeypatch):
+        html = """
+        <html><body><script>
+        window.__INITIAL_STATE__={
+          "note":{"currentNoteId":"69fdcbfa0000000023004a17","noteDetailMap":{
+            "69fdcbfa0000000023004a17":{"note":{
+              "title":"Sample XHS",
+              "user":{"avatar":"https://sns-avatar-qc.xhscdn.com/avatar/user-one"},
+              "imageList":[
+                {"infoList":[
+                  {"imageScene":"WB_PRV","url":"http://sns-webpic-qc.xhscdn.com/202606010247/preview/notes_pre_post/a!nd_prv_jpg_3"},
+                  {"imageScene":"WB_DFT","url":"http://sns-webpic-qc.xhscdn.com/202606010247/full/notes_pre_post/a!nd_dft_jpg_3"}
+                ],"urlDefault":"https://sns-avatar-qc.xhscdn.com/avatar/ignored"},
+                {"urlDefault":"http://sns-webpic-qc.xhscdn.com/202606010247/full/note_pre_post_uhdr/b!nd_dft_jpg_3"}
+              ],
+              "noteId":"69fdcbfa0000000023004a17","type":"normal"
+            }}
+          }}
+        }
+        </script></body></html>
+        """.encode()
+
+        monkeypatch.setattr("new_extractors._fetch", lambda *args, **kwargs: html)
+
+        info = extractors.extract_xiaohongshu(
+            "https://www.xiaohongshu.com/explore/69fdcbfa0000000023004a17",
+            "web_session=abc",
+        )
+        assert info is not None
+        assert info["_type"] == "playlist"
+        assert [entry["url"] for entry in info["entries"]] == [
+            "http://sns-webpic-qc.xhscdn.com/202606010247/full/notes_pre_post/a!nd_dft_jpg_3",
+            "http://sns-webpic-qc.xhscdn.com/202606010247/full/note_pre_post_uhdr/b!nd_dft_jpg_3",
+        ]
+        assert all("avatar" not in entry["url"] for entry in info["entries"])
+
+    def test_rejects_avatar_only_note(self, monkeypatch):
+        html = """
+        <script>window.__INITIAL_STATE__={
+          "note":{"currentNoteId":"69fdcbfa0000000023004a17","noteDetailMap":{
+            "69fdcbfa0000000023004a17":{"note":{
+              "title":"Avatar only",
+              "imageList":[{"urlDefault":"https://sns-avatar-qc.xhscdn.com/avatar/user-one"}]
+            }}
+          }}
+        }</script>
+        """.encode()
+
+        monkeypatch.setattr("new_extractors._fetch", lambda *args, **kwargs: html)
+
+        assert extractors.extract_xiaohongshu(
+            "https://www.xiaohongshu.com/explore/69fdcbfa0000000023004a17",
+            None,
+        ) is None
 
 
 class TestCuratedSiteExtractor:

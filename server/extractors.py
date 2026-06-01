@@ -1840,4 +1840,5 @@ from new_extractors import (  # noqa: E402
     extract_bilibili,
     extract_tiktok,
     extract_reddit,
+    extract_via_snapwc,
 )

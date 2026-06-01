@@ -13,7 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all server modules (main.py + service layers)
 COPY main.py config.py models.py registry.py classifier.py auth.py \
-     telemetry.py extractors.py strategies.py supervisor.py utils.py languages.py ./
+     telemetry.py extractors.py new_extractors.py strategies.py supervisor.py \
+     source_audit.py utils.py languages.py ./
 
 ENV PORT=8080 \
     PYTHONIOENCODING=utf-8 \

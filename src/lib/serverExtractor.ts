@@ -32,7 +32,7 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import { DetectedMedia, FormatOption } from '../types';
+import { DetectedMedia, FormatOption, SourceAuditEntry } from '../types';
 import { extractSessionCookies } from './cookieManager';
 import { debugLog, debugWarn } from './releaseLogger';
 
@@ -52,6 +52,12 @@ const _extra = (Constants.expoConfig?.extra ?? {}) as {
 const BUNDLED_URL   = (_extra.bundledExtractorUrl   ?? '').trim();
 const BUNDLED_TOKEN = (_extra.bundledExtractorToken ?? '').trim();
 const SERVER_CONFIDENCE = 0.97;
+
+// Synced from useSettings on load and on every toggle change.
+let _removeWatermark = false;
+export function setRemoveWatermark(value: boolean): void {
+  _removeWatermark = value;
+}
 
 function normaliseUrl(raw: string): string {
   let s = raw.trim().replace(/\/+$/, '');
@@ -79,6 +85,7 @@ export interface ServerExtractResponse {
   extractor?: string;
   formatId?: string;
   formats?: FormatOption[];
+  sourceAudit?: SourceAuditEntry[];
 }
 
 export async function getServerExtractorUrl(): Promise<string | null> {
@@ -136,6 +143,7 @@ export async function extractViaServer(pageUrl: string): Promise<DetectedMedia[]
     }
     const body: Record<string, unknown> = { pageUrl };
     if (cookies) body.cookies = cookies;
+    if (_removeWatermark) body.removeWatermark = true;
 
     const fullUrl = `${base}/extract`;
     debugLog('[serverExtractor] POST', fullUrl, 'token?', !!token, 'cookies?', cookies.length, 'chars');
@@ -182,6 +190,7 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
     extractor: r.extractor,
     formatId: r.formatId,
     availableFormats: r.formats,
+    sourceAudit: r.sourceAudit,
   };
 
   if (r.kind === 'hls' && r.url) {

@@ -5,6 +5,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   View,
 } from 'react-native';
@@ -32,6 +33,8 @@ interface Props {
   onThemeChange: (v: ThemePref) => void;
   onFontSizeChange: (v: FontSizePref) => void;
   onLanguageChange: (v: LanguagePref) => void;
+  removeWatermark: boolean;
+  onRemoveWatermarkChange: (v: boolean) => void;
   resolvedLanguage: CommonLanguageCode;
   t: ThemeColors;
 }
@@ -79,6 +82,8 @@ export default function SettingsSheet({
   onThemeChange,
   onFontSizeChange,
   onLanguageChange,
+  removeWatermark,
+  onRemoveWatermarkChange,
   resolvedLanguage,
   t,
 }: Props) {
@@ -186,6 +191,31 @@ export default function SettingsSheet({
             </View>
           </View>
 
+          {/* ── Downloads ── */}
+          <Text style={[styles.sectionLabel, { color: t.ink2, textAlign: isRTL ? 'right' : 'left' }]}>
+            DOWNLOADS
+          </Text>
+          <View style={[styles.card, { backgroundColor: t.card }]}>
+            <View style={[styles.toggleRow, isRTL && { flexDirection: 'row-reverse' }]}>
+              <View style={styles.toggleText}>
+                <Text style={[styles.rowLabel, { color: t.ink }]}>
+                  Remove Watermark
+                </Text>
+                <Text style={[styles.toggleNote, { color: t.ink3 }]}>
+                  Uses a third-party proxy (snapwc.com) — adds ~20 s per request.
+                  Works for some video overlays. Platform-baked image watermarks
+                  (e.g. Weibo static images) cannot be removed this way.
+                </Text>
+              </View>
+              <Switch
+                value={removeWatermark}
+                onValueChange={onRemoveWatermarkChange}
+                trackColor={{ false: t.card2, true: BLUE }}
+                thumbColor="#fff"
+              />
+            </View>
+          </View>
+
         </ScrollView>
 
         <Pressable
@@ -282,6 +312,20 @@ const styles = StyleSheet.create({
   langChipLabel: {
     fontSize: 13,
     fontWeight: '600',
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: S.md,
+  },
+  toggleText: {
+    flex: 1,
+    gap: S.xs,
+  },
+  toggleNote: {
+    fontSize: 12,
+    lineHeight: 16,
   },
   doneButton: {
     margin: S.md,

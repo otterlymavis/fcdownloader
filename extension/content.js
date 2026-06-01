@@ -141,6 +141,118 @@
     return found;
   }
 
+  const XHS_GOOD_SCENES = ["WB_DFT", "WB_MK", "WB_PRV"];
+  const XHS_MEDIA_MARKERS = [
+    "sns-webpic",
+    "sns-img-",
+    "sns-video-",
+    "ci.xiaohongshu.com",
+    "xhscdn.com/spectrum/",
+    "xhscdn.com/media/",
+    "/notes_pre_post/",
+    "/note_pre_post",
+  ];
+
+  function isXhsPage() {
+    return /(?:^|\.)xiaohongshu\.com$/i.test(location.hostname);
+  }
+
+  function isXhsPostPage() {
+    return isXhsPage() && /\/(?:explore|discovery\/item|item)\/[a-f0-9]{24}/i.test(location.pathname);
+  }
+
+  function isXhsMediaUrl(url) {
+    const lower = decode(url).toLowerCase();
+    if (!lower || /(?:sns-avatar|\/avatar\/|avatar|profile)/i.test(lower)) return false;
+    return XHS_MEDIA_MARKERS.some((marker) => lower.includes(marker));
+  }
+
+  function xhsBestImageUrl(img) {
+    const infoList = Array.isArray(img?.infoList) ? img.infoList : [];
+    for (const scene of XHS_GOOD_SCENES) {
+      const url = infoList.find((info) => info?.imageScene === scene)?.url;
+      if (url && isXhsMediaUrl(url)) return decode(url);
+    }
+    for (const key of ["urlDefault", "url"]) {
+      const url = img?.[key];
+      if (url && isXhsMediaUrl(url)) return decode(url);
+    }
+    for (const info of infoList) {
+      const url = info?.url;
+      if (url && isXhsMediaUrl(url)) return decode(url);
+    }
+    return "";
+  }
+
+  function xhsStreamUrl(stream) {
+    for (const codec of ["h264", "h265", "av1", "h264_hls"]) {
+      const entries = Array.isArray(stream?.[codec]) ? stream[codec] : [stream?.[codec]];
+      for (const entry of entries) {
+        const url = entry?.masterUrl || entry?.master_url || entry?.backupUrls?.[0] || entry?.backup_urls?.[0];
+        if (url && isXhsMediaUrl(url)) return decode(url);
+      }
+    }
+    return "";
+  }
+
+  function scanXiaohongshu() {
+    if (!isXhsPostPage()) return [];
+    const found = [];
+    const html = document.documentElement.outerHTML.slice(0, 1_500_000);
+    const stateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\})\s*;?\s*<\/script>/);
+    if (stateMatch) {
+      try {
+        const state = JSON.parse(stateMatch[1].replace(/undefined/g, "null"));
+        const noteSection = state?.note || state?.noteDetail || state?.noteData || {};
+        const noteDetailMap = noteSection.noteDetailMap || {};
+        const noteId = location.pathname.match(/\/(?:explore|discovery\/item|item)\/([a-f0-9]{24})/i)?.[1]
+          || noteSection.currentNoteId
+          || Object.keys(noteDetailMap)[0];
+        const entry = noteDetailMap[noteId] || {};
+        const note = entry.note || entry;
+        if (note?.video?.media?.stream) {
+          const videoUrl = xhsStreamUrl(note.video.media.stream);
+          if (videoUrl) {
+            found.push({
+              url: videoUrl,
+              kind: videoUrl.includes(".m3u8") ? "hls" : "direct",
+              source: "xhs-state",
+              pageUrl: location.href,
+              referer: location.href,
+              label: "Xiaohongshu Video",
+            });
+          }
+        }
+        if (Array.isArray(note?.imageList)) {
+          const seen = new Set(found.map((item) => item.url.replace(/\?.*$/, "")));
+          for (const img of note.imageList) {
+            const url = xhsBestImageUrl(img);
+            const key = url.replace(/\?.*$/, "");
+            if (!url || seen.has(key)) continue;
+            seen.add(key);
+            found.push({
+              url,
+              kind: "image",
+              source: "xhs-state",
+              pageUrl: location.href,
+              referer: location.href,
+              label: "Xiaohongshu Image",
+            });
+          }
+        }
+      } catch {}
+    }
+    if (found.length) return found;
+    return [{
+      url: location.href,
+      pageUrl: location.href,
+      kind: "embed",
+      source: "xhs-page",
+      label: "Xiaohongshu",
+      backendRouted: true,
+    }];
+  }
+
   function scanMetaTags() {
     const found = [];
     // Always look for og:video / twitter:player. Only look for og:image
@@ -152,6 +264,7 @@
     document.querySelectorAll(selector).forEach((m) => {
       const u = decode(m.getAttribute("content"));
       if (u && u.startsWith("http")) {
+        if (isXhsPage() && !isXhsMediaUrl(u)) return;
         found.push({ url: u, kind: /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i.test(u) ? "image" : "direct", source: "meta" });
       }
     });
@@ -174,7 +287,9 @@
     for (const [re, kind] of patterns) {
       let m;
       while ((m = re.exec(html)) !== null) {
-        found.push({ url: decode(m[1]), kind, source: "meta-json" });
+        const url = decode(m[1]);
+        if (isXhsPage() && !isXhsMediaUrl(url)) continue;
+        found.push({ url, kind, source: "meta-json" });
       }
     }
     return found;
@@ -285,6 +400,30 @@
     const found = [];
     if (!/(?:^|\.)weibo\.(?:com|cn)$/i.test(location.hostname)) return found;
     if (!/(?:\/(?:status|detail)\/[A-Za-z0-9]+|\/(?:\d+|0)\/[A-Za-z0-9]+|\/tv\/show\/|video\.weibo\.com\/show)/i.test(location.href)) return found;
+    try {
+      const html = document.documentElement.outerHTML.slice(0, 1_500_000);
+      const seen = new Set();
+      const imageRe = /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:sinaimg\.cn|weibocdn\.com)[^"'\\<>\s]*\.(?:jpe?g|png|webp|gif|heic)[^"'\\<>\s]*)/gi;
+      let m;
+      while ((m = imageRe.exec(html)) !== null && found.length < 40) {
+        let url = decode(m[1]).replace(/^http:\/\//i, "https://");
+        url = url.replace(/\/\/([^/]+\.sinaimg\.cn)\/(?:thumb\d+|thumbnail|square|orj\d+|mw\d+|bmiddle|large)\//i, "//$1/original/");
+        const lowered = url.toLowerCase();
+        if (/(?:avatar|profile|icon|emoji|face|card)/i.test(lowered)) continue;
+        const key = url.replace(/\?.*$/, "");
+        if (seen.has(key)) continue;
+        seen.add(key);
+        found.push({
+          url,
+          kind: "image",
+          source: "weibo-page",
+          pageUrl: location.href,
+          referer: location.href,
+          label: "Weibo Image",
+        });
+      }
+      if (found.length) return found;
+    } catch {}
     found.push({
       url: location.href,
       pageUrl: location.href,
@@ -438,6 +577,8 @@
 
   function scanAll() {
     const out = [];
+    const xhsItems = scanXiaohongshu();
+    if (xhsItems.length) return xhsItems;
     out.push(...scanIframes());
     out.push(...scanVideoTags());
     if (shouldScanImages()) out.push(...scanImageTags());

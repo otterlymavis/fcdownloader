@@ -28,6 +28,7 @@ import { useBookmarks } from './src/hooks/useBookmarks';
 import { useSettings } from './src/hooks/useSettings';
 import { DetectedMedia, DownloadTask } from './src/types';
 import { extractionManager } from './src/lib/extractionManager';
+import { setRemoveWatermark } from './src/lib/serverExtractor';
 import {
   BOTTOM_PAD,
   IS_ANDROID,
@@ -97,10 +98,15 @@ export default function App() {
     fontScale,
     language,
     resolvedLanguage,
+    removeWatermark,
     setTheme,
     setFontSize,
     setLanguage,
+    setRemoveWatermark: saveRemoveWatermark,
   } = useSettings();
+
+  // Keep the serverExtractor module-level flag in sync with the setting.
+  useEffect(() => { setRemoveWatermark(removeWatermark); }, [removeWatermark]);
   const t = useTheme(theme === 'system' ? undefined : theme === 'dark');
   const isDark = t.dark;
   const fs = (base: number) => base * fontScale;
@@ -1263,6 +1269,7 @@ export default function App() {
       <SettingsSheet visible={settingsOpen} onClose={() => setSettingsOpen(false)}
         theme={theme} fontSize={fontSize} language={language}
         onThemeChange={setTheme} onFontSizeChange={setFontSize} onLanguageChange={setLanguage}
+        removeWatermark={removeWatermark} onRemoveWatermarkChange={saveRemoveWatermark}
         resolvedLanguage={resolvedLanguage} t={t} />
       {playingPath && <VideoPlayerModal path={playingPath} onClose={() => setPlayingPath(null)} language={resolvedLanguage} />}
       <Toast message={toast} />

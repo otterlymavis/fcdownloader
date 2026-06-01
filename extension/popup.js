@@ -332,6 +332,17 @@ function setErrorStatus(error, fallback = "Something went wrong.") {
   setStatus(friendly, "error", raw && raw !== friendly ? raw : "");
 }
 
+function sourceAuditDetail(audit) {
+  if (!Array.isArray(audit) || !audit.length) return "";
+  const lines = audit.slice(0, 25).map((item, idx) => {
+    const status = item.status ? ` ${item.status}` : "";
+    const selected = item.selected ? " selected" : "";
+    const reason = item.rejectedReason ? ` rejected=${item.rejectedReason}` : "";
+    return `${idx + 1}. ${item.strategy || "source"}:${item.source || "unknown"}${status}${selected}${reason} ${item.url || item.fieldPath || ""}`;
+  });
+  return `Source audit (${audit.length} candidate${audit.length === 1 ? "" : "s"}):\n${lines.join("\n")}`;
+}
+
 function needsCompanion(url, items = []) {
   if (/youtube\.com\/(?:watch|shorts)|youtu\.be\//i.test(url || "")) return true;
   return items.some((item) => item.source === "youtube-hd-local");
@@ -612,6 +623,8 @@ extractBtn.addEventListener("click", async () => {
         return;
       }
       setErrorStatus(resp?.error, "Couldn't find media on this page.");
+      const auditDetail = sourceAuditDetail(resp?.sourceAudit);
+      if (auditDetail) statusEl.title = statusEl.title ? `${statusEl.title}\n\n${auditDetail}` : auditDetail;
       return;
     }
     setStatus("", "info");

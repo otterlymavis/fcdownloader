@@ -31,6 +31,7 @@ import classifier
 import extractors
 import languages
 import registry
+import source_audit
 from config import COOKIES_FILE, FORMAT_SPEC, SERVER_BASE_URL, MOBILE_UA
 from telemetry import RequestContext
 from utils import (
@@ -181,6 +182,8 @@ def _strategy_ydl(
                         "via skip_download; ytdl-stream needed"
                     ),
                 )
+        if isinstance(info, dict):
+            source_audit.add_audit(info, source_audit.format_audit(info, name, "yt-dlp formats"))
         return _result(name, True, media=info)
     except Exception as exc:  # noqa: BLE001
         msg = safe_text(exc)[:400]
@@ -222,6 +225,8 @@ def _strategy_ydl_client(
                         "SABR fallback; ytdl-stream needed"
                     ),
                 )
+        if isinstance(info, dict):
+            source_audit.add_audit(info, source_audit.format_audit(info, name, "yt-dlp formats"))
         return _result(name, True, media=info)
     except Exception as exc:  # noqa: BLE001
         msg = safe_text(exc)[:400]
@@ -370,8 +375,22 @@ def _strategy_html_detector(
         if not urls:
             return _result(name, False, reason=f"{mode} detector found no media")
 
-        media_url = urllib.parse.urljoin(page_url, urls[0])
-        return _result(name, True, media=_info_from_url(media_url, title))
+        candidates = [urllib.parse.urljoin(page_url, u) for u in urls]
+        media_url = candidates[0]
+        audit = [
+            source_audit.audit_entry(
+                strategy=name,
+                source="html-scan",
+                url=u,
+                selected=(u == media_url),
+                rejected_reason=None if u == media_url else "lower ranked than first matching HTML candidate",
+                headers=req_headers,
+            )
+            for u in candidates[:80]
+        ]
+        info = _info_from_url(media_url, title)
+        source_audit.add_audit(info, audit)
+        return _result(name, True, media=info)
 
     except urllib.error.URLError as exc:
         return _result(name, False, reason=f"network error: {safe_text(exc)[:300]}")
@@ -452,6 +471,18 @@ def _strategy_ytdl_stream_url(
 
 def _strategy_skip(name: str, reason: str) -> dict[str, Any]:
     return _result(name, False, reason=reason)
+
+
+def _strategy_snapwc(page_url: str) -> dict[str, Any]:
+    """Watermark-removal proxy via snapwc.com (only runs when remove_watermark=True)."""
+    name = "watermark-removal proxy"
+    try:
+        info = extractors.extract_via_snapwc(page_url)
+        if info:
+            return _result(name, True, media=info)
+        return _result(name, False, reason="snapwc returned no media")
+    except Exception as exc:
+        return _result(name, False, reason=safe_text(exc)[:400])
 
 
 # ── HTML helpers (used by detector strategy) ──────────────────────────────────
@@ -664,7 +695,9 @@ def run_extraction(
     sub_langs: str = "en",
     concurrent_fragments: int = 1,
     proxy: str | None = None,
+    request_source_audit: list[dict[str, Any]] | None = None,
     ctx: RequestContext | None = None,
+    remove_watermark: bool = False,
 ) -> dict[str, Any]:
     """Run the full extraction pipeline and return a yt-dlp info dict.
 
@@ -779,6 +812,13 @@ def run_extraction(
             "ext":          ext,
             "protocol":     "m3u8_native" if ".m3u8" in page_url.lower() else "https",
             "id":           cache_key(page_url),
+            "_source_audit": [source_audit.audit_entry(
+                strategy="direct media URL short-circuit",
+                source="request-url",
+                url=page_url,
+                selected=True,
+                headers=http_headers,
+            )],
         }
 
     # ── Cookie file ───────────────────────────────────────────────────────────
@@ -826,7 +866,17 @@ def run_extraction(
         platform_first = any(h in page_url for h in ("weibo.com", "weibo.cn", "video.weibo.com"))
         platform_strategy = ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies))
         ytdlp_strategy = ("yt-dlp", lambda: _strategy_ydl(page_url, ydl_opts, False))
+
+        # When remove_watermark is enabled, try the snapwc proxy first (before
+        # any CDN-direct extraction). snapwc is slow (~20 s) so it only runs
+        # when explicitly requested. Falls through on failure.
+        watermark_proxy_strategy: list[tuple[str, Callable[[], dict[str, Any]]]] = (
+            [("watermark-removal proxy", lambda: _strategy_snapwc(page_url))]
+            if remove_watermark else []
+        )
+
         strategies: list[tuple[str, Callable[[], dict[str, Any]]]] = [
+            *watermark_proxy_strategy,
             *([platform_strategy, ytdlp_strategy] if platform_first else [ytdlp_strategy, platform_strategy]),
             *(
                 [("ytdl-stream", lambda: _strategy_ytdl_stream_url(page_url, ydl_opts, cookies))]
@@ -855,6 +905,7 @@ def run_extraction(
 
     # ── Pipeline execution ────────────────────────────────────────────────────
     diagnostics: list[dict[str, Any]] = []
+    accumulated_audit = source_audit.sanitize_audit(request_source_audit)
     try:
         for idx, (name, fn) in enumerate(strategies):
             t0 = time.monotonic()
@@ -863,6 +914,13 @@ def run_extraction(
             duration_ms = (time.monotonic() - t0) * 1000
 
             diagnostics.append({k: v for k, v in result.items() if k != "media"})
+            accumulated_audit.append(source_audit.audit_entry(
+                strategy=name,
+                source="strategy-result",
+                selected=bool(result.get("success")),
+                rejected_reason=None if result.get("success") else safe_text(result.get("reason") or "no media"),
+                notes=f"{duration_ms:.0f}ms",
+            ))
 
             if ctx:
                 ctx.record_strategy(
@@ -879,6 +937,7 @@ def run_extraction(
                 if isinstance(info, dict):
                     info.setdefault("_extractor_strategy", name)
                     info.setdefault("_extractor_diagnostics", diagnostics)
+                    source_audit.add_audit(info, accumulated_audit)
                     if ctx:
                         ctx.extractor = info.get("extractor")
                 return info
@@ -945,7 +1004,11 @@ def run_extraction(
     else:
         detail = f"unsupported after all extraction strategies failed: {reason_str[:800]}"
 
-    raise HTTPException(502, detail)
+    raise HTTPException(502, {
+        "message": detail,
+        "diagnostics": diagnostics,
+        "sourceAudit": source_audit.sanitize_audit(accumulated_audit),
+    })
 
 
 def run_extraction_with_format(

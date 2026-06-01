@@ -67,9 +67,11 @@ class ExtractRequest(BaseModel):
     cookies: str | None = None
     pageHtml: str | None = None
     mediaHints: list[dict[str, Any]] | None = None
+    sourceAudit: list[dict[str, Any]] | None = None
     proxy: str | None = None
     subtitles: bool = False
     subLangs: str = "en"
+    removeWatermark: bool = False
 
     @field_validator("pageUrl", mode="before")
     @classmethod

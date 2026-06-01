@@ -57,6 +57,7 @@ from yt_dlp.version import __version__ as YT_DLP_VERSION
 
 import auth
 import extractors
+import source_audit
 import languages
 import registry
 import supervisor
@@ -209,6 +210,13 @@ def _mime_for(f: dict[str, Any]) -> str | None:
         "mp4": "video/mp4",
         "webm": "video/webm",
         "mkv": "video/x-matroska",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "webp": "image/webp",
+        "gif": "image/gif",
+        "avif": "image/avif",
+        "heic": "image/heic",
     }.get(ext, f"video/{ext}")
 
 
@@ -240,6 +248,23 @@ def _format_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _safe_source_audit(raw: Any, limit: int = 300) -> list[dict[str, Any]]:
+    return source_audit.sanitize_audit(raw, limit=limit)
+
+
+def _attach_source_audit(
+    response: dict[str, Any],
+    info: dict[str, Any] | None,
+    request_audit: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    audit = _safe_source_audit(request_audit)
+    audit.extend(_safe_source_audit((info or {}).get("_source_audit")))
+    audit = _safe_source_audit(audit)
+    if audit:
+        response["sourceAudit"] = audit
+    return response
+
+
 def _to_response(info: dict[str, Any]) -> dict[str, Any]:
     requested = info.get("requested_formats")
     if requested and len(requested) == 2:
@@ -268,6 +293,22 @@ def _to_response(info: dict[str, Any]) -> dict[str, Any]:
     url = info.get("url")
     if not url:
         raise HTTPException(502, "yt-dlp info had no url")
+
+    ext = (info.get("ext") or guess_ext_from_url(url) or "").lower()
+    if ext in _IMAGE_EXTS:
+        return {
+            "kind":      "image",
+            "url":       url,
+            "headers":   _headers_for(info),
+            "label":     _label_for(info),
+            "width":     info.get("width"),
+            "height":    info.get("height"),
+            "mimeType":  _mime_for({**info, "ext": ext}),
+            "expire":    expire_of(url),
+            "extractor": info.get("extractor"),
+            "formatId":  info.get("format_id"),
+            "formats":   _format_options(info),
+        }
 
     if looks_like_hls(url, info.get("protocol")):
         return {
@@ -358,7 +399,7 @@ def _to_gallery_response(info: dict[str, Any]) -> dict[str, Any]:
             "width":     entry.get("width"),
             "height":    entry.get("height"),
             "ext":       ext or ("mp4" if not is_image else "jpg"),
-            "mimeType":  _mime_for(entry) if not is_image else f"image/{ext or 'jpeg'}",
+            "mimeType":  _mime_for({**entry, "ext": ext or "jpg"}) if is_image else _mime_for(entry),
             "title":     entry.get("title"),
             "duration":  entry.get("duration"),
             "extractor": entry.get("extractor"),
@@ -453,14 +494,17 @@ def _direct_media_url_kind(url: str) -> str:
 
 def _info_from_media_hints(page_url: str, hints: list[dict[str, Any]] | None) -> dict[str, Any] | None:
     entries: list[dict[str, Any]] = []
+    audit: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw in hints or []:
         if not isinstance(raw, dict):
             continue
         url = normalize_url(safe_text(raw.get("url")))
         if not url.startswith(("http://", "https://")):
+            audit.append({"strategy": "browser-capture", "source": "mediaHints", "url": url, "selected": False, "rejectedReason": "not an http(s) URL"})
             continue
         if not _MEDIA_HINT_HOST_RE.search(url):
+            audit.append({"strategy": "browser-capture", "source": "mediaHints", "url": url, "selected": False, "rejectedReason": "not a supported media URL"})
             continue
         if url in seen:
             continue
@@ -485,11 +529,13 @@ def _info_from_media_hints(page_url: str, hints: list[dict[str, Any]] | None) ->
             "http_headers": headers,
             "extractor": "browser-captured",
         })
+        audit.append({"strategy": "browser-capture", "source": "mediaHints", "url": url, "selected": True, "kind": kind})
         if len(entries) >= 20:
             break
     if not entries:
         return None
     if len(entries) == 1:
+        entries[0]["_source_audit"] = audit
         return entries[0]
     return {
         "_type": "playlist",
@@ -497,6 +543,7 @@ def _info_from_media_hints(page_url: str, hints: list[dict[str, Any]] | None) ->
         "webpage_url": page_url,
         "extractor": "browser-captured",
         "entries": entries,
+        "_source_audit": audit,
     }
 
 
@@ -1162,6 +1209,10 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
     cache_key_str = request_cache_key(req.pageUrl, req.referer, req.cookies)
     if req.pageHtml:
         cache_key_str += "|html:" + hashlib.sha256(req.pageHtml.encode("utf-8")).hexdigest()[:16]
+    if req.sourceAudit:
+        cache_key_str += "|audit:" + hashlib.sha256(
+            json.dumps(req.sourceAudit[:80], sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()[:16]
     if (cached := _cache_get(cache_key_str)) is not None:
         return cached
 
@@ -1170,6 +1221,8 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
     try:
         info = None
         if req.pageHtml:
+            info = extractors.extract_weibo_from_html(req.pageUrl, req.pageHtml)
+        if not info and req.pageHtml:
             info = extractors.extract_curated_site(req.pageUrl, req.cookies, page_html=req.pageHtml)
         if not info:
             info = _info_from_media_hints(req.pageUrl, req.mediaHints)
@@ -1181,7 +1234,9 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
                 subtitles=req.subtitles,
                 sub_langs=req.subLangs,
                 proxy=req.proxy,
+                request_source_audit=req.sourceAudit,
                 ctx=ctx,
+                remove_watermark=req.removeWatermark,
             )
     except HTTPException:
         ctx.emit(status="error")
@@ -1190,12 +1245,14 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
     if info.get("_type") == "playlist" and info.get("entries"):
         response = _to_gallery_response(info)
         response["title"] = info.get("title")
+        _attach_source_audit(response, info, req.sourceAudit)
         _cache_put(cache_key_str, response)
         print(f"[extract] gallery: {len(response['items'])} item(s)")
         ctx.emit()
         return response
 
     response = _to_response(info)
+    _attach_source_audit(response, info, req.sourceAudit)
     response["title"]     = info.get("title")
     response["thumbnail"] = None
     response["duration"]  = info.get("duration")

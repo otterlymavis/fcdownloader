@@ -70,16 +70,80 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
 // ── Detected videos per tab ───────────────────────────────────────────────
 
-const tabState = new Map(); // tabId -> { url, pageUrl, items: [{url, kind, source, ...}] }
+const tabState = new Map(); // tabId -> { url, pageUrl, items: [{url, kind, source, ...}], sourceAudit: [...] }
 const requestHeadersByUrl = new Map();
 
 function ensureTab(tabId, pageUrl) {
   let s = tabState.get(tabId);
   if (!s || s.pageUrl !== pageUrl) {
-    s = { tabId, pageUrl, items: [], preferCapturedMedia: false, updatedAt: Date.now() };
+    s = { tabId, pageUrl, items: [], sourceAudit: [], preferCapturedMedia: false, updatedAt: Date.now() };
     tabState.set(tabId, s);
   }
   return s;
+}
+
+function isSupportedAuditPage(pageUrl) {
+  try {
+    const host = new URL(pageUrl).hostname;
+    return PAGE_HTML_RE.test(host) || SERVER_ONLY_RE.test(pageUrl) || RUNTIME_CAPTURE_HOST_RE.test(pageUrl);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeAuditUrl(raw) {
+  let url = String(raw || "")
+    .replace(/\\u0026/g, "&")
+    .replace(/\\u003d/g, "=")
+    .replace(/\\\//g, "/")
+    .replace(/\\\\/g, "\\")
+    .replace(/&amp;/g, "&")
+    .trim();
+  if (url.startsWith("//")) url = `https:${url}`;
+  return url.replace(/^http:\/\//i, "https://");
+}
+
+function auditSourceCandidate(tabId, pageUrl, candidate) {
+  if (tabId == null || !pageUrl || !candidate) return;
+  const url = normalizeAuditUrl(candidate.url || "");
+  if (url && !/^https?:\/\//i.test(url)) return;
+  const state = ensureTab(tabId, pageUrl);
+  const entry = {
+    strategy: String(candidate.strategy || "browser-capture").slice(0, 80),
+    source: String(candidate.source || "extension").slice(0, 120),
+    url: url || undefined,
+    pageUrl,
+    fieldPath: candidate.fieldPath ? String(candidate.fieldPath).slice(0, 180) : undefined,
+    mimeType: candidate.mimeType ? String(candidate.mimeType).slice(0, 160) : undefined,
+    width: Number.isFinite(Number(candidate.width)) ? Number(candidate.width) : undefined,
+    height: Number.isFinite(Number(candidate.height)) ? Number(candidate.height) : undefined,
+    status: Number.isFinite(Number(candidate.status)) ? Number(candidate.status) : undefined,
+    contentLength: Number.isFinite(Number(candidate.contentLength)) ? Number(candidate.contentLength) : undefined,
+    selected: candidate.selected === true,
+    notes: candidate.notes ? String(candidate.notes).slice(0, 500) : undefined,
+  };
+  const key = [entry.strategy, entry.source, entry.url || "", entry.fieldPath || ""].join("\n");
+  if (state.sourceAudit.some((item) => [item.strategy, item.source, item.url || "", item.fieldPath || ""].join("\n") === key)) return;
+  state.sourceAudit.push(entry);
+  state.sourceAudit = state.sourceAudit.slice(-240);
+  state.updatedAt = Date.now();
+}
+
+function sourceAuditForTab(tabId, pageUrl, extra = []) {
+  const state = tabId != null ? tabState.get(tabId) : null;
+  const combined = [...(state?.sourceAudit || []), ...(Array.isArray(extra) ? extra : [])];
+  const out = [];
+  const seen = new Set();
+  for (const item of combined) {
+    if (!item || typeof item !== "object") continue;
+    const url = normalizeAuditUrl(item.url || "");
+    const key = [item.strategy || "", item.source || "", url, item.fieldPath || ""].join("\n");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ ...item, url: url || undefined, pageUrl: item.pageUrl || pageUrl });
+    if (out.length >= 240) break;
+  }
+  return out;
 }
 
 // Higher = more likely to be "the" video the user wants. Pages that scoop
@@ -226,6 +290,15 @@ function addItem(tabId, pageUrl, item) {
   const s = ensureTab(tabId, pageUrl);
   if (!item || !item.url) return;
   if (item.kind === "image" && isLikelyThumbnailUrl(item.url)) return;
+  auditSourceCandidate(tabId, pageUrl, {
+    url: item.url,
+    strategy: item.source === "network" ? "network-request" : "dom-source",
+    source: item.source || "detected-media",
+    mimeType: item.mime || item.mimeType,
+    width: item.width,
+    height: item.height,
+    selected: true,
+  });
   if (item.source === "weibo-page" || item.source === "japanese-page" || /(?:^|\.)weibo\.(?:com|cn)\//i.test(item.url)) {
     s.items = s.items.filter((i) => !(i.kind === "image" || i.source === "network" || i.source === "image-tag"));
   }
@@ -294,13 +367,29 @@ try {
         const mediaByType = NETWORK_CAPTURE_MEDIA_TYPES.some((type) =>
           contentType.toLowerCase().startsWith(type.toLowerCase())
         );
-        if (!isLikelyMedia(u) && !mediaByType) return;
+        const imageByType = /^image\//i.test(contentType) || IMAGE_EXT_RE.test(u);
+        if (!isLikelyMedia(u) && !mediaByType && !imageByType) return;
 
         chrome.tabs.get(details.tabId).then((tab) => {
           if (!tab?.url) return;
           const replay = requestHeadersByUrl.get(u)?.headers || {};
           const width = Number(details.responseHeaders?.find((h) => /^x-fcdl-video-width$/i.test(h.name))?.value || 0);
           const height = Number(details.responseHeaders?.find((h) => /^x-fcdl-video-height$/i.test(h.name))?.value || 0);
+          const contentLength = Number(details.responseHeaders?.find((h) => /^content-length$/i.test(h.name))?.value || 0);
+          if (isSupportedAuditPage(tab.url) && (imageByType || isLikelyMedia(u) || mediaByType)) {
+            auditSourceCandidate(details.tabId, tab.url, {
+              url: u,
+              strategy: "network-request",
+              source: "chrome.webRequest",
+              mimeType: contentType,
+              status: details.statusCode,
+              contentLength: Number.isFinite(contentLength) && contentLength > 0 ? contentLength : undefined,
+              width: Number.isFinite(width) && width > 0 ? width : undefined,
+              height: Number.isFinite(height) && height > 0 ? height : undefined,
+              selected: false,
+            });
+          }
+          if (!isLikelyMedia(u) && !mediaByType) return;
           addItem(details.tabId, tab.url, {
             url: u,
             kind: mediaKindForResponse(u, contentType),
@@ -395,7 +484,7 @@ async function getSettings() {
 
 // ── Backend extract ───────────────────────────────────────────────────────
 
-async function callExtract(pageUrl, referer, cookies, pageHtml, mediaHints) {
+async function callExtract(pageUrl, referer, cookies, pageHtml, mediaHints, sourceAudit) {
   const { backend } = await getSettings();
   if (!backend) {
     throw new Error(
@@ -407,6 +496,7 @@ async function callExtract(pageUrl, referer, cookies, pageHtml, mediaHints) {
   if (cookies) body.cookies = cookies;
   if (pageHtml) body.pageHtml = pageHtml;
   if (Array.isArray(mediaHints) && mediaHints.length) body.mediaHints = mediaHints.slice(0, 20);
+  if (Array.isArray(sourceAudit) && sourceAudit.length) body.sourceAudit = sourceAudit.slice(0, 240);
 
   // Hard-cap the request. yt-dlp retries + generic-extractor fallback take
   // up to ~20s on hard sites; anything longer is almost certainly a hang.
@@ -459,6 +549,34 @@ async function pageHtmlForTab(tabId, pageUrl) {
   }
 }
 
+function extractAuditCandidatesFromHtml(pageUrl, pageHtml) {
+  if (!pageHtml || !isSupportedAuditPage(pageUrl)) return [];
+  const html = String(pageHtml).slice(0, 1_500_000);
+  const out = [];
+  const seen = new Set();
+  const add = (url, strategy, source, fieldPath) => {
+    url = normalizeAuditUrl(url);
+    if (!/^https?:\/\//i.test(url)) return;
+    if (!/(?:\.(?:m3u8|mpd|mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)|(?:sinaimg\.cn|weibocdn\.com|xhscdn\.com|bilivideo\.com|hdslb\.com|biliimg\.com|pstatic\.net|pximg\.net|kakaocdn\.net|daumcdn\.net|cdninstagram\.com|fbcdn\.net|threadscdn\.com))/i.test(url)) return;
+    if (/(?:avatar|profile|emoji|sprite|favicon|tracking|pixel|blank)/i.test(url)) return;
+    const key = `${strategy}\n${source}\n${url.replace(/\?.*$/, "")}\n${fieldPath || ""}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ url, strategy, source, fieldPath, pageUrl, selected: false });
+  };
+
+  const metaRe = /<meta\s[^>]*(?:property|name)=["']([^"']+)["'][^>]*content=["']([^"']+)["'][^>]*>/gi;
+  let m;
+  while ((m = metaRe.exec(html)) !== null && out.length < 160) {
+    add(m[2], "embedded-metadata", "meta-tag", m[1]);
+  }
+  const urlRe = /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:\.(?:m3u8|mpd|mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif|heic)|(?:sinaimg\.cn|weibocdn\.com|xhscdn\.com|bilivideo\.com|hdslb\.com|biliimg\.com|pstatic\.net|pximg\.net|kakaocdn\.net|daumcdn\.net|cdninstagram\.com|fbcdn\.net|threadscdn\.com))[^"'\\<>\s]*)/gi;
+  while ((m = urlRe.exec(html)) !== null && out.length < 240) {
+    add(m[1], "embedded-metadata", "html-url-regex", "document");
+  }
+  return out;
+}
+
 function mediaHintsForTab(tabId) {
   const state = tabId != null ? tabState.get(tabId) : null;
   return (state?.items || [])
@@ -483,12 +601,261 @@ function localHelperDownloadUrl(pageUrl, youtubeOnly = false) {
   return `http://127.0.0.1:8765/${youtubeOnly ? "youtube-hd" : "download"}?${params.toString()}`;
 }
 
+function decodeWeiboMediaUrl(raw) {
+  let url = String(raw || "")
+    .replace(/\\u0026/g, "&")
+    .replace(/\\u003d/g, "=")
+    .replace(/\\\//g, "/")
+    .replace(/\\\\/g, "\\")
+    .replace(/&amp;/g, "&")
+    .trim()
+    .replace(/^http:\/\//i, "https://");
+  if (url.startsWith("//")) url = `https:${url}`;
+  return url.replace(
+    /\/\/([^/]+\.sinaimg\.cn)\/(?:thumb\d+|thumbnail|square|orj\d+|mw\d+|bmiddle|large)\//i,
+    "//$1/original/",
+  );
+}
+
+const WEIBO_CDN_VARIANTS = ["original", "woriginal", "large", "mw2000", "mw1024", "mw690", "orj960", "orj720", "orj480", "orj360", "bmiddle", "oslarge"];
+
+function weiboAuditFromUrls(pageUrl, urls, source, fieldPath = "weibo-image-url") {
+  const out = [];
+  const seen = new Set();
+  for (const raw of urls || []) {
+    const selectedUrl = decodeWeiboMediaUrl(raw);
+    for (const url of [selectedUrl, ...WEIBO_CDN_VARIANTS.map((variant) =>
+      selectedUrl.replace(/\/\/([^/]+\.sinaimg\.cn)\/(?:thumb\d+|thumbnail|square|orj\d+|mw\d+|bmiddle|large|original|woriginal|oslarge)\//i, `//$1/${variant}/`)
+    )]) {
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      out.push({
+        url,
+        strategy: url === selectedUrl ? source : "cdn-variant",
+        source: url === selectedUrl ? "weibo-client" : "weibo-cdn",
+        fieldPath,
+        pageUrl,
+        selected: url === selectedUrl,
+        notes: url === selectedUrl ? "Selected by extension extraction." : "Generated from known Weibo CDN size path.",
+      });
+    }
+  }
+  return out;
+}
+
+function extractWeiboGalleryFromHtml(pageUrl, pageHtml) {
+  if (!/(?:^|\/\/)(?:m\.)?weibo\.(?:com|cn)\//i.test(pageUrl || "")) return null;
+  const html = String(pageHtml || "");
+  if (!html) return null;
+
+  const titleMatch = html.match(/<meta\s[^>]*?(?:property|name)=["'](?:og:title|twitter:title)["'][^>]*?content=["']([^"']+)["']/i);
+  const title = titleMatch?.[1]
+    ? titleMatch[1].replace(/&amp;/g, "&").replace(/<[^>]+>/g, "").trim()
+    : "Weibo";
+
+  const urls = [];
+  const seen = new Set();
+  const imageRe = /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:sinaimg\.cn|weibocdn\.com)[^"'\\<>\s]*\.(?:jpe?g|png|webp|gif|heic)(?:\?[^"'\\<>\s]*)?)/gi;
+  let m;
+  while ((m = imageRe.exec(html)) !== null && urls.length < 40) {
+    const url = decodeWeiboMediaUrl(m[1]);
+    const lowered = url.toLowerCase();
+    if (/(?:avatar|profile|icon|emoji|face|card)/i.test(lowered)) continue;
+    const key = url.replace(/\?.*$/, "");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    urls.push(url);
+  }
+
+  if (!urls.length) return null;
+  return {
+    kind: "gallery",
+    title,
+    count: urls.length,
+    sourceAudit: weiboAuditFromUrls(pageUrl, urls, "html-metadata", "rendered-html"),
+    items: urls.map((url, idx) => {
+      const ext = (url.match(/\.([a-z0-9]+)(?:[?#]|$)/i)?.[1] || "jpg").toLowerCase();
+      return {
+        kind: "image",
+        url,
+        ext,
+        mimeType: ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : ext === "gif" ? "image/gif" : "image/jpeg",
+        title: `${title} #${idx + 1}`,
+        headers: {
+          Referer: pageUrl,
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        },
+        extractor: "weibo-extension",
+      };
+    }),
+  };
+}
+
 // ── Download orchestration ────────────────────────────────────────────────
 
 
 // Preflight a backend /download URL: fetch the headers, abort the body. If
 // the server is going to respond with JSON (its error format), we return the
 // error text instead of saving garbage as a .mp4.
+function weiboIdFromUrl(pageUrl) {
+  try {
+    const u = new URL(pageUrl);
+    const parts = u.pathname.split("/").filter(Boolean);
+    if (/video\.weibo\.com$/i.test(u.hostname)) return u.searchParams.get("fid") || "";
+    if (parts[0] === "tv" && parts[1] === "show") return parts.slice(2).join("/");
+    if (/m\.weibo\.cn$/i.test(u.hostname) && ["status", "detail"].includes(parts[0])) return parts[1] || "";
+    if (/weibo\.com$/i.test(u.hostname) && parts.length >= 2) return parts[1] || "";
+  } catch {}
+  return "";
+}
+
+function weiboGalleryFromStatus(pageUrl, status) {
+  const meta = status?.data && typeof status.data === "object" ? status.data : status;
+  if (!meta || typeof meta !== "object") return null;
+  const pics = Array.isArray(meta.pics) ? meta.pics : [];
+  const urls = [];
+  const seen = new Set();
+  for (const pic of pics) {
+    const raw = pic?.largest?.url || pic?.large?.url || pic?.original?.url || pic?.url || "";
+    const url = decodeWeiboMediaUrl(raw);
+    if (!url || !/\.(?:jpe?g|png|webp|gif|heic)(?:[?#]|$)/i.test(url)) continue;
+    const key = url.replace(/\?.*$/, "");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    urls.push(url);
+  }
+  if (!urls.length && typeof meta.original_pic === "string") {
+    urls.push(decodeWeiboMediaUrl(meta.original_pic));
+  }
+  if (!urls.length) return null;
+  const title = String(meta.text_raw || meta.text || "Weibo").replace(/<[^>]+>/g, "").trim() || "Weibo";
+  return {
+    kind: "gallery",
+    title,
+    count: urls.length,
+    sourceAudit: weiboAuditFromUrls(pageUrl, urls, "mobile-endpoint", "statuses/show.pics"),
+    cleanSourceStatus: "not_found_in_status_api",
+    items: urls.map((url, idx) => {
+      const ext = (url.match(/\.([a-z0-9]+)(?:[?#]|$)/i)?.[1] || "jpg").toLowerCase();
+      return {
+        kind: "image",
+        url,
+        ext,
+        mimeType: ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : ext === "gif" ? "image/gif" : "image/jpeg",
+        title: `${title} #${idx + 1}`,
+        headers: { Referer: pageUrl },
+        extractor: "weibo-extension",
+      };
+    }),
+  };
+}
+
+function weiboPhotoPageTargets(pageUrl, status) {
+  const meta = status?.data && typeof status.data === "object" ? status.data : status;
+  if (!meta || typeof meta !== "object") return [];
+  const uid = String(meta.user?.id || meta.user?.idstr || "").trim();
+  const mid = String(meta.mid || meta.id || meta.idstr || weiboIdFromUrl(pageUrl) || "").trim();
+  if (!uid || !mid) return [];
+  const pids = [];
+  for (const pic of Array.isArray(meta.pics) ? meta.pics : []) {
+    if (pic?.pid) pids.push(String(pic.pid));
+  }
+  return pids.slice(0, 9).map((pid, idx) => ({
+    pid,
+    index: idx,
+    url: `https://photo.weibo.com/${encodeURIComponent(uid)}/wbphotos/large/mid/${encodeURIComponent(mid)}/pid/${encodeURIComponent(pid)}`,
+  }));
+}
+
+function weiboImageUrlsFromText(text) {
+  const urls = [];
+  const seen = new Set();
+  const re = /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:sinaimg\.cn|weibocdn\.com)[^"'\\<>\s]*\.(?:jpe?g|png|webp|gif|heic)(?:\?[^"'\\<>\s]*)?)/gi;
+  let m;
+  while ((m = re.exec(String(text || ""))) !== null && urls.length < 80) {
+    const url = decodeWeiboMediaUrl(m[1]);
+    if (/(?:avatar|profile|icon|emoji|face|card)/i.test(url)) continue;
+    const key = url.replace(/\?.*$/, "");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    urls.push(url);
+  }
+  return urls;
+}
+
+async function augmentWeiboGalleryWithPhotoPages(pageUrl, status, gallery) {
+  const targets = weiboPhotoPageTargets(pageUrl, status);
+  if (!gallery || !targets.length) return gallery;
+  const audit = Array.isArray(gallery.sourceAudit) ? [...gallery.sourceAudit] : [];
+  const existing = new Set((gallery.items || []).map((item) => String(item.url || "").replace(/\?.*$/, "")));
+  const discovered = [];
+  for (const target of targets) {
+    try {
+      const r = await fetch(target.url, {
+        credentials: "include",
+        headers: { Accept: "text/html,application/xhtml+xml,*/*" },
+      });
+      const text = await r.text().catch(() => "");
+      const urls = weiboImageUrlsFromText(text);
+      audit.push({
+        url: target.url,
+        strategy: "archive-source-platform-lookup",
+        source: "photo.weibo.com",
+        fieldPath: `pics[${target.index}].pid`,
+        status: r.status,
+        selected: false,
+        notes: urls.length
+          ? `Photo page exposed ${urls.length} image URL(s).`
+          : "Photo page did not expose image URLs, or redirected to visitor/login HTML.",
+      });
+      for (const url of urls) {
+        audit.push(...weiboAuditFromUrls(pageUrl, [url], "archive-source-platform-lookup", `photo.weibo.com:${target.pid}`));
+        const key = url.replace(/\?.*$/, "");
+        if (!existing.has(key)) {
+          existing.add(key);
+          discovered.push({ url, sourcePid: target.pid });
+        }
+      }
+    } catch (e) {
+      audit.push({
+        url: target.url,
+        strategy: "archive-source-platform-lookup",
+        source: "photo.weibo.com",
+        fieldPath: `pics[${target.index}].pid`,
+        selected: false,
+        notes: `Photo page probe failed: ${String(e?.message || e).slice(0, 180)}`,
+      });
+    }
+  }
+  gallery.sourceAudit = audit;
+  gallery.cleanSourceStatus = discovered.length ? "alternate_photo_page_candidates_found" : "not_found_after_photo_page_probe";
+  return gallery;
+}
+
+async function extractWeiboGalleryViaApi(pageUrl) {
+  if (!/(?:^|\/\/)(?:m\.)?weibo\.(?:com|cn)\//i.test(pageUrl || "")) return null;
+  const id = weiboIdFromUrl(pageUrl);
+  if (!id) return null;
+  for (const apiUrl of [
+    `https://m.weibo.cn/statuses/show?id=${encodeURIComponent(id)}`,
+    `https://weibo.com/ajax/statuses/show?id=${encodeURIComponent(id)}`,
+  ]) {
+    try {
+      const r = await fetch(apiUrl, {
+        credentials: "include",
+        headers: { Accept: "application/json,text/plain,*/*" },
+      });
+      if (!r.ok) continue;
+      const status = await r.json();
+      const gallery = weiboGalleryFromStatus(pageUrl, status);
+      if (gallery) return await augmentWeiboGalleryWithPhotoPages(pageUrl, status, gallery);
+    } catch (e) {
+      debugWarn("[fcdl] local Weibo API failed:", e?.message || e);
+    }
+  }
+  return null;
+}
+
 function backendErrorMessage(body, fallback = "") {
   const text = String(body || "").trim();
   if (!text) return fallback;
@@ -741,6 +1108,13 @@ async function downloadItem(tabId, item) {
     }
   };
 
+  addRoute("direct Weibo image", item.kind === "image" && isWeiboDirectImageUrl(item.url), async () => {
+    debugLog("[fcdl] â†’ direct Weibo image");
+    const check = await preflightDirectUrl(item.url);
+    if (!check.ok) throw new Error(`Weibo image direct download failed (${check.error})`);
+    return chromeDownload(item.url, suggestedFilename(item, downloadPageUrl, tabTitle));
+  });
+
   addRoute("server stream", (item.url || "").includes("/ytdl-stream?"), async () => {
     debugLog("[fcdl] → ytdl-stream direct download");
     const headers = cookieHeaderList(cookies);
@@ -968,6 +1342,12 @@ function extFromUrl(url) {
   }
 }
 
+function isWeiboDirectImageUrl(url) {
+  const value = String(url || "");
+  return /(?:^|\/\/)(?:[^/]+\.)?(?:sinaimg\.cn|weibocdn\.com)\//i.test(value) &&
+    IMAGE_EXT_RE.test(value);
+}
+
 // ── Gallery downloads — Instagram carousel, Reddit gallery, Threads ───────
 
 function sanitizeForFile(s, max = 60) {
@@ -1016,8 +1396,9 @@ async function downloadGalleryItem(title, index, item, ctx) {
   const sourceUrl = item.kind === "paired" ? (item.videoUrl || item.url) : item.url;
   if (!sourceUrl) throw new Error(`gallery item ${index} has no URL`);
 
-  const hasReplayHeaders = Boolean(item.headers && Object.keys(item.headers).length);
-  const canTryDirect = !ctx?.cookies && !hasReplayHeaders && !PROXY_REQUIRED_RE.test(sourceUrl);
+  const weiboDirectImage = item.kind === "image" && isWeiboDirectImageUrl(sourceUrl);
+  const hasReplayHeaders = !weiboDirectImage && Boolean(item.headers && Object.keys(item.headers).length);
+  const canTryDirect = weiboDirectImage || (!ctx?.cookies && !hasReplayHeaders && !PROXY_REQUIRED_RE.test(sourceUrl));
   if (canTryDirect) {
     try {
       const check = await preflightDirectUrl(sourceUrl);
@@ -1032,6 +1413,8 @@ async function downloadGalleryItem(title, index, item, ctx) {
     { ...item, url: sourceUrl },
     { ...(ctx || {}), filename },
   );
+  const check = await preflightBackendUrl(proxied, cookieHeaderList(ctx?.cookies));
+  if (!check.ok) throw new Error(`Proxy: ${check.error}`);
   return chromeDownload(proxied, filename, cookieHeaderList(ctx?.cookies));
 }
 
@@ -1129,8 +1512,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const cookies = await cookieHeaderFor(msg.referer || msg.pageUrl);
         const pageHtml = await pageHtmlForTab(msg.tabId, msg.pageUrl);
         const mediaHints = mediaHintsForTab(msg.tabId);
+        const htmlAudit = extractAuditCandidatesFromHtml(msg.pageUrl, pageHtml);
+        for (const candidate of htmlAudit) auditSourceCandidate(msg.tabId, msg.pageUrl, candidate);
+        const sourceAudit = sourceAuditForTab(msg.tabId, msg.pageUrl, htmlAudit);
+        const weiboGallery = extractWeiboGalleryFromHtml(msg.pageUrl, pageHtml);
+        if (weiboGallery) {
+          debugLog("[fcdl] extract local Weibo gallery:", weiboGallery.items.length);
+          const apiAugmented = await extractWeiboGalleryViaApi(msg.pageUrl);
+          if (apiAugmented?.sourceAudit?.length) {
+            weiboGallery.sourceAudit = [
+              ...(weiboGallery.sourceAudit || []),
+              ...apiAugmented.sourceAudit,
+            ];
+            weiboGallery.cleanSourceStatus = apiAugmented.cleanSourceStatus;
+          }
+          weiboGallery.sourceAudit = sourceAuditForTab(msg.tabId, msg.pageUrl, weiboGallery.sourceAudit);
+          sendResponse({ ok: true, info: weiboGallery });
+          return;
+        }
+        const weiboApiGallery = await extractWeiboGalleryViaApi(msg.pageUrl);
+        if (weiboApiGallery) {
+          debugLog("[fcdl] extract Weibo API gallery:", weiboApiGallery.items.length);
+          weiboApiGallery.sourceAudit = sourceAuditForTab(msg.tabId, msg.pageUrl, weiboApiGallery.sourceAudit);
+          sendResponse({ ok: true, info: weiboApiGallery });
+          return;
+        }
         debugLog("[fcdl] extract →", msg.pageUrl, "cookies:", cookies.length, "chars", "html:", pageHtml.length, "chars", "hints:", mediaHints.length);
-        const info = await callExtract(msg.pageUrl, msg.referer || null, cookies || null, pageHtml || null, mediaHints);
+        const info = await callExtract(msg.pageUrl, msg.referer || null, cookies || null, pageHtml || null, mediaHints, sourceAudit);
         debugLog("[fcdl] extract ←", Date.now() - t0, "ms, kind=", info?.kind);
         sendResponse({ ok: true, info });
       } catch (e) {
@@ -1140,7 +1548,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (/No extractor found for this URL and the page HTML contained no detectable media/i.test(error)) {
           preferRuntimeCapturedMedia(msg.tabId, msg.pageUrl);
         }
-        sendResponse({ ok: false, error });
+        sendResponse({ ok: false, error, sourceAudit: sourceAuditForTab(msg.tabId, msg.pageUrl) });
       }
       return;
     }

@@ -14,12 +14,13 @@ export const FONT_SCALE: Record<FontSizePref, number> = {
 };
 
 interface Settings {
-  theme:    ThemePref;
-  fontSize: FontSizePref;
-  language: LanguagePref;
+  theme:           ThemePref;
+  fontSize:        FontSizePref;
+  language:        LanguagePref;
+  removeWatermark: boolean;
 }
 
-const DEFAULT: Settings = { theme: 'system', fontSize: 'medium', language: 'system' };
+const DEFAULT: Settings = { theme: 'system', fontSize: 'medium', language: 'system', removeWatermark: false };
 const KEY = '@fcdownloader/settings_v1';
 
 export function useSettings() {
@@ -42,14 +43,16 @@ export function useSettings() {
   const resolvedLanguage = settings.language === 'system' ? getSystemLanguage() : settings.language;
 
   return {
-    theme:            settings.theme,
-    fontSize:         settings.fontSize,
-    fontScale:        FONT_SCALE[settings.fontSize],
-    language:         settings.language,
+    theme:               settings.theme,
+    fontSize:            settings.fontSize,
+    fontScale:           FONT_SCALE[settings.fontSize],
+    language:            settings.language,
     resolvedLanguage,
-    setTheme:         (v: ThemePref)    => save({ theme: v }),
-    setFontSize:      (v: FontSizePref) => save({ fontSize: v }),
-    setLanguage:      (v: LanguagePref) => save({ language: v }),
+    removeWatermark:     settings.removeWatermark,
+    setTheme:            (v: ThemePref)    => save({ theme: v }),
+    setFontSize:         (v: FontSizePref) => save({ fontSize: v }),
+    setLanguage:         (v: LanguagePref) => save({ language: v }),
+    setRemoveWatermark:  (v: boolean)      => save({ removeWatermark: v }),
   };
 }
 

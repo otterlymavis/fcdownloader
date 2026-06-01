@@ -27,6 +27,23 @@ export interface FormatOption {
   filesizeApprox?: number;
 }
 
+export interface SourceAuditEntry {
+  strategy: string;
+  source: string;
+  url?: string;
+  selected?: boolean;
+  rejectedReason?: string;
+  fieldPath?: string;
+  mimeType?: string;
+  width?: number;
+  height?: number;
+  bitrate?: number;
+  contentLength?: number;
+  status?: number;
+  headersNeeded?: Record<string, string>;
+  notes?: string;
+}
+
 /** Where the URL was first observed. Ordered from highest to lowest signal strength. */
 export type Provenance =
   | 'yt-player-response'    // ytInitialPlayerResponse.streamingData (strongest signal)
@@ -70,6 +87,7 @@ export interface DetectedMedia {
   extractor?: string;
   formatId?: string;
   availableFormats?: FormatOption[];
+  sourceAudit?: SourceAuditEntry[];
   forceServerDownload?: boolean;
   audioOnly?: boolean;
   subtitles?: boolean;
