@@ -1311,8 +1311,215 @@ def _weibo_best_format(media_info: dict[str, Any]) -> dict[str, Any] | None:
     return sorted(candidates, key=score)[-1]
 
 
+def _weibo_clean_media_url(url: str) -> str:
+    clean = html.unescape(
+        url.replace("\\u0026", "&")
+           .replace("\\u003d", "=")
+           .replace("\\/", "/")
+           .replace("\\\\", "\\")
+           .strip()
+           .strip('"\'(),;')
+    )
+    if clean.startswith("//"):
+        clean = "https:" + clean
+    clean = re.sub(r"^http://", "https://", clean)
+    if "sinaimg.cn/" in clean:
+        # Prefer Weibo's highest common CDN variant. This is not evidence that
+        # the asset is watermark-free; the source audit records all variants.
+        clean = re.sub(
+            r"//([^/]+\.sinaimg\.cn)/(?:thumb\d+|thumbnail|square|orj\d+|mw\d+|bmiddle|large)/",
+            r"//\1/original/",
+            clean,
+            flags=re.I,
+        )
+    return clean
+
+
+_WEIBO_CDN_VARIANTS = (
+    "original",
+    "woriginal",
+    "large",
+    "mw2000",
+    "mw1024",
+    "mw690",
+    "orj960",
+    "orj720",
+    "orj480",
+    "orj360",
+    "bmiddle",
+    "oslarge",
+)
+
+
+def _weibo_cdn_variant_url(url: str, variant: str) -> str | None:
+    clean = _weibo_clean_media_url(url)
+    if not clean or "sinaimg.cn/" not in clean:
+        return None
+    raw = re.sub(
+        r"//([^/]+\.sinaimg\.cn)/(?:thumb\d+|thumbnail|square|orj\d+|mw\d+|bmiddle|large|original|woriginal|oslarge)/",
+        rf"//\1/{variant}/",
+        clean,
+        flags=re.I,
+    )
+    return raw if raw != clean or f"/{variant}/" in clean else None
+
+
+def _weibo_add_audit(
+    audit: list[dict[str, Any]] | None,
+    *,
+    url: str | None,
+    strategy: str,
+    source: str,
+    field_path: str | None = None,
+    selected: bool = False,
+    variant: str | None = None,
+    notes: str | None = None,
+) -> None:
+    if audit is None or not url:
+        return
+    clean = _weibo_clean_media_url(url)
+    if not clean.startswith("http"):
+        return
+    lowered = clean.lower()
+    if not re.search(r"(?:sinaimg\.cn|weibocdn\.com).*\.(?:jpg|jpeg|png|webp|gif|heic)(?:[?#]|$)", lowered):
+        return
+    item: dict[str, Any] = {
+        "url": clean,
+        "strategy": strategy,
+        "source": source,
+        "selected": selected,
+    }
+    if field_path:
+        item["fieldPath"] = field_path
+    if variant:
+        item["variant"] = variant
+    if notes:
+        item["notes"] = notes
+    audit.append(item)
+
+
+def _weibo_add_cdn_variant_audit(
+    audit: list[dict[str, Any]] | None,
+    url: str | None,
+    source: str,
+    field_path: str | None = None,
+) -> None:
+    if audit is None or not url:
+        return
+    for variant in _WEIBO_CDN_VARIANTS:
+        variant_url = _weibo_cdn_variant_url(url, variant)
+        if variant_url:
+            _weibo_add_audit(
+                audit,
+                url=variant_url,
+                strategy="cdn-variant",
+                source=source,
+                field_path=field_path,
+                variant=variant,
+                selected=(variant == "original"),
+                notes="Generated from a Weibo CDN size path; availability and watermark status require fetch comparison.",
+            )
+
+
+def _weibo_pic_url(pic: Any) -> str | None:
+    if not isinstance(pic, dict):
+        return None
+    for key in ("original", "largest", "large", "pic_big", "pic"):
+        value = pic.get(key)
+        if isinstance(value, dict) and isinstance(value.get("url"), str):
+            return _weibo_clean_media_url(value["url"])
+        if isinstance(value, str):
+            return _weibo_clean_media_url(value)
+    for key in ("original_pic", "large_url", "url"):
+        value = pic.get(key)
+        if isinstance(value, str):
+            return _weibo_clean_media_url(value)
+    return None
+
+
+def _weibo_image_entry(url: str, title: str | None, idx: int, page_url: str, post_id: str) -> dict[str, Any]:
+    return {
+        "id": f"{post_id}_{idx}",
+        "title": title or f"Weibo Image #{idx}",
+        "url": url,
+        "ext": guess_ext_from_url(url) or "jpg",
+        "protocol": "https",
+        "http_headers": {
+            "Referer": page_url if "weibo" in page_url else "https://weibo.com/",
+            "User-Agent": _WEIBO_DESKTOP_UA,
+        },
+        "thumbnail": url,
+        "extractor": "weibo",
+    }
+
+
+def _weibo_image_urls_from_meta(
+    meta: dict[str, Any],
+    audit: list[dict[str, Any]] | None = None,
+    source: str = "api-source",
+) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add(url: str | None, field_path: str | None = None) -> None:
+        if not url:
+            return
+        clean = _weibo_clean_media_url(url)
+        lowered = clean.lower()
+        if not clean.startswith("http"):
+            return
+        if not re.search(r"(?:sinaimg\.cn|weibocdn\.com).*\.(?:jpg|jpeg|png|webp|gif|heic)(?:[?#]|$)", lowered):
+            return
+        if any(skip in lowered for skip in ("avatar", "profile", "icon", "emoji", "face", "card")):
+            return
+        dedup = re.sub(r"\?.*$", "", clean)
+        if dedup in seen:
+            return
+        seen.add(dedup)
+        _weibo_add_audit(
+            audit,
+            url=url,
+            strategy=source,
+            source="weibo-status-json",
+            field_path=field_path,
+            selected=True,
+        )
+        _weibo_add_cdn_variant_audit(audit, url, "weibo-cdn", field_path)
+        urls.append(clean)
+
+    pics = meta.get("pics")
+    if isinstance(pics, list):
+        for idx, pic in enumerate(pics):
+            if isinstance(pic, dict):
+                for key in ("original", "largest", "large", "pic_big", "pic", "url", "original_pic", "large_url"):
+                    value = pic.get(key)
+                    if isinstance(value, dict) and isinstance(value.get("url"), str):
+                        add(value["url"], f"pics[{idx}].{key}.url")
+                    elif isinstance(value, str):
+                        add(value, f"pics[{idx}].{key}")
+            else:
+                add(_weibo_pic_url(pic), f"pics[{idx}]")
+
+    mix_items = _json_get_path(meta, "mix_media_info", "items")
+    if isinstance(mix_items, list):
+        for idx, item in enumerate(mix_items):
+            if not isinstance(item, dict) or item.get("type") != "pic":
+                continue
+            data = item.get("data")
+            if isinstance(data, dict):
+                add(_weibo_pic_url(data), f"mix_media_info.items[{idx}].data")
+                add(_weibo_pic_url(data.get("pic_info")), f"mix_media_info.items[{idx}].data.pic_info")
+
+    for key in ("original_pic", "bmiddle_pic", "thumbnail_pic"):
+        value = meta.get(key)
+        if isinstance(value, str):
+            add(value, key)
+
+    return urls
+
+
 def _weibo_parse_post(
-    meta: dict[str, Any], page_url: str
+    meta: dict[str, Any], page_url: str, audit: list[dict[str, Any]] | None = None
 ) -> dict[str, Any] | None:
     entries: list[dict[str, Any]] = []
 
@@ -1363,42 +1570,10 @@ def _weibo_parse_post(
     add_video_from_media_info(top_media_info)
 
     if not entries:
-        pics = meta.get("pics")
-        if isinstance(pics, list) and pics:
-            for idx, pic in enumerate(pics):
-                if not isinstance(pic, dict):
-                    continue
-                pic_url = _json_get_path(pic, "large", "url") or pic.get("url")
-                if not pic_url:
-                    continue
-                entries.append({
-                    "id": f"{meta.get('id') or meta.get('mid')}_{idx+1}",
-                    "title": meta.get("text_raw") or f"Weibo Image #{idx+1}",
-                    "url": pic_url,
-                    "ext": guess_ext_from_url(pic_url) or "jpg",
-                    "protocol": "https",
-                    "http_headers": {
-                        "Referer": "https://weibo.com/",
-                        "User-Agent": _WEIBO_DESKTOP_UA,
-                    },
-                    "thumbnail": pic.get("url"),
-                    "extractor": "weibo",
-                })
-        elif isinstance(meta.get("original_pic"), str):
-            pic_url = meta["original_pic"]
-            entries.append({
-                "id": str(meta.get('id') or meta.get('mid') or cache_key(pic_url)),
-                "title": meta.get("text_raw") or "Weibo Image",
-                "url": pic_url,
-                "ext": guess_ext_from_url(pic_url) or "jpg",
-                "protocol": "https",
-                "http_headers": {
-                    "Referer": "https://weibo.com/",
-                    "User-Agent": _WEIBO_DESKTOP_UA,
-                },
-                "thumbnail": meta.get("bmiddle_pic") or pic_url,
-                "extractor": "weibo",
-            })
+        title = meta.get("text_raw") if isinstance(meta.get("text_raw"), str) else None
+        post_id = str(meta.get("id") or meta.get("id_str") or meta.get("mid") or cache_key(page_url))
+        for idx, pic_url in enumerate(_weibo_image_urls_from_meta(meta, audit=audit, source="api-source"), start=1):
+            entries.append(_weibo_image_entry(pic_url, title, idx, page_url, post_id))
 
     if not entries:
         return None
@@ -1420,13 +1595,16 @@ def _weibo_parse_post(
     )
 
     if len(entries) > 1:
-        return {
+        playlist = {
             "_type":     "playlist",
             "entries":   entries,
             "title":     title,
             "thumbnail": thumb,
             "id":        post_id,
         }
+        if audit:
+            playlist["_source_audit"] = audit
+        return playlist
 
     single = entries[0]
     single.setdefault("id", post_id)
@@ -1436,16 +1614,165 @@ def _weibo_parse_post(
         "Referer": "https://weibo.com/",
         "User-Agent": _WEIBO_DESKTOP_UA,
     })
+    if audit:
+        single["_source_audit"] = audit
     return single
+
+
+def extract_weibo_from_html(page_url: str, page_html: str | None) -> dict[str, Any] | None:
+    """Extract Weibo photo posts from already-rendered tab HTML.
+
+    This is intentionally local/HTML-first: Weibo's server API can stall or
+    redirect from datacenter IPs, while the user's open tab already contains
+    the hydrated post JSON and image URLs.
+    """
+    if not page_html or not any(h in page_url for h in ("weibo.com", "weibo.cn")):
+        return None
+
+    html_text = page_html[:1_500_000]
+    metas: list[dict[str, Any]] = []
+    audit: list[dict[str, Any]] = [{
+        "strategy": "html-metadata",
+        "source": "rendered-page-html",
+        "pageUrl": page_url,
+        "notes": "Captured from the user's tab HTML before backend fallback.",
+        "selected": False,
+    }]
+
+    def _json_array_after(marker: str) -> Any:
+        pos = html_text.find(marker)
+        if pos < 0:
+            return None
+        start = html_text.find("[", pos)
+        if start < 0:
+            return None
+        depth = 0
+        in_str = False
+        esc = False
+        quote = ""
+        for idx in range(start, len(html_text)):
+            ch = html_text[idx]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == quote:
+                    in_str = False
+                continue
+            if ch in ("'", '"'):
+                in_str = True
+                quote = ch
+            elif ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(html_text[start:idx + 1])
+                    except Exception:
+                        return None
+        return None
+
+    for marker in ("window.$render_data", "$render_data"):
+        parsed = _json_array_after(marker)
+        if not parsed:
+            continue
+        for item in parsed if isinstance(parsed, list) else [parsed]:
+            status = item.get("status") if isinstance(item, dict) else None
+            if isinstance(status, dict):
+                metas.append(status)
+            elif isinstance(item, dict):
+                metas.append(item)
+        if metas:
+            break
+
+    title: str | None = None
+    title_m = re.search(
+        r'<meta\s[^>]*?(?:property|name)\s*=\s*["\'](?:og:title|twitter:title)["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']',
+        html_text,
+        re.I | re.S,
+    )
+    if title_m:
+        title = re.sub(r"\s+", " ", html.unescape(title_m.group(1))).strip()
+
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add(url: str, field_path: str | None = None, strategy: str = "html-metadata") -> None:
+        clean = _weibo_clean_media_url(url)
+        if not re.search(r"(?:sinaimg\.cn|weibocdn\.com).*\.(?:jpg|jpeg|png|webp|gif|heic)(?:[?#]|$)", clean, re.I):
+            return
+        lowered = clean.lower()
+        if any(skip in lowered for skip in ("avatar", "profile", "icon", "emoji", "face", "card")):
+            return
+        dedup = re.sub(r"\?.*$", "", clean)
+        if dedup in seen:
+            return
+        seen.add(dedup)
+        _weibo_add_audit(
+            audit,
+            url=url,
+            strategy=strategy,
+            source="rendered-page-html",
+            field_path=field_path,
+            selected=True,
+        )
+        _weibo_add_cdn_variant_audit(audit, url, "weibo-cdn", field_path)
+        urls.append(clean)
+
+    for meta in metas:
+        if isinstance(meta.get("text_raw"), str) and not title:
+            title = re.sub(r"<[^>]+>", "", html.unescape(meta["text_raw"])).strip()
+        for url in _weibo_image_urls_from_meta(meta, audit=audit, source="html-metadata"):
+            add(url, "window.$render_data.status")
+
+    if not urls:
+        for match in re.finditer(
+            r'https?:\\?/\\?/[^"\'<>\s\\]*(?:sinaimg\.cn|weibocdn\.com)[^"\'<>\s\\]*\.(?:jpg|jpeg|png|webp|gif|heic)(?:\?[^"\'<>\s\\]*)?',
+            html_text,
+            re.I,
+        ):
+            add(match.group(0), "html-url-regex", "embedded-metadata")
+
+    if not urls:
+        return None
+
+    post_id = _weibo_id_from_url(page_url) or cache_key(page_url)
+    entries = [
+        _weibo_image_entry(url, title, idx, page_url, post_id)
+        for idx, url in enumerate(urls[:40], start=1)
+    ]
+    print(f"[weibo] html gallery: {len(entries)} image(s)")
+    return {
+        "_type": "playlist",
+        "entries": entries,
+        "title": title or "Weibo",
+        "thumbnail": entries[0]["url"],
+        "id": post_id,
+        "extractor": "weibo",
+        "_source_audit": audit,
+    }
 
 
 def extract_weibo(page_url: str, cookies: str | None) -> dict[str, Any] | None:
     import urllib.request
+    import urllib.parse
+    audit: list[dict[str, Any]] = []
     if "mapp.api.weibo.cn" in page_url:
         try:
             req = urllib.request.Request(page_url, headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"})
             with urllib.request.urlopen(req, timeout=10) as resp:
-                page_url = resp.url
+                final_url = resp.url
+            # When the server IP is not logged in, Weibo redirects to
+            # passport.weibo.cn/visitor?url=https%3A%2F%2Fm.weibo.cn%2F...
+            # Extract the embedded target URL from the url= parameter.
+            if "passport.weibo" in final_url:
+                qs = urllib.parse.parse_qs(urllib.parse.urlsplit(final_url).query)
+                embedded = (qs.get("url") or [""])[0]
+                page_url = embedded if embedded else final_url
+            else:
+                page_url = final_url
         except Exception:
             pass
 
@@ -1476,6 +1803,13 @@ def extract_weibo(page_url: str, cookies: str | None) -> dict[str, Any] | None:
         cookies,
         query={"id": video_id},
     )
+    audit.append({
+        "strategy": "api-source",
+        "source": "desktop-web-api",
+        "url": f"https://weibo.com/ajax/statuses/show?id={video_id}",
+        "selected": bool(meta and meta.get("ok") != -100),
+        "notes": "Weibo desktop status JSON endpoint attempted.",
+    })
     if not meta or meta.get("ok") == -100 or ("id" not in meta and "data" not in meta):
         meta = _download_weibo_json(
             "https://m.weibo.cn/statuses/show",
@@ -1483,18 +1817,27 @@ def extract_weibo(page_url: str, cookies: str | None) -> dict[str, Any] | None:
             cookies,
             query={"id": video_id},
         )
+        audit.append({
+            "strategy": "mobile-endpoint",
+            "source": "mobile-web-api",
+            "url": f"https://m.weibo.cn/statuses/show?id={video_id}",
+            "selected": bool(meta and meta.get("ok") != -100),
+            "notes": "Weibo mobile status JSON endpoint attempted after desktop endpoint failed or returned visitor auth.",
+        })
     if isinstance(meta, dict) and isinstance(meta.get("data"), dict):
         meta = meta["data"]
 
-    parsed = _weibo_parse_post(meta, page_url) if meta else None
+    parsed = _weibo_parse_post(meta, page_url, audit=audit) if meta else None
     if parsed:
         count = len(parsed.get("entries") or [parsed])
         print(f"[weibo] extracted {count} media item(s) via ajax/statuses/show")
     return parsed
-                "protocol": "https",
-                "http_headers": {},
-            }
-    except Exception:
-        pass
 
-    return None
+
+# Platform extractors for XHS, Bilibili, TikTok, Reddit
+from new_extractors import (  # noqa: E402
+    extract_xiaohongshu,
+    extract_bilibili,
+    extract_tiktok,
+    extract_reddit,
+)

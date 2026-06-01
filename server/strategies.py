@@ -758,7 +758,9 @@ def run_extraction(
     import re
     direct_media = re.search(
         r"(?:\.(?:mp4|webm|mov|m4v|m3u8|mpd)(?:[?#]|$)"
-        r"|bilivideo\.com/|weibocdn\.com/|xhscdn\.com/"
+        # bilivideo.com: only .mp4/.flv are complete; .m4s are DASH video-only segments
+        r"|bilivideo\.com/.*\.(?:mp4|flv)(?:[?#]|$)"
+        r"|weibocdn\.com/|xhscdn\.com/"
         r"|cdninstagram\.com/|scontent[-\w]*\.cdninstagram\.com/"
         r"|fbcdn\.net/|threadscdn\.com/)",
         page_url,
@@ -821,9 +823,11 @@ def run_extraction(
         ]
     else:
         # Non-YouTube pipeline — full strategy sweep.
+        platform_first = any(h in page_url for h in ("weibo.com", "weibo.cn", "video.weibo.com"))
+        platform_strategy = ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies))
+        ytdlp_strategy = ("yt-dlp", lambda: _strategy_ydl(page_url, ydl_opts, False))
         strategies: list[tuple[str, Callable[[], dict[str, Any]]]] = [
-            ("yt-dlp",                   lambda: _strategy_ydl(page_url, ydl_opts, False)),
-            ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies)),
+            *([platform_strategy, ytdlp_strategy] if platform_first else [ytdlp_strategy, platform_strategy]),
             *(
                 [("ytdl-stream", lambda: _strategy_ytdl_stream_url(page_url, ydl_opts, cookies))]
                 if _server_stream_supported(page_url) else []
