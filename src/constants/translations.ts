@@ -97,27 +97,6 @@ export type TranslationKey =
   | 'browseForMedia'
   | 'pasteMediaUrlPlaceholder';
 
-export const LANGUAGE_LABELS: Record<CommonLanguageCode, string> = {
-  en: 'English',
-  es: 'Español',
-  fr: 'Français',
-  de: 'Deutsch',
-  pt: 'Português',
-  it: 'Italiano',
-  ja: '日本語',
-  ko: '한국어',
-  zh: '简体中文',
-  'zh-hant': '繁體中文',
-  hi: 'हिन्दी',
-  ar: 'العربية',
-  ru: 'Русский',
-  // Keep rest of standard codes mapped to avoid TS compiler type mismatches, falling back to label or English name
-  id: 'Bahasa Indonesia',
-  tr: 'Türkçe',
-  vi: 'Tiếng Việt',
-  th: 'ไทย',
-};
-
 export const TRANSLATIONS: Record<CommonLanguageCode, Record<TranslationKey, string>> = {
   en: {
     downloader: 'Downloader',

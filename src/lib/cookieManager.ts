@@ -30,7 +30,3 @@ export async function extractSessionCookies(url: string): Promise<string> {
 
   return '';
 }
-
-export async function clearAllCookies(): Promise<void> {
-  await CookieManager.clearAll(true);
-}
