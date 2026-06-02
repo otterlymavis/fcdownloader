@@ -627,6 +627,95 @@ class TestXiaohongshuExtractor:
         ) is None
 
 
+class TestWatermarkFreeSourceExtractor:
+    def test_douyin_builds_aweme_play_url_from_router_data(self, monkeypatch):
+        html = """
+        <script>
+        window._ROUTER_DATA={
+          "loaderData":{
+            "video_(123)":{
+              "videoInfo":{
+                "desc":"Clean Douyin sample",
+                "video":{"play_addr":{"uri":"v0200fg10000samplevideoid"}}
+              }
+            }
+          }
+        };
+        </script>
+        """.encode()
+
+        monkeypatch.setattr("new_extractors._fetch", lambda *args, **kwargs: html)
+
+        info = extractors.extract_watermark_free_source(
+            "https://www.douyin.com/video/123",
+            None,
+        )
+
+        assert info is not None
+        assert info["extractor"] == "douyin-watermark-free-source"
+        assert info["title"] == "Clean Douyin sample"
+        assert info["url"] == (
+            "https://aweme.snssdk.com/aweme/v1/play/"
+            "?video_id=v0200fg10000samplevideoid&ratio=1080p&line=0"
+        )
+        assert any(
+            item.get("strategy") == "watermark-free source"
+            for item in info.get("_source_audit") or []
+        )
+
+    def test_douyin_builds_aweme_play_url_from_html_video_id(self, monkeypatch):
+        html = """
+        <html><head><title>Douyin精选</title></head>
+        <body><script>window.__data={"video_id":"v0d00fg10000d6j670vog65psicuq70g"}</script></body></html>
+        """.encode()
+
+        monkeypatch.setattr("new_extractors._fetch", lambda *args, **kwargs: html)
+
+        info = extractors.extract_watermark_free_source(
+            "https://jingxuan.douyin.com/m/video/7613238124713413934",
+            None,
+        )
+
+        assert info is not None
+        assert info["id"] == "v0d00fg10000d6j670vog65psicuq70g"
+        assert info["url"] == (
+            "https://aweme.snssdk.com/aweme/v1/play/"
+            "?video_id=v0d00fg10000d6j670vog65psicuq70g&ratio=1080p&line=0"
+        )
+
+    def test_remove_watermark_prefers_source_before_proxy(self, monkeypatch):
+        import strategies
+
+        calls = []
+
+        def fake_source(page_url, cookies):
+            calls.append("source")
+            return {
+                "id": "v0200fg10000samplevideoid",
+                "title": "Clean Douyin sample",
+                "url": "https://aweme.snssdk.com/aweme/v1/play/?video_id=v0200fg10000samplevideoid&ratio=1080p&line=0",
+                "ext": "mp4",
+                "protocol": "https",
+                "http_headers": {},
+            }
+
+        def fake_snapwc(page_url):
+            calls.append("snapwc")
+            return None
+
+        monkeypatch.setattr("extractors.extract_watermark_free_source", fake_source)
+        monkeypatch.setattr("extractors.extract_via_snapwc", fake_snapwc)
+
+        result = strategies.run_extraction(
+            "https://www.douyin.com/video/123",
+            cookies=None,
+            remove_watermark=True,
+        )
+
+        assert result["url"].startswith("https://aweme.snssdk.com/aweme/v1/play/")
+        assert calls == ["source"]
+
+
 class TestCuratedSiteExtractor:
     def test_oricon_photo_page_expands_full_gallery(self, monkeypatch):
         pages = {
