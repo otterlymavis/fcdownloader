@@ -34,11 +34,13 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -1131,6 +1133,86 @@ def _direct_media_stream(
     return StreamingResponse(stream(), media_type=content_type, headers=out_headers)
 
 
+# Mobile-app POST /download only. Real-time proxying of a large CDN stream can
+# exceed the platform's streaming-duration limit and reset mid-transfer (the
+# mobile client reads the body as one long stream and can't resume). Buffer the
+# whole file to a server-side temp file first, then stream it from local disk —
+# the client-facing transfer is then fast and completes well within limits, and
+# Content-Length is always exact. The browser-driven GET /download path keeps
+# using the real-time _direct_media_stream (browsers resume on their own).
+_MAX_BUFFER_BYTES = 600 * 1024 * 1024  # safety cap; abort runaway downloads
+
+def _buffered_direct_media_stream(
+    media_url: str,
+    request_headers: dict[str, str],
+    response_headers: dict[str, str],
+) -> StreamingResponse:
+    media_url = normalize_url(media_url)
+    headers = safe_headers({"User-Agent": MOBILE_UA, "Accept": "*/*", **(request_headers or {})})
+    tmpdir = tempfile.mkdtemp(prefix="fcdl_buf_")
+    filepath = os.path.join(tmpdir, "media")
+
+    def _cleanup() -> None:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    try:
+        upstream = _open_direct_media(media_url, headers)
+    except urllib.error.HTTPError as exc:  # type: ignore[attr-defined]
+        _cleanup()
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="replace")[:240]
+        except Exception:
+            pass
+        raise HTTPException(exc.code, f"upstream: {body or exc.reason}")
+    except Exception as exc:  # noqa: BLE001
+        _cleanup()
+        raise HTTPException(502, f"upstream: {str(exc)[:240]}")
+
+    content_type = _response_header(upstream, "Content-Type", "video/mp4")
+    try:
+        written = 0
+        with open(filepath, "wb") as f:
+            while True:
+                chunk = upstream.read(256 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > _MAX_BUFFER_BYTES:
+                    raise HTTPException(413, "media exceeds server buffer limit")
+                f.write(chunk)
+    except HTTPException:
+        _cleanup()
+        raise
+    except Exception as exc:  # noqa: BLE001 — upstream reset while buffering
+        _cleanup()
+        raise HTTPException(502, f"buffering failed: {str(exc)[:200]}")
+    finally:
+        try:
+            upstream.close()
+        except Exception:
+            pass
+
+    filesize = os.path.getsize(filepath)
+    if filesize == 0:
+        _cleanup()
+        raise HTTPException(502, "upstream returned an empty body")
+    out_headers = {**response_headers, "Content-Length": str(filesize)}
+
+    def stream() -> Iterator[bytes]:
+        try:
+            with open(filepath, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    yield chunk
+        finally:
+            _cleanup()
+
+    return StreamingResponse(stream(), media_type=content_type, headers=out_headers)
+
+
 def _ffmpeg_version() -> str | None:
     try:
         proc = subprocess.run(
@@ -1419,7 +1501,7 @@ def download_post(request: Request, req: DownloadRequest) -> StreamingResponse:
                 media_type="video/mp4",
                 headers=headers,
             )
-        return _direct_media_stream(req.pageUrl, request_headers, headers)
+        return _buffered_direct_media_stream(req.pageUrl, request_headers, headers)
 
     info = run_extraction_with_format(
         req.pageUrl, referer=req.referer, cookies=req.cookies, format_id=req.formatId,
@@ -1468,7 +1550,8 @@ def download_post(request: Request, req: DownloadRequest) -> StreamingResponse:
                 media_type="video/mp4",
                 headers={**headers, "Content-Length": str(_fsz), "X-Request-ID": rid},
             )
-    return _direct_media_stream(response["url"], request_headers, headers)
+    # Buffer to disk then serve (mobile clients can't resume a reset stream).
+    return _buffered_direct_media_stream(response["url"], request_headers, headers)
 
 
 # ── /ytdl-stream ──────────────────────────────────────────────────────────────
