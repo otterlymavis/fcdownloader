@@ -99,6 +99,10 @@ function isRetryableDownloadError(err: Error): boolean {
   if (msg.includes('cancelled')) return false;
   // 5xx gateway hiccups (proxy cold start / upstream) are retryable; 4xx is not.
   if (/\((?:5\d\d)\)/.test(msg)) return true;
+  // Twitter/X's guest-token API is flaky and intermittently makes yt-dlp report
+  // "failed to instantiate extractor" / "no video formats" — a retry usually
+  // succeeds on the next guest token.
+  if (/instantiate|no video formats|unable to extract|guest token/.test(msg)) return true;
   return /reset|internal_error|econnreset|epipe|network request failed|stream|connection|socket|timeout|timed out|eof|terminated/.test(
     msg,
   );

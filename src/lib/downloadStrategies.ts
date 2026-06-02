@@ -63,6 +63,15 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
   // Both paths avoid the 403 caused by missing nsig transform on browse-tab-detected URLs.
   if (YT_PAGE_RE.test(media.pageUrl)) return 'yt-dlp';
 
+  // Paired tracks delivered as HLS playlists (e.g. Twitter/X's
+  // video.twimg.com/.../pl/ renditions) can't be muxed by the on-device DASH
+  // downloader — it expects MP4 segments. The server muxes them reliably via
+  // ffmpeg, so route HLS-paired video to the proxy instead of a doomed DASH try.
+  const isHlsTrack = (u: string) => /\.m3u8(\?|#|$)/i.test(u) || /\/pl\//i.test(u);
+  if (media.audioTrackUrl && (isHlsTrack(url) || isHlsTrack(media.audioTrackUrl))) {
+    return 'server-download';
+  }
+
   // Paired audio track → must mux (Bilibili DASH, custom paired streams)
   if (media.audioTrackUrl) return 'dash';
 
