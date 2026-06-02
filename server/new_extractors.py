@@ -179,6 +179,12 @@ def _select_candidate(
 
 def _xhs_find_note(data: dict[str, Any], url_note_id: str | None) -> tuple[str | None, dict[str, Any]]:
     """Walk the __INITIAL_STATE__ to locate the noteDetailMap and return (note_id, note_dict)."""
+    live_note = (((data.get("noteData") or {}).get("data") or {}).get("noteData") or {})
+    if isinstance(live_note, dict) and live_note:
+        note_id = live_note.get("noteId") or live_note.get("id") or url_note_id
+        if note_id:
+            return str(note_id), live_note
+
     for section_key in ("note", "noteDetail", "noteData"):
         section = data.get(section_key)
         if not isinstance(section, dict):
@@ -707,6 +713,135 @@ def extract_tiktok(page_url: str, cookies: str | None) -> dict[str, Any] | None:
 
 
 # ── Reddit ────────────────────────────────────────────────────────────────────
+
+def _walk_dicts(value: Any):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk_dicts(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_dicts(child)
+
+
+def _douyin_video_id_from_data(data: dict[str, Any]) -> str | None:
+    for item in _walk_dicts(data):
+        for key in ("video_id", "videoId", "vid", "uri", "play_addr_uri"):
+            value = item.get(key)
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{8,}", value):
+                return value
+        video = item.get("video")
+        if isinstance(video, dict):
+            play_addr = video.get("play_addr") or video.get("playAddr") or {}
+            if isinstance(play_addr, dict):
+                value = play_addr.get("uri") or play_addr.get("url_key")
+                if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{8,}", value):
+                    return value
+    return None
+
+
+def _douyin_video_id_from_html(html: str) -> str | None:
+    for pattern in (
+        r'"video_id"\s*:\s*"([^"]+)"',
+        r"'video_id'\s*:\s*'([^']+)'",
+        r'videoId\s*:\s*"([^"]+)"',
+        r'vid\s*:\s*"([^"]+)"',
+        r"video_id=([^&\"']+)",
+        r'"vid"\s*:\s*"([^"]+)"',
+        r'playId\s*:\s*"([^"]+)"',
+        r'"playId"\s*:\s*"([^"]+)"',
+        r"v0[0-9a-zA-Z_-]{20,}",
+    ):
+        match = re.search(pattern, html)
+        if match:
+            return match.group(1) if match.lastindex else match.group(0)
+    return None
+
+
+def _html_meta_title(html: str, fallback: str) -> str:
+    import html as html_mod
+    for pattern in (
+        r'<meta\s+(?:property|name)=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta\s+[^>]*content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']og:title["\']',
+        r"<title[^>]*>(.*?)</title>",
+    ):
+        match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
+        if match:
+            title = re.sub(r"\s+", " ", html_mod.unescape(match.group(1))).strip()
+            if title:
+                return title
+    return fallback
+
+
+def extract_douyin_watermark_free(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    headers = safe_headers({
+        "User-Agent": _MOBILE_UA,
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.6,en;q=0.5",
+        "Referer": "https://www.douyin.com/",
+        **({"Cookie": cookies} if cookies else {}),
+    })
+    body = _fetch(page_url, headers)
+    if not body:
+        return None
+    html = body.decode("utf-8", errors="ignore")
+
+    data = _script_json(html, "window._ROUTER_DATA") or _script_json(html, "window.__INITIAL_STATE__")
+    video_id = _douyin_video_id_from_data(data) if data else None
+    if not video_id:
+        video_id = _douyin_video_id_from_html(html)
+    if not video_id:
+        return None
+
+    title = _html_meta_title(html, "Douyin Video")
+    if data:
+        for item in _walk_dicts(data):
+            title = item.get("desc") or item.get("title") or item.get("caption") or title
+            if title != "Douyin Video":
+                break
+
+    play_url = (
+        "https://aweme.snssdk.com/aweme/v1/play/"
+        f"?video_id={urllib.parse.quote(video_id)}&ratio=1080p&line=0"
+    )
+    return source_audit.add_audit({
+        "id": video_id,
+        "title": title,
+        "url": play_url,
+        "ext": "mp4",
+        "protocol": "https",
+        "http_headers": {
+            "Referer": "https://www.douyin.com/",
+            "User-Agent": _MOBILE_UA,
+        },
+        "extractor": "douyin-watermark-free-source",
+    }, [source_audit.audit_entry(
+        strategy="watermark-free source",
+        source="window._ROUTER_DATA video id + aweme play endpoint",
+        url=play_url,
+        selected=True,
+        field_path="video.play_addr.uri",
+        headers={"Referer": "https://www.douyin.com/", "User-Agent": _MOBILE_UA},
+        notes="Source-derived no-watermark URL; no third-party parser used.",
+    )])
+
+
+def extract_watermark_free_source(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    host = urllib.parse.urlsplit(page_url).netloc.lower()
+    if "douyin.com" in host or "iesdouyin.com" in host:
+        return extract_douyin_watermark_free(page_url, cookies)
+    if "xiaohongshu.com" in host or "rednote.com" in host or "xhslink.com" in host:
+        info = extract_xiaohongshu(page_url, cookies)
+        if info:
+            source_audit.add_audit(info, [source_audit.audit_entry(
+                strategy="watermark-free source",
+                source="xiaohongshu full media variants",
+                selected=True,
+                notes="Existing XHS extractor already selects full note media URLs without using a third-party parser.",
+            )])
+        return info
+    return None
+
 
 def extract_reddit(page_url: str, cookies: str | None) -> dict[str, Any] | None:
     _reddit_ua = (
