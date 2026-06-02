@@ -627,6 +627,157 @@ class TestXiaohongshuExtractor:
         ) is None
 
 
+class TestWatermarkFreeSourceExtractor:
+    def test_xhs_live_note_data_shape(self, monkeypatch):
+        html = """
+        <script>window.__INITIAL_STATE__={
+          "noteData":{"data":{"noteData":{
+            "noteId":"69fdcbfa0000000023004a17",
+            "title":"Live XHS shape",
+            "imageList":[
+              {"urlDefault":"http://sns-webpic-qc.xhscdn.com/202606010247/full/notes_pre_post/a!nd_dft_jpg_3"},
+              {"urlDefault":"http://sns-webpic-qc.xhscdn.com/202606010247/full/notes_pre_post/b!nd_dft_jpg_3"}
+            ]
+          }}}
+        }</script>
+        """.encode()
+
+        monkeypatch.setattr("new_extractors._fetch", lambda *args, **kwargs: html)
+
+        info = extractors.extract_watermark_free_source(
+            "http://xhslink.com/o/AuDpBCMNn0z",
+            None,
+        )
+
+        assert info is not None
+        assert info["_type"] == "playlist"
+        assert info["entries"][0]["url"].startswith("http://sns-webpic-qc.xhscdn.com/")
+        assert any(
+            item.get("strategy") == "watermark-free source"
+            for item in info.get("_source_audit") or []
+        )
+
+    def test_douyin_builds_aweme_play_url_from_router_data(self, monkeypatch):
+        html = """
+        <script>
+        window._ROUTER_DATA={
+          "loaderData":{
+            "video_(123)":{
+              "videoInfo":{
+                "desc":"Clean Douyin sample",
+                "video":{"play_addr":{"uri":"v0200fg10000samplevideoid"}}
+              }
+            }
+          }
+        };
+        </script>
+        """.encode()
+
+        monkeypatch.setattr("new_extractors._fetch", lambda *args, **kwargs: html)
+
+        info = extractors.extract_watermark_free_source(
+            "https://www.douyin.com/video/123",
+            None,
+        )
+
+        assert info is not None
+        assert info["extractor"] == "douyin-watermark-free-source"
+        assert info["title"] == "Clean Douyin sample"
+        assert info["url"] == (
+            "https://aweme.snssdk.com/aweme/v1/play/"
+            "?video_id=v0200fg10000samplevideoid&ratio=1080p&line=0"
+        )
+
+    def test_douyin_builds_aweme_play_url_from_html_video_id(self, monkeypatch):
+        html = """
+        <html><head><title>Douyin精选</title></head>
+        <body><script>window.__data={"video_id":"v0d00fg10000d6j670vog65psicuq70g"}</script></body></html>
+        """.encode()
+
+        monkeypatch.setattr("new_extractors._fetch", lambda *args, **kwargs: html)
+
+        info = extractors.extract_watermark_free_source(
+            "https://jingxuan.douyin.com/m/video/7613238124713413934",
+            None,
+        )
+
+        assert info is not None
+        assert info["id"] == "v0d00fg10000d6j670vog65psicuq70g"
+        assert info["url"] == (
+            "https://aweme.snssdk.com/aweme/v1/play/"
+            "?video_id=v0d00fg10000d6j670vog65psicuq70g&ratio=1080p&line=0"
+        )
+
+    def test_remove_watermark_prefers_source_before_proxy(self, monkeypatch):
+        import strategies
+
+        calls = []
+
+        def fake_source(page_url, cookies):
+            calls.append("source")
+            return {
+                "id": "v0200fg10000samplevideoid",
+                "title": "Clean Douyin sample",
+                "url": "https://aweme.snssdk.com/aweme/v1/play/?video_id=v0200fg10000samplevideoid&ratio=1080p&line=0",
+                "ext": "mp4",
+                "protocol": "https",
+                "http_headers": {},
+            }
+
+        def fake_snapwc(page_url):
+            calls.append("snapwc")
+            return None
+
+        monkeypatch.setattr("extractors.extract_watermark_free_source", fake_source)
+        monkeypatch.setattr("extractors.extract_via_snapwc", fake_snapwc)
+
+        result = strategies.run_extraction(
+            "https://www.douyin.com/video/123",
+            cookies=None,
+            remove_watermark=True,
+        )
+
+        assert result["url"].startswith("https://aweme.snssdk.com/aweme/v1/play/")
+        assert calls == ["source"]
+
+    def test_snapwc_is_disabled_for_unsupported_hosts(self, monkeypatch):
+        import strategies
+
+        called = False
+
+        def fake_snapwc(page_url):
+            nonlocal called
+            called = True
+            return {"url": "https://i1.hdslb.com/bfs/archive/cover.jpg", "ext": "jpg"}
+
+        monkeypatch.setattr("extractors.extract_via_snapwc", fake_snapwc)
+
+        result = strategies._strategy_snapwc("https://www.bilibili.com/video/BV1PkR2BkEUt")
+
+        assert not result["success"]
+        assert "disabled" in result["reason"]
+        assert called is False
+
+    def test_snapwc_rejects_cover_image_for_video_pages(self, monkeypatch):
+        import strategies
+
+        monkeypatch.setattr(
+            "extractors.extract_via_snapwc",
+            lambda page_url: {
+                "id": "snapwc_0",
+                "title": "Cover only",
+                "url": "https://p16-common-sign.tiktokcdn-us.com/cover.jpeg",
+                "ext": "jpeg",
+                "protocol": "https",
+            },
+        )
+
+        result = strategies._strategy_snapwc("https://www.tiktok.com/@user/video/1234567890")
+
+        assert not result["success"]
+        assert "cover image" in result["reason"]
+
+
 class TestCuratedSiteExtractor:
     def test_oricon_photo_page_expands_full_gallery(self, monkeypatch):
         pages = {

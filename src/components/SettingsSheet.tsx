@@ -56,6 +56,10 @@ const FONT_OPTIONS: { value: FontSizePref; labelKey: TranslationKey; preview: st
   { value: 'large',  labelKey: 'large',  preview: 'Aa' },
 ];
 
+const REMOVE_WATERMARK_NOTE =
+  'Tries a clean source link first, then snapwc.com on supported sites. ' +
+  'Leave this off to keep original media. Static image watermarks may remain.';
+
 const LANGUAGE_OPTIONS: { value: LanguagePref; label: string; key?: TranslationKey }[] = [
   { value: 'system', label: 'Auto', key: 'auto' },
   { value: 'en', label: 'English' },
@@ -202,9 +206,7 @@ export default function SettingsSheet({
                   Remove Watermark
                 </Text>
                 <Text style={[styles.toggleNote, { color: t.ink3 }]}>
-                  Uses a third-party proxy (snapwc.com) — adds ~20 s per request.
-                  Works for some video overlays. Platform-baked image watermarks
-                  (e.g. Weibo static images) cannot be removed this way.
+                  {REMOVE_WATERMARK_NOTE}
                 </Text>
               </View>
               <Switch

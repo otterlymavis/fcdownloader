@@ -576,10 +576,11 @@ async function callExtract(pageUrl, referer, cookies, pageHtml, mediaHints, sour
   if (Array.isArray(sourceAudit) && sourceAudit.length) body.sourceAudit = sourceAudit.slice(0, 240);
   if (removeWatermark) body.removeWatermark = true;
 
-  // Hard-cap the request. yt-dlp retries + generic-extractor fallback take
-  // up to ~20s on hard sites; anything longer is almost certainly a hang.
+  // Hard-cap the request. removeWatermark can try a source-derived URL,
+  // snapwc, and then the normal extractor fallback, so give it more room.
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 25_000);
+  const timeoutMs = removeWatermark ? 45_000 : 25_000;
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
 
   try {
     const r = await fetch(`${backend}/extract`, {
@@ -595,7 +596,7 @@ async function callExtract(pageUrl, referer, cookies, pageHtml, mediaHints, sour
     return await r.json();
   } catch (e) {
     if (e.name === "AbortError") {
-      throw new Error("Backend timed out after 25s. The site probably blocked the server, or yt-dlp can't extract it. Check fly logs for the real reason.");
+      throw new Error(`Backend timed out after ${Math.round(timeoutMs / 1000)}s. The site probably blocked the server, or yt-dlp can't extract it. Check fly logs for the real reason.`);
     }
     throw e;
   } finally {

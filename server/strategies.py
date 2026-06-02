@@ -473,14 +473,74 @@ def _strategy_skip(name: str, reason: str) -> dict[str, Any]:
     return _result(name, False, reason=reason)
 
 
+_SNAPWC_HOST_ALLOWLIST = (
+    "tiktok.com",
+    "vm.tiktok.com",
+    "vt.tiktok.com",
+    "douyin.com",
+    "iesdouyin.com",
+    "xiaohongshu.com",
+    "rednote.com",
+    "xhslink.com",
+    "instagram.com",
+    "threads.net",
+    "reddit.com",
+    "redd.it",
+)
+
+
+def _host_matches(page_url: str, hosts: tuple[str, ...]) -> bool:
+    host = (urllib.parse.urlsplit(page_url).hostname or "").lower()
+    return any(host == allowed or host.endswith(f".{allowed}") for allowed in hosts)
+
+
+def _snapwc_result_acceptable(page_url: str, info: dict[str, Any]) -> tuple[bool, str | None]:
+    """Reject proxy results that look like covers/thumbnails for video pages."""
+    if info.get("_type") == "playlist":
+        entries = [entry for entry in (info.get("entries") or []) if isinstance(entry, dict)]
+        if entries:
+            return True, None
+        return False, "snapwc returned an empty gallery"
+
+    url = safe_text(info.get("url"))
+    ext = safe_text(info.get("ext")).lower()
+    if not url:
+        return False, "snapwc returned no URL"
+
+    image_exts = {"jpg", "jpeg", "png", "webp", "gif", "avif"}
+    looks_image = ext in image_exts or guess_ext_from_url(url).lower() in image_exts
+    video_page = any(marker in page_url.lower() for marker in ("/video/", "/m/video/", "/reel/", "/tv/"))
+    if video_page and looks_image:
+        return False, "snapwc returned a cover image for a video page"
+
+    return True, None
+
+
 def _strategy_snapwc(page_url: str) -> dict[str, Any]:
     """Watermark-removal proxy via snapwc.com (only runs when remove_watermark=True)."""
     name = "watermark-removal proxy"
+    if not _host_matches(page_url, _SNAPWC_HOST_ALLOWLIST):
+        return _result(name, False, reason="snapwc disabled for this host")
     try:
         info = extractors.extract_via_snapwc(page_url)
         if info:
+            ok, reason = _snapwc_result_acceptable(page_url, info)
+            if not ok:
+                return _result(name, False, reason=reason or "snapwc result rejected")
             return _result(name, True, media=info)
         return _result(name, False, reason="snapwc returned no media")
+    except Exception as exc:
+        return _result(name, False, reason=safe_text(exc)[:400])
+
+
+def _strategy_watermark_free_source(page_url: str, cookies: str | None) -> dict[str, Any]:
+    """Source-specific clean-media extractor; no third-party parser/proxy."""
+    name = "watermark-free source"
+    try:
+        info = extractors.extract_watermark_free_source(page_url, cookies)
+        if info:
+            return _result(name, True, media=info)
+        return _result(name, False, reason="no source-derived clean media")
     except Exception as exc:
         return _result(name, False, reason=safe_text(exc)[:400])
 
@@ -877,11 +937,13 @@ def run_extraction(
         platform_strategy = ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies))
         ytdlp_strategy = ("yt-dlp", lambda: _strategy_ydl(page_url, ydl_opts, False))
 
-        # When remove_watermark is enabled, try the snapwc proxy first (before
-        # any CDN-direct extraction). snapwc is slow (~20 s) so it only runs
-        # when explicitly requested. Falls through on failure.
+        # When remove_watermark is enabled, try source-specific clean media
+        # first, then fall back to the slower snapwc proxy.
         watermark_proxy_strategy: list[tuple[str, Callable[[], dict[str, Any]]]] = (
-            [("watermark-removal proxy", lambda: _strategy_snapwc(page_url))]
+            [
+                ("watermark-free source", lambda: _strategy_watermark_free_source(page_url, cookies)),
+                ("watermark-removal proxy", lambda: _strategy_snapwc(page_url)),
+            ]
             if remove_watermark else []
         )
 
