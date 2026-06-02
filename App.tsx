@@ -111,6 +111,9 @@ export default function App() {
   const isDark = t.dark;
   const fs = (base: number) => base * fontScale;
   const webviewRef = useRef<WebView>(null);
+  // Note IDs we've already auto-extracted, so a single XHS page load only kicks
+  // off extraction once (onLoadEnd fires repeatedly across redirects/subframes).
+  const autoExtractedRef = useRef<string | null>(null);
 
   const resolvedLangRef = useRef(resolvedLanguage);
   resolvedLangRef.current = resolvedLanguage;
@@ -275,6 +278,17 @@ export default function App() {
       setExtracting(false);
     }
   }, [enqueue, extracting, loadedUrl, scanBrowserPage, showToast]);
+
+  // XHS gates its note pages and there's no inline player to detect, so a manual
+  // Scan rarely surfaces anything. When an XHS note page finishes loading in the
+  // in-app browser, auto-run extraction (server first, then on-device) once per
+  // note — the user no longer has to tap Scan. Other sites keep the manual flow.
+  const handleBrowserLoadEnd = useCallback((url: string) => {
+    const noteId = url.match(/\/(?:explore|discovery\/item|item)\/([a-f0-9]{24})/i)?.[1];
+    if (!noteId || autoExtractedRef.current === noteId) return;
+    autoExtractedRef.current = noteId;
+    extractBrowserPage(url);
+  }, [extractBrowserPage]);
 
   // ── Home: paste → download ────────────────────────────────
   const handleHomeDownload = useCallback(async () => {
@@ -690,6 +704,7 @@ export default function App() {
                 onMessage={onMessage}
                 onNavigationChange={(url) => { setBrowserInput(url); onPageChange(url); }}
                 onExtractPage={extractBrowserPage}
+                onLoadEnd={(e) => handleBrowserLoadEnd(e.nativeEvent.url)}
                 style={StyleSheet.absoluteFill} />
             )}
 
@@ -1049,7 +1064,7 @@ export default function App() {
       {/* ── Tab bar ─────────────────────────────────────── */}
       <View style={[s.tabBar, { backgroundColor: t.bg, borderTopColor: t.sep, paddingBottom: BOTTOM_PAD }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
         {(['home', 'browser', 'library', 'bookmarks'] as Tab[]).map((id, idx) => {
-          const transKey: TranslationKey = id === 'bookmarks' ? 'saved' : id as TranslationKey;
+          const transKey: TranslationKey = id === 'bookmarks' ? 'saved' : id === 'browser' ? 'browse' : id as TranslationKey;
           const translatedLabel = translate(transKey, resolvedLanguage);
           const countSuffix = id === 'home' && activeCount > 0 ? `  ${activeCount}`
             : id === 'browser' && mediaCount > 0 ? `  ${mediaCount}`

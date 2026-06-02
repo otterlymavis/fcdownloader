@@ -5,6 +5,7 @@ import WebView, {
   WebViewNavigation,
   WebViewProps,
 } from 'react-native-webview';
+import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 import { INJECTED_SCRIPT } from '../constants/injectedScript';
 
 // No "wv" tag — Vimeo and other sites block playback when they detect a WebView UA
@@ -45,6 +46,16 @@ const BrowserView = forwardRef<WebView, Props>(
     const handleNavStateChange = (state: WebViewNavigation) => {
       if (onNavigationChange && state.url) onNavigationChange(state.url);
     };
+
+    // XHS (and WeChat/Weibo) push an "open in app" redirect to a custom scheme
+    // — xhsdiscover://, weixin://, sinaweibo://, intent://… Android WebView has
+    // no handler for these and aborts the whole page with ERR_UNKNOWN_URL_SCHEME,
+    // which is why XHS links "can't open". We only ever want to render web pages
+    // here, so block every non-web scheme and stay put on the loaded content —
+    // which is also exactly what Scan/Extract needs. iOS WebView ignores these
+    // schemes silently, so this is effectively an Android fix.
+    const handleShouldStart = (request: ShouldStartLoadRequest): boolean =>
+      /^(?:https?|about|data|blob):/i.test(request.url || '');
     const ua = isXhsUrl(initialUrl) ? XHS_UA : desktopMode ? DESKTOP_UA : MOBILE_UA;
     const reload = () => {
       if (typeof ref !== 'function') ref?.current?.reload();
@@ -78,6 +89,7 @@ const BrowserView = forwardRef<WebView, Props>(
         userAgent={ua}
         // Navigation
         onNavigationStateChange={handleNavStateChange}
+        onShouldStartLoadWithRequest={handleShouldStart}
         onLoadStart={(e) => onNavigationChange?.(e.nativeEvent.url)}
         renderError={(_domain, code, description) => (
           <View style={styles.errorRoot}>

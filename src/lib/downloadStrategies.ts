@@ -5,6 +5,7 @@ import { downloadVimeoJson } from './vimeoJsonDownloader';
 import { downloadDASH } from './dashDownloader';
 import { downloadYouTube } from './youtubeDownloader';
 import { downloadViaServer } from './serverDownloader';
+import { getSiteCapabilities } from './siteRegistry';
 
 export { DRMProtectedError };
 
@@ -25,6 +26,22 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
   if (media.forceServerDownload) return 'server-download';
   if (media.mediaKind === 'image' || media.mediaKind === 'audio') return 'direct';
   if (/^(image|audio)\//i.test(mime)) return 'direct';
+
+  // Auth-gated sites (Bilibili, Instagram, Xiaohongshu, NicoNico) hand back
+  // IP/UA/cookie-locked CDN URLs that a device-side direct or DASH fetch can't
+  // satisfy — they 403/504 even with a Referer. Their registry entry sets
+  // requiresAuth + a 'server-download' preference. When the item came from
+  // server extraction (so the backend can re-resolve with the forwarded
+  // session), download through the proxy, which replays headers/cookies from a
+  // stable IP and works reliably. Image/audio already short-circuited above.
+  const caps = getSiteCapabilities(media.pageUrl);
+  if (
+    caps?.requiresAuth &&
+    caps.preferredStrategies[0] === 'server-download' &&
+    (media.provenance === 'social-extractor' || !!media.sourcePageUrl)
+  ) {
+    return 'server-download';
+  }
 
   // YouTube: on Android use yt-dlp binary; on iOS re-extract fresh signed URLs.
   // Both paths avoid the 403 caused by missing nsig transform on browse-tab-detected URLs.
