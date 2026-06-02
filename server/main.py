@@ -1133,13 +1133,15 @@ def _direct_media_stream(
     return StreamingResponse(stream(), media_type=content_type, headers=out_headers)
 
 
-# Mobile-app POST /download only. Real-time proxying of a large CDN stream can
-# exceed the platform's streaming-duration limit and reset mid-transfer (the
-# mobile client reads the body as one long stream and can't resume). Buffer the
-# whole file to a server-side temp file first, then stream it from local disk —
-# the client-facing transfer is then fast and completes well within limits, and
-# Content-Length is always exact. The browser-driven GET /download path keeps
-# using the real-time _direct_media_stream (browsers resume on their own).
+# Mobile-app POST /download only. Two problems with real-time proxying of a large
+# CDN stream to the mobile client: (1) the upstream can stall near the end, and
+# (2) the mobile HTTP/2 client resets the stream if no bytes arrive for ~10s.
+# Fix: "download-ahead" — a background thread pulls the upstream into a temp file
+# as fast as it can, while the response generator streams to the client from that
+# growing file. Bytes start flowing within ~1s (so the client read-timeout never
+# fires), and the on-disk buffer absorbs any near-end upstream stall. The
+# browser-driven GET /download path keeps using the real-time _direct_media_stream
+# (browsers resume on their own), so the extension and web app are unaffected.
 _MAX_BUFFER_BYTES = 600 * 1024 * 1024  # safety cap; abort runaway downloads
 
 def _buffered_direct_media_stream(
@@ -1170,43 +1172,68 @@ def _buffered_direct_media_stream(
         raise HTTPException(502, f"upstream: {str(exc)[:240]}")
 
     content_type = _response_header(upstream, "Content-Type", "video/mp4")
-    try:
-        written = 0
-        with open(filepath, "wb") as f:
-            while True:
-                chunk = upstream.read(256 * 1024)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > _MAX_BUFFER_BYTES:
-                    raise HTTPException(413, "media exceeds server buffer limit")
-                f.write(chunk)
-    except HTTPException:
-        _cleanup()
-        raise
-    except Exception as exc:  # noqa: BLE001 — upstream reset while buffering
-        _cleanup()
-        raise HTTPException(502, f"buffering failed: {str(exc)[:200]}")
-    finally:
-        try:
-            upstream.close()
-        except Exception:
-            pass
+    content_length = _response_header(upstream, "Content-Length")
 
-    filesize = os.path.getsize(filepath)
-    if filesize == 0:
-        _cleanup()
-        raise HTTPException(502, "upstream returned an empty body")
-    out_headers = {**response_headers, "Content-Length": str(filesize)}
+    # Shared producer state. The producer thread writes to disk; the generator
+    # reads behind it. A lock guards the counters/flags.
+    state: dict[str, Any] = {"written": 0, "done": False, "error": None}
+    lock = threading.Lock()
+
+    def _producer() -> None:
+        try:
+            with open(filepath, "wb") as f:
+                while True:
+                    chunk = upstream.read(256 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    f.flush()
+                    with lock:
+                        state["written"] += len(chunk)
+                        if state["written"] > _MAX_BUFFER_BYTES:
+                            state["error"] = "media exceeds server buffer limit"
+                            return
+        except Exception as exc:  # noqa: BLE001 — upstream reset/stall mid-download
+            with lock:
+                state["error"] = str(exc)[:200]
+        finally:
+            with lock:
+                state["done"] = True
+            try:
+                upstream.close()
+            except Exception:
+                pass
+
+    threading.Thread(target=_producer, daemon=True).start()
+
+    out_headers = {**response_headers}
+    if content_length:
+        out_headers["Content-Length"] = content_length
 
     def stream() -> Iterator[bytes]:
+        read_pos = 0
         try:
             with open(filepath, "rb") as f:
                 while True:
-                    chunk = f.read(65536)
-                    if not chunk:
+                    with lock:
+                        written = state["written"]
+                        done = state["done"]
+                        error = state["error"]
+                    if read_pos < written:
+                        f.seek(read_pos)
+                        chunk = f.read(min(written - read_pos, 1024 * 1024))
+                        if chunk:
+                            read_pos += len(chunk)
+                            yield chunk
+                            continue
+                    # Caught up to the producer.
+                    if read_pos >= written and error:
+                        # Truncated/failed: end the body short so the client sees a
+                        # length mismatch and retries, rather than a silent partial.
+                        raise RuntimeError(f"upstream: {error}")
+                    if read_pos >= written and done:
                         break
-                    yield chunk
+                    time.sleep(0.05)
         finally:
             _cleanup()
 
