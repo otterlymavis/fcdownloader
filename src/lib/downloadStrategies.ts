@@ -28,14 +28,26 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
   if (/^(image|audio)\//i.test(mime)) return 'direct';
 
   // Auth-gated sites (Bilibili, Instagram, Xiaohongshu, NicoNico) hand back
-  // IP/UA/cookie-locked CDN URLs that a device-side direct or DASH fetch can't
-  // satisfy — they 403/504 even with a Referer. Their registry entry sets
-  // requiresAuth + a 'server-download' preference. When the item came from
-  // server extraction (so the backend can re-resolve with the forwarded
-  // session), download through the proxy, which replays headers/cookies from a
-  // stable IP and works reliably. Image/audio already short-circuited above.
+  // IP/UA/cookie-locked *video* CDN URLs that a device-side direct or DASH fetch
+  // can't satisfy — they 403/504 even with a Referer. Their registry entry sets
+  // requiresAuth + a 'server-download' preference, so route video through the
+  // proxy (which replays headers/cookies from a stable IP). Gated to video with
+  // server-provided headers only: image galleries from the same sites (an XHS or
+  // Instagram carousel) download fine device-side via the direct/CDN paths
+  // below, and the proxy 502s on them — the on-device extractor mis-types their
+  // extension-less CDN URLs as video, so without these guards they'd wrongly
+  // route here.
+  const isVideo =
+    media.mediaKind === 'video' ||
+    media.mediaType === 'dash' ||
+    media.mediaType === 'hls' ||
+    media.hasVideo === true;
+  const hasServerHeaders =
+    !!media.httpHeaders && Object.keys(media.httpHeaders).length > 0;
   const caps = getSiteCapabilities(media.pageUrl);
   if (
+    isVideo &&
+    hasServerHeaders &&
     caps?.requiresAuth &&
     caps.preferredStrategies[0] === 'server-download' &&
     (media.provenance === 'social-extractor' || !!media.sourcePageUrl)

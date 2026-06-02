@@ -131,7 +131,11 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
         createdAt: Date.now(),
       };
       dispatch({ type: 'ADD', task });
-      await _run(task);
+      // Fire-and-forget: the download runs in the background and reports
+      // progress via task status (shown in the In-Progress list). Awaiting it
+      // here would block the caller — keeping the Home "Finding…" button stuck
+      // for the whole download and serializing galleries. _run never throws.
+      void _run(task);
     },
     [_run],
   );
@@ -155,7 +159,7 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
         completedAt: undefined,
       };
       update(taskId, task);
-      await _run(task);
+      void _run(task);
     },
     [tasks, _run, update],
   );
