@@ -957,14 +957,3 @@ export async function extractFromSocialUrl(pageUrl: string): Promise<DetectedMed
   debugWarn('[extract] all strategies failed:', diagnostics.slice(-6).join('; '));
   return [];
 }
-
-export async function extractFromSocialUrlLegacy(pageUrl: string): Promise<DetectedMedia[]> {
-  for (const platform of PLATFORMS) {
-    if (platform.re.test(pageUrl)) {
-      const items = await platform.fn(pageUrl);
-      if (items.length > 0) return items;
-      break;
-    }
-  }
-  return extractOgVideo(pageUrl);
-}

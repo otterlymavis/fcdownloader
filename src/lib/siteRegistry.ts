@@ -205,10 +205,3 @@ export function getAcceptLanguage(url: string, fallback = 'en-US,en;q=0.9'): str
   return getSiteCapabilities(url)?.acceptLanguage ?? acceptLanguageForUrl(url, fallback);
 }
 
-/**
- * Returns the preferred strategy list for a URL, or empty array when the URL
- * is not in the registry (caller should use default ordering).
- */
-export function getPreferredStrategies(url: string): DownloadStrategy[] {
-  return getSiteCapabilities(url)?.preferredStrategies ?? [];
-}

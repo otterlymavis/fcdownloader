@@ -218,11 +218,6 @@ export function getInitial(name: string): string {
   return (name[0] ?? '?').toUpperCase();
 }
 
-export function isUseful(url: string): boolean {
-  if (isSegmentMediaUrl(url)) return false;
-  return USEFUL_EXT_RE.test(url) || VIMEO_JSON_RE.test(url) || VIDEO_CDN_RE.test(url);
-}
-
 export function isNetworkDownloadCandidate(url: string): boolean {
   if (isSegmentMediaUrl(url)) return false;
   return VIDEO_EXT_RE.test(url) ||

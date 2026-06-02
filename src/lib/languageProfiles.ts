@@ -210,14 +210,6 @@ export function normalizeLanguageTag(tag?: string | null): CommonLanguageCode | 
   return primary in COMMON_LANGUAGE_PROFILES ? primary : undefined;
 }
 
-export function acceptLanguageForTags(tags?: readonly (string | null | undefined)[], fallback = COMMON_LANGUAGE_PROFILES.en.acceptLanguage): string {
-  for (const tag of tags ?? []) {
-    const code = normalizeLanguageTag(tag);
-    if (code) return COMMON_LANGUAGE_PROFILES[code].acceptLanguage;
-  }
-  return fallback;
-}
-
 export function acceptLanguageForUrl(url: string, fallback = COMMON_LANGUAGE_PROFILES.en.acceptLanguage): string {
   let host = '';
   try {

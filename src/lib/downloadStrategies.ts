@@ -106,16 +106,6 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
   return 'hls-segments';
 }
 
-export const STRATEGY_LABELS: Record<DownloadStrategy, string> = {
-  'hls-segments': 'HLS Segments',
-  'direct':       'Direct Download',
-  'dash':         'DASH (FFmpeg)',
-  'vimeo-json':   'Vimeo Playlist',
-  'ffmpeg':       'FFmpeg',
-  'yt-dlp':       'yt-dlp',
-  'server-download': 'Server yt-dlp',
-};
-
 export async function runDownload(
   media: DetectedMedia,
   taskId: string,
