@@ -616,6 +616,25 @@ function xhsStreamUrl(stream: any): string {
   return '';
 }
 
+// XHS CDN (xhscdn.com) rejects requests whose Referer isn't xiaohongshu.com with
+// HTTP 403. The page URL we extracted from is usually an xhslink.com short link,
+// so makeItem's default `Referer: pageUrl` gets blocked. Pin the Referer to the
+// XHS homepage (matching the server-side extractor) and set mediaKind explicitly
+// — the CDN URLs are extension-less and would otherwise be mis-typed as video.
+function xhsMakeItem(
+  url: string,
+  pageUrl: string,
+  label: string,
+  kind: 'image' | 'video',
+  confidence: number,
+): DetectedMedia {
+  return {
+    ...makeItem(url, pageUrl, label, 'social-extractor', confidence),
+    mediaKind: kind,
+    httpHeaders: { Referer: 'https://www.xiaohongshu.com/', 'User-Agent': MOBILE_UA },
+  };
+}
+
 async function extractXiaohongshu(pageUrl: string): Promise<DetectedMedia[]> {
   try {
     const items = await extractViaServer(pageUrl);
@@ -649,14 +668,14 @@ async function extractXiaohongshu(pageUrl: string): Promise<DetectedMedia[]> {
             note.imageList.forEach((img: any) => {
               const url = xhsBestImageUrl(img);
               if (url && url.startsWith('http')) {
-                pushUnique(results, makeItem(url, pageUrl, 'Xiaohongshu Image', 'social-extractor', 0.85));
+                pushUnique(results, xhsMakeItem(url, pageUrl, 'Xiaohongshu Image', 'image', 0.85));
               }
             });
           }
-          
+
           const videoMasterUrl = xhsStreamUrl(note.video?.media?.stream);
           if (videoMasterUrl && videoMasterUrl.startsWith('http')) {
-             pushUnique(results, makeItem(videoMasterUrl, pageUrl, 'Xiaohongshu Video', 'social-extractor', 0.90));
+             pushUnique(results, xhsMakeItem(videoMasterUrl, pageUrl, 'Xiaohongshu Video', 'video', 0.90));
           }
         }
       } catch {}
@@ -669,7 +688,7 @@ async function extractXiaohongshu(pageUrl: string): Promise<DetectedMedia[]> {
         /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:xhscdn\.com|xiaohongshu\.com)[^"'\\<>\s]*)/g,
       ).forEach(u => {
         if (isXhsMediaUrl(u)) {
-          pushUnique(results, makeItem(u, pageUrl, 'Xiaohongshu', 'social-extractor', 0.60));
+          pushUnique(results, xhsMakeItem(u, pageUrl, 'Xiaohongshu', 'image', 0.60));
         }
       });
     }
