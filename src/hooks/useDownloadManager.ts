@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DetectedMedia, DownloadStatus, DownloadStrategy, DownloadTask } from '../types';
 import { deleteDownload } from '../lib/hlsDownloader';
 import { DRMProtectedError, pickStrategy, runDownload } from '../lib/downloadStrategies';
+import { startDownloadKeepAlive, stopDownloadKeepAlive } from '../lib/downloadKeepAlive';
 
 const STORAGE_KEY = '@fcdownloader/tasks_v1';
 
@@ -179,6 +180,20 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
   const history = tasks.filter(
     (t) => t.status === 'completed' || t.status === 'failed',
   );
+
+  // Keep the process + a wake lock alive (via an Android foreground service)
+  // while any download is running, so backgrounding the app or locking the
+  // screen doesn't stall the streaming download loops. Stops once idle.
+  const activeCount = active.length;
+  const prevActiveCount = useRef(0);
+  useEffect(() => {
+    if (activeCount > 0) {
+      startDownloadKeepAlive(activeCount);
+    } else if (prevActiveCount.current > 0) {
+      stopDownloadKeepAlive();
+    }
+    prevActiveCount.current = activeCount;
+  }, [activeCount]);
 
   return { tasks, active, history, enqueue, retry, cancel, remove };
 }

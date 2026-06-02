@@ -28,14 +28,30 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
   if (/^(image|audio)\//i.test(mime)) return 'direct';
 
   // Auth-gated sites (Bilibili, Instagram, Xiaohongshu, NicoNico) hand back
-  // IP/UA/cookie-locked CDN URLs that a device-side direct or DASH fetch can't
-  // satisfy — they 403/504 even with a Referer. Their registry entry sets
-  // requiresAuth + a 'server-download' preference. When the item came from
-  // server extraction (so the backend can re-resolve with the forwarded
-  // session), download through the proxy, which replays headers/cookies from a
-  // stable IP and works reliably. Image/audio already short-circuited above.
+  // IP/UA/cookie-locked *video* CDN URLs that a device-side direct or DASH fetch
+  // can't satisfy — they 403/504 even with a Referer. Their registry entry sets
+  // requiresAuth + a 'server-download' preference, so route video through the
+  // proxy (which replays headers/cookies from a stable IP). Crucially this is
+  // gated to video only: image galleries from the same sites (e.g. an XHS or
+  // Instagram carousel) download fine device-side via the direct/CDN paths
+  // below, and the proxy 502s on them — so they must NOT come through here.
+  const isVideo =
+    media.mediaKind === 'video' ||
+    media.mediaType === 'dash' ||
+    media.mediaType === 'hls' ||
+    media.hasVideo === true;
+  // Only items the *server* extracted carry replay headers (httpHeaders). That's
+  // the signal this is a backend-resolved locked video URL (e.g. Bilibili's
+  // akamaized CDN) — the case the proxy is for. On-device extractor items
+  // (makeItem) have no httpHeaders; XHS/IG CDN image URLs land there and often
+  // get mis-typed as 'video' (no file extension), so without this guard they'd
+  // wrongly route to the proxy and 502. Keep those on the direct/CDN paths.
+  const hasServerHeaders =
+    !!media.httpHeaders && Object.keys(media.httpHeaders).length > 0;
   const caps = getSiteCapabilities(media.pageUrl);
   if (
+    isVideo &&
+    hasServerHeaders &&
     caps?.requiresAuth &&
     caps.preferredStrategies[0] === 'server-download' &&
     (media.provenance === 'social-extractor' || !!media.sourcePageUrl)
