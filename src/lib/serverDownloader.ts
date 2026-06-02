@@ -5,6 +5,7 @@ import { DetectedMedia } from '../types';
 import { DownloadOptions } from './hlsDownloader';
 import { extractSessionCookies } from './cookieManager';
 import { getServerExtractorToken, getServerExtractorUrl } from './serverExtractor';
+import { debugWarn } from './releaseLogger';
 
 function guessExt(media: DetectedMedia, contentType?: string | null): string {
   const mime = (contentType || media.mimeType || '').toLowerCase();
@@ -50,31 +51,83 @@ export async function downloadViaServer(
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const sourceUrl = media.sourcePageUrl || media.pageUrl || media.url;
-  const res = await expoFetch(`${base}/download`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      pageUrl: sourceUrl,
-      referer: media.pageUrl && media.pageUrl !== sourceUrl ? media.pageUrl : undefined,
-      cookies: cookies || undefined,
-      formatId: media.formatId || undefined,
-      audioOnly: media.audioOnly || undefined,
-      subtitles: media.subtitles || undefined,
-      subLangs: media.subLangs || undefined,
-    }),
-    signal,
+  const body = JSON.stringify({
+    pageUrl: sourceUrl,
+    referer: media.pageUrl && media.pageUrl !== sourceUrl ? media.pageUrl : undefined,
+    cookies: cookies || undefined,
+    formatId: media.formatId || undefined,
+    audioOnly: media.audioOnly || undefined,
+    subtitles: media.subtitles || undefined,
+    subLangs: media.subLangs || undefined,
   });
+
+  const dir = `${FileSystem.documentDirectory}downloads/${taskId}/`;
+  await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+
+  // Large proxied streams (e.g. a 60MB+ Bilibili video) occasionally drop with an
+  // HTTP/2 stream reset / connection error part-way through. The proxy re-extracts
+  // on every request (signed CDN URLs rotate), so byte-range resume isn't reliable
+  // — instead restart the whole transfer a few times on transient errors. 4xx,
+  // explicit cancellation and JSON error bodies are fatal and never retried.
+  let lastError: Error = new Error('Server download failed');
+  for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    if (signal?.aborted) throw new Error('Cancelled');
+    try {
+      return await _streamServerDownloadOnce(
+        `${base}/download`, headers, body, media, dir, opts,
+      );
+    } catch (err) {
+      const e = err as Error;
+      lastError = e;
+      if (signal?.aborted || e.message === 'Cancelled') throw e;
+      if (attempt >= MAX_DOWNLOAD_ATTEMPTS || !isRetryableDownloadError(e)) throw e;
+      debugWarn(`[serverDownloader] attempt ${attempt} failed (${e.message.slice(0, 80)}); retrying`);
+      onStatus?.('fetching_manifest');
+      await delay(800 * attempt);
+    }
+  }
+  throw lastError;
+}
+
+const MAX_DOWNLOAD_ATTEMPTS = 3;
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Transient network/stream failures worth restarting the transfer for. */
+function isRetryableDownloadError(err: Error): boolean {
+  const msg = (err.message || '').toLowerCase();
+  if (msg.includes('cancelled')) return false;
+  // 5xx gateway hiccups (proxy cold start / upstream) are retryable; 4xx is not.
+  if (/\((?:5\d\d)\)/.test(msg)) return true;
+  return /reset|internal_error|econnreset|epipe|network request failed|stream|connection|socket|timeout|timed out|eof|terminated/.test(
+    msg,
+  );
+}
+
+/** One full attempt: request the proxy and stream the response to a fresh file. */
+async function _streamServerDownloadOnce(
+  url: string,
+  headers: Record<string, string>,
+  body: string,
+  media: DetectedMedia,
+  dir: string,
+  opts: DownloadOptions,
+): Promise<string> {
+  const { signal, onStatus, onProgress } = opts;
+  const res = await expoFetch(url, { method: 'POST', headers, body, signal });
 
   if (signal?.aborted) throw new Error('Cancelled');
   if (!res.ok) {
     let detail = `Server download failed (${res.status})`;
     try {
-      const body = await res.text();
-      const parsed = JSON.parse(body);
-      const msg = parsed?.detail ?? parsed?.error ?? body;
+      const text = await res.text();
+      const parsed = JSON.parse(text);
+      const msg = parsed?.detail ?? parsed?.error ?? text;
       if (typeof msg === 'string' && msg.trim()) detail = msg.slice(0, 400);
     } catch {}
-    throw new Error(detail);
+    // Preserve the status code in the message so isRetryableDownloadError can
+    // see 5xx even when a JSON detail replaced the default text.
+    throw new Error(/\(\d{3}\)/.test(detail) ? detail : `${detail} (${res.status})`);
   }
   if (!res.body) throw new Error('Server download returned an empty body');
 
@@ -84,9 +137,9 @@ export async function downloadViaServer(
   if (contentType.includes('application/json')) {
     let detail = `Server returned JSON instead of media (status ${res.status})`;
     try {
-      const body = await res.text();
-      const parsed = JSON.parse(body);
-      const msg = parsed?.detail ?? parsed?.error ?? body;
+      const text = await res.text();
+      const parsed = JSON.parse(text);
+      const msg = parsed?.detail ?? parsed?.error ?? text;
       if (typeof msg === 'string' && msg.trim()) detail = msg.slice(0, 400);
     } catch {}
     throw new Error(detail);
@@ -94,9 +147,7 @@ export async function downloadViaServer(
 
   const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
   const ext = guessExt(media, contentType);
-  const dir = `${FileSystem.documentDirectory}downloads/${taskId}/`;
   const filePath = `${dir}${fileStem(media)}.${ext}`;
-  await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
 
   onStatus?.('downloading');
   onProgress?.(0, contentLength || 1);
@@ -121,6 +172,11 @@ export async function downloadViaServer(
   }
 
   if (file.size === 0) throw new Error('Server download produced an empty file');
+  // A truncated transfer (stream reset before Content-Length) must not be saved
+  // as a success — surface it as retryable so the loop restarts.
+  if (contentLength > 0 && file.size < contentLength) {
+    throw new Error(`Truncated download: ${file.size}/${contentLength} bytes (stream reset)`);
+  }
   onStatus?.('assembling');
   onProgress?.(1, 1);
   return filePath;
