@@ -485,18 +485,6 @@ def _strategy_snapwc(page_url: str) -> dict[str, Any]:
         return _result(name, False, reason=safe_text(exc)[:400])
 
 
-def _strategy_watermark_free_source(page_url: str, cookies: str | None) -> dict[str, Any]:
-    """Source-specific clean-media extractor; no third-party parser/proxy."""
-    name = "watermark-free source"
-    try:
-        info = extractors.extract_watermark_free_source(page_url, cookies)
-        if info:
-            return _result(name, True, media=info)
-        return _result(name, False, reason="no source-derived clean media")
-    except Exception as exc:
-        return _result(name, False, reason=safe_text(exc)[:400])
-
-
 # ── HTML helpers (used by detector strategy) ──────────────────────────────────
 
 
@@ -889,13 +877,11 @@ def run_extraction(
         platform_strategy = ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies))
         ytdlp_strategy = ("yt-dlp", lambda: _strategy_ydl(page_url, ydl_opts, False))
 
-        # When remove_watermark is enabled, try source-specific clean media
-        # first, then fall back to the slower snapwc proxy.
+        # When remove_watermark is enabled, try the snapwc proxy first (before
+        # any CDN-direct extraction). snapwc is slow (~20 s) so it only runs
+        # when explicitly requested. Falls through on failure.
         watermark_proxy_strategy: list[tuple[str, Callable[[], dict[str, Any]]]] = (
-            [
-                ("watermark-free source", lambda: _strategy_watermark_free_source(page_url, cookies)),
-                ("watermark-removal proxy", lambda: _strategy_snapwc(page_url)),
-            ]
+            [("watermark-removal proxy", lambda: _strategy_snapwc(page_url))]
             if remove_watermark else []
         )
 
