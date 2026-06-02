@@ -108,9 +108,29 @@ export class ExtractionManager {
     const caps = getSiteCapabilities(pageUrl);
     const diagnostics: Record<string, string> = {};
 
+    // ── Fast path: on-device first for sites the server can't extract without a
+    // session (Xiaohongshu). The gated server round-trip is slow and usually
+    // fails for these, while the on-device scraper reads the page JSON directly.
+    if (caps?.preferOnDevice && isSocialPageUrl(pageUrl)) {
+      const attempt = await runAttempt('platform-extractors', () => extractFromSocialUrl(pageUrl));
+      if (attempt.success && attempt.media) {
+        const best = pickBestMedia(attempt.media);
+        debugLog('[ExtractionManager] success via on-device (preferOnDevice) for', pageUrl);
+        return {
+          success: true,
+          fatal: false,
+          strategy: 'platform-extractors',
+          confidence: best?.confidence ?? 0.8,
+          media: attempt.media,
+        };
+      }
+      diagnostics['platform-extractors'] = attempt.reason ?? 'no media';
+    }
+
     // ── Tier 1: server-assisted (yt-dlp backend) ──────────────────────────
-    // Always try first when a backend is configured; it handles authenticated
-    // HD, Japanese sites, DRM-lite scenarios, and everything yt-dlp supports.
+    // Try first when a backend is configured; it handles authenticated HD,
+    // Japanese sites, DRM-lite scenarios, and everything yt-dlp supports. For
+    // preferOnDevice sites this is the fallback after the on-device attempt.
     {
       const attempt = await runAttempt('server-extraction', () => extractViaServer(pageUrl));
       if (attempt.success && attempt.media) {
@@ -130,8 +150,8 @@ export class ExtractionManager {
     // ── Tier 2: platform-specific + HTML detection pipeline ───────────────
     // `extractFromSocialUrl` already has a full non-fatal fallback chain:
     // platform extractor → HLS detector → DASH detector → OG/meta → generic.
-    // We delegate to it and report the aggregate result.
-    if (isSocialPageUrl(pageUrl) || caps) {
+    // Skipped when preferOnDevice already ran it above.
+    if ((isSocialPageUrl(pageUrl) || caps) && !caps?.preferOnDevice) {
       const attempt = await runAttempt('platform-extractors', () => extractFromSocialUrl(pageUrl));
       if (attempt.success && attempt.media) {
         const best = pickBestMedia(attempt.media);

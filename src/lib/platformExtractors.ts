@@ -6,7 +6,7 @@
 import { DetectedMedia, Provenance } from '../types';
 import { extractYouTubeStreams } from './ytExtractor';
 import { extractViaServer } from './serverExtractor';
-import { getAcceptLanguage } from './siteRegistry';
+import { getAcceptLanguage, getSiteCapabilities } from './siteRegistry';
 import { debugLog, debugWarn } from './releaseLogger';
 
 let _seq = 0;
@@ -635,16 +635,10 @@ function xhsMakeItem(
   };
 }
 
+// On-device only: scrape __INITIAL_STATE__ from the note page. Server-assisted
+// extraction is handled by the caller (extractFromSocialUrl / extractionManager),
+// which for XHS runs this first since the server path is gated and slow.
 async function extractXiaohongshu(pageUrl: string): Promise<DetectedMedia[]> {
-  try {
-    const items = await extractViaServer(pageUrl);
-    if (items.length > 0) {
-      return items.map(item => ({ ...item, label: item.label ?? 'Xiaohongshu' }));
-    }
-  } catch (e) {
-    debugWarn('[extractXiaohongshu] server extractor errored:', String(e).slice(0, 200));
-  }
-
   try {
     let targetUrl = pageUrl;
     if (targetUrl.includes('xhslink.com')) {
@@ -925,9 +919,15 @@ export async function extractFromSocialUrl(pageUrl: string): Promise<DetectedMed
   }
   const platform = PLATFORMS.find(p => p.re.test(pageUrl));
   const japaneseUrl = isJapaneseDomain(pageUrl);
+  // For sites the server can't extract without a session (Xiaohongshu), run the
+  // on-device platform extractor before the gated, slow server round-trip.
+  const serverFirst = !getSiteCapabilities(pageUrl)?.preferOnDevice;
+  const serverStep: [string, () => Promise<DetectedMedia[]>] =
+    ['yt-dlp extraction', () => extractViaServer(pageUrl)];
+  const platformStep: [string, () => Promise<DetectedMedia[]>] =
+    ['platform-specific extractor', () => platform ? platform.fn(pageUrl) : Promise.resolve([])];
   const strategies: Array<[string, () => Promise<DetectedMedia[]>]> = [
-    ['yt-dlp extraction', () => extractViaServer(pageUrl)],
-    ['platform-specific extractor', () => platform ? platform.fn(pageUrl) : Promise.resolve([])],
+    ...(serverFirst ? [serverStep, platformStep] : [platformStep, serverStep]),
     // For Japanese URLs without a specific extractor, try the generic locale-aware
     // scraper before the generic English paths.
     ...(japaneseUrl && !platform

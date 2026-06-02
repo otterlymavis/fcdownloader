@@ -22,6 +22,13 @@ export interface SiteCapabilities {
   requiresAuth?: boolean;
   /** Accept-Language value for HTTP fetches to this domain. */
   acceptLanguage?: string;
+  /**
+   * Run on-device extraction before the server for this site. Use for sites the
+   * server can't extract without a logged-in session (so the server round-trip
+   * is slow and usually fails) but whose page JSON the on-device scraper reads
+   * directly — e.g. Xiaohongshu.
+   */
+  preferOnDevice?: boolean;
   /** Human-readable notes about extraction quirks. */
   notes?: string;
 }
@@ -97,7 +104,8 @@ const REGISTRY: SiteEntry[] = [
     caps: {
       preferredStrategies: ['server-download', 'direct'],
       requiresAuth: true,
-      notes: 'Most content requires login; mobile UA required',
+      preferOnDevice: true,
+      notes: 'Most content requires login; mobile UA required; on-device scrape of __INITIAL_STATE__ is fast, server extraction is gated',
     },
   },
   // ── TVer ──────────────────────────────────────────────────────────────────
