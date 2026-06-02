@@ -1,6 +1,6 @@
 {
   "name": "fcdownloader",
-  "version": "1.5.14",
+  "version": "1.5.19",
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
