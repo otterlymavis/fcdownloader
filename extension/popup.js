@@ -65,6 +65,7 @@ function sendMessage(message, timeoutMs = 30000) {
 }
 
 function setStatus(text, kind = "info", detail = "") {
+  if (statusProgressFill) statusProgressFill.classList.remove("indeterminate");
   if (!text) {
     statusEl.hidden = true;
     if (statusTextEl) statusTextEl.textContent = "";
@@ -91,12 +92,28 @@ function setStatus(text, kind = "info", detail = "") {
 }
 
 function setProgress(pct, text = "") {
+  if (statusProgressFill) statusProgressFill.classList.remove("indeterminate");
   statusEl.hidden = false;
   if (statusProgressContainer) statusProgressContainer.style.display = "block";
   if (statusProgressFill) statusProgressFill.style.width = `${pct}%`;
-  if (text && statusTextEl) {
-    statusTextEl.textContent = text;
+  if (text && statusTextEl) statusTextEl.textContent = text;
+}
+
+function setProgressIndeterminate(text = "") {
+  statusEl.hidden = false;
+  if (statusProgressContainer) statusProgressContainer.style.display = "block";
+  if (statusProgressFill) {
+    statusProgressFill.style.width = "100%";
+    statusProgressFill.classList.add("indeterminate");
   }
+  if (text && statusTextEl) statusTextEl.textContent = text;
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function startProgressPolling(mediaUrl) {
@@ -137,6 +154,47 @@ function startProgressPolling(mediaUrl) {
       // Ignore network errors while polling
     }
   }, 1000);
+}
+
+// Track a chrome.downloads download by ID — used for server and direct downloads.
+function startDownloadTracking(downloadId) {
+  if (!downloadId || !chrome.downloads?.search) return;
+  if (progressPollInterval) clearInterval(progressPollInterval);
+  setProgressIndeterminate("Downloading...");
+
+  progressPollInterval = setInterval(async () => {
+    try {
+      const [dl] = await new Promise((res) => chrome.downloads.search({ id: downloadId }, res));
+      if (!dl) {
+        clearInterval(progressPollInterval);
+        progressPollInterval = null;
+        return;
+      }
+      if (dl.state === "complete") {
+        setProgress(100, "Download complete!");
+        setTimeout(() => setStatus("Saved to your browser's Downloads.", "success"), 1500);
+        clearInterval(progressPollInterval);
+        progressPollInterval = null;
+        return;
+      }
+      if (dl.state === "interrupted") {
+        setStatus(`Download failed: ${dl.error || "interrupted"}.`, "error");
+        clearInterval(progressPollInterval);
+        progressPollInterval = null;
+        return;
+      }
+      // in_progress
+      if (dl.totalBytes > 0) {
+        const pct = Math.round((dl.bytesReceived / dl.totalBytes) * 100);
+        setProgress(pct,
+          `Downloading: ${pct}%  (${formatBytes(dl.bytesReceived)} / ${formatBytes(dl.totalBytes)})`);
+      } else if (dl.bytesReceived > 0) {
+        setProgressIndeterminate(`Downloading: ${formatBytes(dl.bytesReceived)}`);
+      }
+    } catch {
+      // popup closing or extension reloading
+    }
+  }, 600);
 }
 
 function hostname(url) {
@@ -610,7 +668,7 @@ if (downloadSelectedBtn) {
 extractBtn.addEventListener("click", async () => {
   extractBtn.disabled = true;
   pinnedExtractResult = false;
-  setStatus("Looking for media...");
+  setProgressIndeterminate("Looking for media...");
   try {
     const resp = await sendMessage({
       type: "fcdl:extract",
@@ -716,7 +774,7 @@ function renderGallery(info) {
   if (primaryAudioBtn) primaryAudioBtn.hidden = true;
   primaryBtn.onclick = async () => {
     primaryBtn.disabled = true;
-    setStatus(`Downloading 0 of ${items.length}...`);
+    setProgressIndeterminate(`Downloading 0 of ${items.length}...`);
     const resp = await sendMessage({
       type: "fcdl:download_gallery",
       tabId: currentTabId,
@@ -732,7 +790,8 @@ function renderGallery(info) {
     }
     const { started = 0, failed = 0 } = resp;
     if (failed === 0) {
-      setStatus(`Saved ${started} files. Check your browser's Downloads.`, "success");
+      setProgress(100, `Saved ${started} files.`);
+      setTimeout(() => setStatus(`Saved ${started} files. Check your browser's Downloads.`, "success"), 1200);
     } else {
       setErrorStatus(`Saved ${started}, ${failed} failed. Check the extension console for details.`);
     }
@@ -808,7 +867,11 @@ async function downloadItem(item) {
   }
   
   if (!isCompanion || !helperIsReady) {
-    setStatus("Download started. Check your browser's Downloads.", "success");
+    if (resp.downloadId) {
+      startDownloadTracking(resp.downloadId);
+    } else {
+      setStatus("Download started. Check your browser's Downloads.", "success");
+    }
   }
 }
 
@@ -869,7 +932,7 @@ async function downloadSelectedGalleryItems() {
   }
 
   downloadSelectedBtn.disabled = true;
-  setStatus(`Starting ${items.length} gallery download${items.length === 1 ? "" : "s"}...`);
+  setProgressIndeterminate(`Downloading ${items.length} item${items.length === 1 ? "" : "s"}...`);
   const resp = await sendMessage({
     type: "fcdl:download_gallery",
     tabId: currentTabId,
@@ -885,9 +948,10 @@ async function downloadSelectedGalleryItems() {
   }
   const { started = 0, failed = 0 } = resp;
   if (failed === 0) {
-    setStatus(`Started ${started} download${started === 1 ? "" : "s"}. Check your browser's Downloads.`, "success");
+    setProgress(100, `Saved ${started} item${started === 1 ? "" : "s"}.`);
+    setTimeout(() => setStatus(`Saved ${started} item${started === 1 ? "" : "s"}. Check your browser's Downloads.`, "success"), 1200);
   } else {
-    setErrorStatus(`Started ${started}, ${failed} failed. Check the extension console for details.`);
+    setErrorStatus(`Saved ${started}, ${failed} failed. Check the extension console for details.`);
   }
 }
 

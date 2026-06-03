@@ -295,7 +295,24 @@ button, .primary, .ghost {
   background: var(--accent);
   width: 0%;
   border-radius: 3px;
-  transition: width 0.2s ease;
+  transition: width 0.25s ease;
+}
+
+@keyframes fcdl-shimmer {
+  0%   { background-position: -240px 0; }
+  100% { background-position: calc(240px + 100%) 0; }
+}
+.progress-bar-fill.indeterminate {
+  width: 100% !important;
+  transition: none;
+  background: linear-gradient(
+    90deg,
+    var(--border)  0%,
+    var(--accent)  50%,
+    var(--border)  100%
+  );
+  background-size: 240px 100%;
+  animation: fcdl-shimmer 1.4s infinite linear;
 }
 
 /* ── "Other videos" details ──────────────────────────────────────────── */

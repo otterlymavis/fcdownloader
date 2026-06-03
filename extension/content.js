@@ -399,6 +399,19 @@
   function scanWeibo() {
     const found = [];
     if (!/(?:^|\.)weibo\.(?:com|cn)$/i.test(location.hostname)) return found;
+    // mapp.api.weibo.cn is a mobile share/redirect URL — skip the post-path
+    // check and hand it straight to the backend; yt-dlp follows the redirect.
+    if (/mapp\.api\.weibo\.cn/i.test(location.hostname)) {
+      found.push({
+        url: location.href,
+        pageUrl: location.href,
+        kind: "embed",
+        source: "weibo-page",
+        label: "Weibo",
+        backendRouted: true,
+      });
+      return found;
+    }
     if (!/(?:\/(?:status|detail)\/[A-Za-z0-9]+|\/(?:\d+|0)\/[A-Za-z0-9]+|\/tv\/show\/|video\.weibo\.com\/show)/i.test(location.href)) return found;
     try {
       const html = document.documentElement.outerHTML.slice(0, 1_500_000);
@@ -449,7 +462,7 @@
     try {
       const html = document.documentElement.outerHTML.slice(0, 1_000_000);
       const patterns = [
-        [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:bilivideo\.com|hdslb\.com)[^"'\\<>\s]*\.(?:m4s|mp4|m3u8|mpd)[^"'\\<>\s]*)/g, "direct"],
+        [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:bilivideo\.(?:com|cn)|hdslb\.com)[^"'\\<>\s]*\.(?:m4s|mp4|m3u8|mpd)[^"'\\<>\s]*)/g, "direct"],
         [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:i\d?\.hdslb\.com|biliimg\.com)[^"'\\<>\s]*\.(?:jpe?g|png|webp)[^"'\\<>\s]*)/g, "image"],
       ];
       for (const [re, kind] of patterns) {
@@ -466,6 +479,70 @@
       }
     } catch {}
     return found;
+  }
+
+  // ── Reddit ────────────────────────────────────────────────────────────────
+  // Fetch the Reddit JSON API directly from the browser context so the request
+  // comes from the user's IP (not the server's datacenter IP, which Reddit
+  // blocks). Handles videos, gallery posts, and single-image posts.
+  async function scanRedditAsync() {
+    if (!/(?:^|\.)reddit\.com$/i.test(location.hostname)) return;
+    const postMatch = location.pathname.match(/\/r\/[^/]+\/comments\/([A-Za-z0-9]+)/i);
+    if (!postMatch) return;
+    try {
+      const jsonUrl = `https://www.reddit.com/comments/${postMatch[1]}.json?limit=1&raw_json=1`;
+      const res = await fetch(jsonUrl, { headers: { Accept: "application/json" } });
+      if (!res.ok) return;
+      const data = await res.json();
+      const p = data[0]?.data?.children?.[0]?.data;
+      if (!p) return;
+      const items = [];
+
+      if (p.secure_media?.reddit_video?.fallback_url) {
+        items.push({
+          url: p.secure_media.reddit_video.fallback_url,
+          kind: p.secure_media.reddit_video.hls_url ? "hls" : "direct",
+          source: "reddit-json",
+          label: "Reddit Video",
+          pageUrl: location.href,
+          width: p.secure_media.reddit_video.width,
+          height: p.secure_media.reddit_video.height,
+        });
+        if (p.secure_media.reddit_video.hls_url) {
+          items[0].url = p.secure_media.reddit_video.hls_url;
+        }
+      }
+
+      if (p.is_gallery && p.media_metadata) {
+        const EXT = { "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp" };
+        const order = Array.isArray(p.gallery_data?.items)
+          ? p.gallery_data.items
+          : Object.keys(p.media_metadata).map((id) => ({ media_id: id }));
+        for (const { media_id } of order) {
+          const meta = p.media_metadata[media_id];
+          if (!meta || meta.status !== "valid") continue;
+          const ext = EXT[meta.m] || "jpg";
+          items.push({
+            url: `https://i.redd.it/${media_id}.${ext}`,
+            kind: "image",
+            source: "reddit-json",
+            label: "Reddit Image",
+            pageUrl: location.href,
+            width: meta.s?.x,
+            height: meta.s?.y,
+          });
+        }
+      }
+
+      if (!items.length && p.url) {
+        const u = p.url;
+        if (/(?:^|\.)i\.redd\.it\//i.test(u) || /\.(jpe?g|png|gif|webp)(?:[?#]|$)/i.test(u)) {
+          items.push({ url: u, kind: "image", source: "reddit-json", label: "Reddit Image", pageUrl: location.href });
+        }
+      }
+
+      if (items.length) post(items);
+    } catch {}
   }
 
   const JAPANESE_BACKEND_PLATFORMS = [
@@ -632,6 +709,7 @@
 
   maybeScan();
   scanYouTubeInnertube();
+  scanRedditAsync();
   const earlyTimer = setInterval(() => {
     if (maybeScan()) clearInterval(earlyTimer);
   }, 2000);

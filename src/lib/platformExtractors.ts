@@ -145,7 +145,7 @@ async function extractHtmlMedia(pageUrl: string, mode: 'hls' | 'dash' | 'generic
     : mode === 'dash' ? [/(https?:\/\/[^"'\\<>\s]+?\.mpd[^"'\\<>\s]*)/gi]
     : [
         /(https?:\/\/[^"'\\<>\s]+?\.(?:m3u8|mpd|mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif)[^"'\\<>\s]*)/gi,
-        /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.com|weibocdn\.com|xhscdn\.com|biliimg\.com|hdslb\.com|pximg\.net|yimg\.jp|kakaocdn\.net)[^"'\\<>\s]*)/gi,
+        /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.(?:com|cn)|weibocdn\.com|xhscdn\.com|ci\.xiaohongshu\.com|biliimg\.com|hdslb\.com|pximg\.net|yimg\.jp|kakaocdn\.net)[^"'\\<>\s]*)/gi,
       ];
   patterns.forEach((re) => {
     extractUrls(html, re)
@@ -238,21 +238,33 @@ async function extractReddit(pageUrl: string): Promise<DetectedMedia[]> {
       const res = await fetch(targetUrl, { redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
       targetUrl = res.url;
     }
-    
+
     const jsonUrl = targetUrl.split('?')[0].replace(/\/$/, '') + '/.json';
     const res = await fetch(jsonUrl, { headers: { 'User-Agent': DESKTOP_UA } });
     if (!res.ok) return [];
-    
+
     const data = await res.json();
     const post = data[0]?.data?.children?.[0]?.data;
     const results: DetectedMedia[] = [];
-    
+
     if (post?.secure_media?.reddit_video?.fallback_url) {
-       results.push(makeItem(post.secure_media.reddit_video.fallback_url, pageUrl, 'Reddit Video', 'social-extractor', 0.9));
-    } else if (post?.url && /\.(jpe?g|png|gif)$/i.test(post.url)) {
-       results.push(makeItem(post.url, pageUrl, 'Reddit Image', 'social-extractor', 0.9));
+      results.push(makeItem(post.secure_media.reddit_video.fallback_url, pageUrl, 'Reddit Video', 'social-extractor', 0.9));
+    } else if (post?.is_gallery && post?.media_metadata) {
+      // Gallery post: ordered by gallery_data.items when available
+      const items: Array<{ media_id: string }> =
+        Array.isArray(post.gallery_data?.items)
+          ? post.gallery_data.items
+          : Object.keys(post.media_metadata).map((id) => ({ media_id: id }));
+      for (const { media_id } of items) {
+        const meta = post.media_metadata[media_id];
+        if (!meta || meta.status !== 'valid') continue;
+        const srcUrl: string = (meta.s?.u || meta.s?.gif || '').replace(/&amp;/g, '&');
+        if (srcUrl) pushUnique(results, makeItem(srcUrl, pageUrl, 'Reddit Image', 'social-extractor', 0.9));
+      }
+    } else if (post?.url && /\.(jpe?g|png|gif|webp|avif)(?:[?#]|$)/i.test(post.url)) {
+      results.push(makeItem(post.url, pageUrl, 'Reddit Image', 'social-extractor', 0.9));
     }
-    
+
     return results;
   } catch { return []; }
 }

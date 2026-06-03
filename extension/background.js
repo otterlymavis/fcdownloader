@@ -20,11 +20,11 @@ const DEFAULT_BACKEND = (FCDL_DEFAULT_BACKEND || "").trim().replace(/\/+$/, "");
 const DEBUG_LOGS = false;
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i;
 const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i;
-const SERVER_ONLY_RE = /youtube\.com|youtu\.be|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.com|bilibili\.com|b23\.tv|weibo\.com|weibo\.cn|weibocdn\.com|xiaohongshu\.com|rednote\.com|xhslink\.com|xhscdn\.com|tiktok\.com|vm\.tiktok\.com|reddit\.com|redd\.it|naver\.com|naver\.me|pstatic\.net|nicovideo\.jp|nico\.ms|niconico\.com|nicochannel\.jp|tver\.jp|tver\.co\.jp|abema\.tv|abema\.io|twitcasting\.tv|openrec\.tv|video\.fc2\.com|live\.fc2\.com|nhk\.or\.jp|nhk\.jp|cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp|fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp|video\.yahoo\.co\.jp|news\.yahoo\.co\.jp|ameblo\.jp|ameba\.jp|natalie\.mu|oricon\.co\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net/;
-const PAGE_HTML_RE = /(?:^|\.)(?:oricon\.co\.jp|news\.yahoo\.co\.jp|news\.naver\.com|n\.news\.naver\.com|m\.news\.naver\.com|entertain\.naver\.com|m\.entertain\.naver\.com|sports\.news\.naver\.com|m\.sports\.naver\.com|t\.bilibili\.com|bilibili\.com|ameblo\.jp|ameba\.jp|natalie\.mu|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net)$/i;
-const PROXY_REQUIRED_RE = /(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|weibocdn\.com|xhscdn\.com|bilivideo\.com|biliimg\.com|hdslb\.com|pstatic\.net|pximg\.net|yimg\.jp|kakaocdn\.net|daumcdn\.net|img-mdpr\.freetls\.fastly\.net)/i;
+const SERVER_ONLY_RE = /youtube\.com|youtu\.be|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.(?:com|cn)|bilibili\.com|b23\.tv|weibo\.com|weibo\.cn|weibocdn\.com|xiaohongshu\.com|rednote\.com|xhslink\.com|xhscdn\.com|tiktok\.com|vm\.tiktok\.com|reddit\.com|redd\.it|naver\.com|naver\.me|pstatic\.net|nicovideo\.jp|nico\.ms|niconico\.com|nicochannel\.jp|tver\.jp|tver\.co\.jp|abema\.tv|abema\.io|twitcasting\.tv|openrec\.tv|video\.fc2\.com|live\.fc2\.com|nhk\.or\.jp|nhk\.jp|cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp|fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp|video\.yahoo\.co\.jp|news\.yahoo\.co\.jp|ameblo\.jp|ameba\.jp|natalie\.mu|oricon\.co\.jp|mdpr\.jp|modelpress\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net/;
+const PAGE_HTML_RE = /(?:^|\.)(?:oricon\.co\.jp|mdpr\.jp|modelpress\.jp|news\.yahoo\.co\.jp|news\.naver\.com|n\.news\.naver\.com|m\.news\.naver\.com|entertain\.naver\.com|m\.entertain\.naver\.com|sports\.news\.naver\.com|m\.sports\.naver\.com|t\.bilibili\.com|bilibili\.com|ameblo\.jp|ameba\.jp|natalie\.mu|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net)$/i;
+const PROXY_REQUIRED_RE = /(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|weibocdn\.com|xhscdn\.com|ci\.xiaohongshu\.com|bilivideo\.(?:com|cn)|biliimg\.com|hdslb\.com|pstatic\.net|pximg\.net|yimg\.jp|kakaocdn\.net|daumcdn\.net|img-mdpr\.freetls\.fastly\.net)/i;
 const REPLAY_HEADER_ALLOW_RE = /^(accept|accept-language|origin|range|referer|user-agent)$/i;
-const RUNTIME_CAPTURE_HOST_RE = /(?:tver\.jp|tver\.co\.jp|abema\.tv|abema\.io|fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp|cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp|video\.fc2\.com|live\.fc2\.com|nicovideo\.jp|nico\.ms|niconico\.com|nicochannel\.jp|news\.yahoo\.co\.jp|video\.yahoo\.co\.jp|mantan-web\.jp|tv\.kakao\.com|kakao\.com|xiaohongshu\.com|rednote\.com|xhslink\.com|xhscdn\.com|bilibili\.com|bilivideo\.com|hdslb\.com|biliimg\.com|naver\.com|naver\.me|pstatic\.net|brightcove\.net|boltdns\.net|akamaihd\.net|akamaized\.net|vod-abematv|linear-abematv|kakaocdn\.net|daumcdn\.net|nimg\.jp|dmc\.nico)/i;
+const RUNTIME_CAPTURE_HOST_RE = /(?:tver\.jp|tver\.co\.jp|abema\.tv|abema\.io|fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp|cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp|video\.fc2\.com|live\.fc2\.com|nicovideo\.jp|nico\.ms|niconico\.com|nicochannel\.jp|news\.yahoo\.co\.jp|video\.yahoo\.co\.jp|mantan-web\.jp|tv\.kakao\.com|kakao\.com|xiaohongshu\.com|rednote\.com|xhslink\.com|xhscdn\.com|ci\.xiaohongshu\.com|bilibili\.com|bilivideo\.(?:com|cn)|hdslb\.com|biliimg\.com|naver\.com|naver\.me|pstatic\.net|brightcove\.net|boltdns\.net|akamaihd\.net|akamaized\.net|vod-abematv|linear-abematv|kakaocdn\.net|daumcdn\.net|nimg\.jp|dmc\.nico)/i;
 const PREFLIGHT_MEDIA_TYPES = [
   "video/",
   "image/",
@@ -170,6 +170,7 @@ function itemPriority(item, preferCapturedMedia = false) {
   if (item.source === "weibo-page") return 95;
   if (item.source === "japanese-page") return 92;
   if (item.source === "backend") return 95;
+  if (item.source === "reddit-json") return item.kind === "image" ? 72 : 88;
   if (item.source === "network") return 40;
   if (item.source === "meta-json") return 30;  // common on Meta feeds; usually noise
   if (item.source === "og:video") return 70;
@@ -187,9 +188,11 @@ function helperAbsentFallbackScore(item) {
   if (item.source === "video-tag" && item.kind === "direct") return 90;
   if (item.kind === "direct" && /\.(?:mp4|m4v|webm|mov)(?:[?#]|$)/i.test(item.url || "")) return 85;
   if (item.source === "network" && item.kind === "direct") return 80;
+  if (item.source === "reddit-json" && item.kind !== "image") return 78;
   if (item.kind === "hls" || item.kind === "dash" || item.kind === "paired") return 70;
   if (item.backendRouted || item.source === "backend") return 60;
   if (item.kind === "embed" || item.source === "iframe") return 50;
+  if (item.source === "reddit-json" && item.kind === "image") return 35;
   if (item.kind === "audio") return 30;
   if (item.kind === "image") return 20;
   return 40;
@@ -466,7 +469,7 @@ function isLikelyMedia(url) {
   if (/googlevideo\.com\/videoplayback/.test(url)) {
     return false;
   }
-  if (/(?:video\.twimg\.com|cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|v\.redd\.it|tiktokcdn\.com|v\d+-webapp\.tiktok\.com|bilivideo\.com|weibocdn\.com|xhscdn\.com|dmcdn\.net|pinimg\.com\/(?:videos|originals|736x|1200x|564x)|vimeocdn\.com|nicovideo\.cdn\.nimg\.jp|dmc\.nico|nimg\.jp|abema(?:tv)?\.akamaized\.net|linear-abematv\.akamaized\.net|vod-abematv\.akamaized\.net|brightcove\.net|boltdns\.net|bcovlive-a\.akamaihd\.net)/.test(url)) {
+  if (/(?:video\.twimg\.com|cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|(?:v|i|preview)\.redd\.it|tiktokcdn\.com|v\d+-webapp\.tiktok\.com|bilivideo\.(?:com|cn)|ci\.xiaohongshu\.com|weibocdn\.com|xhscdn\.com|dmcdn\.net|pinimg\.com\/(?:videos|originals|736x|1200x|564x)|vimeocdn\.com|nicovideo\.cdn\.nimg\.jp|dmc\.nico|nimg\.jp|abema(?:tv)?\.akamaized\.net|linear-abematv\.akamaized\.net|vod-abematv\.akamaized\.net|brightcove\.net|boltdns\.net|bcovlive-a\.akamaihd\.net)/.test(url)) {
     return true;
   }
   if (RUNTIME_CAPTURE_HOST_RE.test(url)) return true;
@@ -636,7 +639,7 @@ function extractAuditCandidatesFromHtml(pageUrl, pageHtml) {
   const add = (url, strategy, source, fieldPath) => {
     url = normalizeAuditUrl(url);
     if (!/^https?:\/\//i.test(url)) return;
-    if (!/(?:\.(?:m3u8|mpd|mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)|(?:sinaimg\.cn|weibocdn\.com|xhscdn\.com|bilivideo\.com|hdslb\.com|biliimg\.com|pstatic\.net|pximg\.net|kakaocdn\.net|daumcdn\.net|cdninstagram\.com|fbcdn\.net|threadscdn\.com))/i.test(url)) return;
+    if (!/(?:\.(?:m3u8|mpd|mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)|(?:sinaimg\.cn|weibocdn\.com|xhscdn\.com|ci\.xiaohongshu\.com|bilivideo\.(?:com|cn)|hdslb\.com|biliimg\.com|pstatic\.net|pximg\.net|kakaocdn\.net|daumcdn\.net|cdninstagram\.com|fbcdn\.net|threadscdn\.com))/i.test(url)) return;
     if (/(?:avatar|profile|emoji|sprite|favicon|tracking|pixel|blank)/i.test(url)) return;
     const key = `${strategy}\n${source}\n${url.replace(/\?.*$/, "")}\n${fieldPath || ""}`;
     if (seen.has(key)) return;
@@ -649,7 +652,7 @@ function extractAuditCandidatesFromHtml(pageUrl, pageHtml) {
   while ((m = metaRe.exec(html)) !== null && out.length < 160) {
     add(m[2], "embedded-metadata", "meta-tag", m[1]);
   }
-  const urlRe = /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:\.(?:m3u8|mpd|mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif|heic)|(?:sinaimg\.cn|weibocdn\.com|xhscdn\.com|bilivideo\.com|hdslb\.com|biliimg\.com|pstatic\.net|pximg\.net|kakaocdn\.net|daumcdn\.net|cdninstagram\.com|fbcdn\.net|threadscdn\.com))[^"'\\<>\s]*)/gi;
+  const urlRe = /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:\.(?:m3u8|mpd|mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif|heic)|(?:sinaimg\.cn|weibocdn\.com|xhscdn\.com|ci\.xiaohongshu\.com|bilivideo\.(?:com|cn)|hdslb\.com|biliimg\.com|pstatic\.net|pximg\.net|kakaocdn\.net|daumcdn\.net|cdninstagram\.com|fbcdn\.net|threadscdn\.com))[^"'\\<>\s]*)/gi;
   while ((m = urlRe.exec(html)) !== null && out.length < 240) {
     add(m[1], "embedded-metadata", "html-url-regex", "document");
   }
@@ -1188,9 +1191,16 @@ async function downloadItem(tabId, item) {
   };
 
   addRoute("direct Weibo image", item.kind === "image" && isWeiboDirectImageUrl(item.url), async () => {
-    debugLog("[fcdl] â†’ direct Weibo image");
+    debugLog("[fcdl] → direct Weibo image");
     const check = await preflightDirectUrl(item.url);
     if (!check.ok) throw new Error(`Weibo image direct download failed (${check.error})`);
+    return chromeDownload(item.url, suggestedFilename(item, downloadPageUrl, tabTitle));
+  });
+
+  addRoute("direct Reddit image", item.kind === "image" && isRedditDirectImageUrl(item.url), async () => {
+    debugLog("[fcdl] → direct Reddit image");
+    const check = await preflightDirectUrl(item.url);
+    if (!check.ok) throw new Error(`Reddit image direct download failed (${check.error})`);
     return chromeDownload(item.url, suggestedFilename(item, downloadPageUrl, tabTitle));
   });
 
@@ -1425,6 +1435,10 @@ function isWeiboDirectImageUrl(url) {
   const value = String(url || "");
   return /(?:^|\/\/)(?:[^/]+\.)?(?:sinaimg\.cn|weibocdn\.com)\//i.test(value) &&
     IMAGE_EXT_RE.test(value);
+}
+
+function isRedditDirectImageUrl(url) {
+  return /(?:^|\.)i\.redd\.it\//i.test(String(url || "")) && IMAGE_EXT_RE.test(url);
 }
 
 // ── Gallery downloads — Instagram carousel, Reddit gallery, Threads ───────

@@ -50,7 +50,7 @@ const REGISTRY: SiteEntry[] = [
   },
   // ── Bilibili ───────────────────────────────────────────────────────────────
   {
-    pattern: /(?:bilibili\.com\/video\/|b23\.tv\/|bilibili\.tv\/)/i,
+    pattern: /(?:bilibili\.com\/video\/|b23\.tv\/|bilibili\.tv\/|m\.bilibili\.com\/video\/)/i,
     caps: {
       preferredStrategies: ['server-download', 'dash', 'direct'],
       requiresAuth: true,
