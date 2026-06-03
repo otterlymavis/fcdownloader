@@ -45,6 +45,24 @@ known restricted CDN are routed through the backend `/proxy` endpoint.
 
 To update after code changes, hit **Reload** on the extension card.
 
+### Automated end-to-end test against the sample URLs
+
+`scripts/test-extension-urls.mjs` drives the *installed* extension the way a
+user would: it launches Chrome/Edge with this folder loaded, opens every sample
+URL from `test_all_urls.py` in a real tab, lets the content script + webRequest
+capture run, then fires the extension's own `fcdl:extract` / `fcdl:download`
+messages and reports PASS / DETECT / FAIL.
+
+```bash
+npm install                       # one-time: installs Playwright
+npm run test:extension            # detect-only, all platforms
+npm run test:extension -- youtube vimeo      # only named platforms
+npm run test:extension -- --download         # also save files and verify bytes
+npm run test:extension -- --cookies          # use the test profile's logged-in cookies
+```
+
+A JSON report is written to `artifacts/extension-test-<timestamp>.json`.
+
 ### Firefox
 
 1. Open `about:debugging#/runtime/this-firefox`
