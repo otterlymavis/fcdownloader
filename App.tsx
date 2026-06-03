@@ -577,27 +577,6 @@ export default function App() {
                 {translate('browseHint', resolvedLanguage)}
               </Text>
 
-              <Pressable
-                android_ripple={{ color: 'rgba(255,255,255,0.15)', borderless: false }}
-                style={[s.outlineBtn, { borderColor: t.sep, marginTop: 16 }]}
-                onPress={async () => {
-                  try {
-                    showToast(translate('installingTools', resolvedLangRef.current), 'info');
-                    const res = await fetch('http://127.0.0.1:8765/tools/ensure', { method: 'POST' });
-                    if (res.ok) {
-                      showToast(translate('toolsUpdated', resolvedLangRef.current), 'success');
-                    } else {
-                      showToast(translate('toolsUpdateFailed', resolvedLangRef.current), 'error');
-                    }
-                  } catch (e) {
-                    showToast(translate('companionNotRunning', resolvedLangRef.current), 'error');
-                  }
-                }}
-              >
-                <Text style={[s.outlineBtnLabel, { color: t.ink2, fontSize: fs(13) }]}>
-                  {translate('installUpdateTools', resolvedLanguage)}
-                </Text>
-              </Pressable>
             </View>
 
             {/* Active downloads (compact) */}
