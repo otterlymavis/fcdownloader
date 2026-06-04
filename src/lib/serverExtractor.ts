@@ -88,6 +88,14 @@ export interface ServerExtractResponse {
   sourceAudit?: SourceAuditEntry[];
 }
 
+export interface ServerExtractOptions {
+  referer?: string | null;
+  cookies?: string | null;
+  pageHtml?: string | null;
+  mediaHints?: Array<Record<string, unknown>> | null;
+  sourceAudit?: SourceAuditEntry[] | null;
+}
+
 export async function getServerExtractorUrl(): Promise<string | null> {
   // Bundled value (from .env.local at build time) wins when set. The Settings
   // UI for the URL is hidden, so any AsyncStorage value is stale state from
@@ -115,7 +123,7 @@ export async function getServerExtractorToken(): Promise<string | null> {
  * usable extraction. Returns an empty array otherwise — caller must fall back
  * to on-device paths.
  */
-export async function extractViaServer(pageUrl: string): Promise<DetectedMedia[]> {
+export async function extractViaServer(pageUrl: string, options: ServerExtractOptions = {}): Promise<DetectedMedia[]> {
   const base = await getServerExtractorUrl();
   if (!base) return [];
   const token = await getServerExtractorToken();
@@ -135,14 +143,20 @@ export async function extractViaServer(pageUrl: string): Promise<DetectedMedia[]
     // header — gets populated, and every internal yt-dlp call inherits the
     // session. Without this, Bilibili tops out at 480p, Instagram fails on
     // most posts, etc.
-    let cookies = '';
-    try {
-      cookies = await extractSessionCookies(pageUrl);
-    } catch (e) {
-      debugWarn('[serverExtractor] cookie read failed:', String(e).slice(0, 120));
+    let cookies = (options.cookies ?? '').trim();
+    if (!cookies) {
+      try {
+        cookies = await extractSessionCookies(pageUrl);
+      } catch (e) {
+        debugWarn('[serverExtractor] cookie read failed:', String(e).slice(0, 120));
+      }
     }
     const body: Record<string, unknown> = { pageUrl };
+    if (options.referer) body.referer = options.referer;
     if (cookies) body.cookies = cookies;
+    if (options.pageHtml) body.pageHtml = options.pageHtml;
+    if (options.mediaHints?.length) body.mediaHints = options.mediaHints.slice(0, 120);
+    if (options.sourceAudit?.length) body.sourceAudit = options.sourceAudit.slice(0, 120);
     if (_removeWatermark) body.removeWatermark = true;
 
     const fullUrl = `${base}/extract`;

@@ -170,12 +170,14 @@ function addToXcodeProject(project: any, appTargetName: string): void {
   // pbxTargetByName actually returns { uuid, pbxNativeTarget }. addBuildPhase takes the uuid.
   // But addSourceFile is what we really want for an existing target's Sources phase.
   project.addSourceFile(
-    `${SUBDIR}/${SWIFT_FILE}`,
+    SWIFT_FILE,
     { target: target.uuid },
+    groupResult.uuid,
   );
   project.addSourceFile(
-    `${SUBDIR}/${OBJC_FILE}`,
+    OBJC_FILE,
     { target: target.uuid },
+    groupResult.uuid,
   );
 }
 

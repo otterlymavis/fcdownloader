@@ -12,6 +12,9 @@ const BUNDLE_ID     = 'com.mabisuuu.fcdownloader';
 const EXT_BUNDLE_ID = `${BUNDLE_ID}.ShareExtension`;
 const APP_GROUP     = `group.${BUNDLE_ID}`;
 const APP_SCHEME    = 'fcdownloader';
+const DEPLOYMENT_TARGET = '15.1';
+const VERSION = '1.5.20';
+const BUILD_NUMBER = '24';
 
 function stringArray(value) {
   return Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [];
@@ -68,7 +71,7 @@ class ShareViewController: UIViewController {
 
     private func showSheet(for url: URL) {
         let urlStr  = url.absoluteString
-        let preview = urlStr.count > 80 ? String(urlStr.prefix(80)) + "\\u2026" : urlStr
+        let preview = urlStr.count > 80 ? String(urlStr.prefix(80)) + "..." : urlStr
         let sheet   = UIAlertController(title: "FC Downloader", message: preview,
                                         preferredStyle: .actionSheet)
         sheet.addAction(UIAlertAction(title: "Download", style: .default) { [weak self] _ in
@@ -106,6 +109,20 @@ const EXT_INFO_PLIST = `\
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleDisplayName</key>
+    <string>FC Downloader</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleName</key>
+    <string>FC Downloader</string>
+    <key>CFBundlePackageType</key>
+    <string>XPC!</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${VERSION}</string>
+    <key>CFBundleVersion</key>
+    <string>${BUILD_NUMBER}</string>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionAttributes</key>
@@ -163,8 +180,7 @@ function addExtensionToXcodeProject(project) {
   const mainGroupUuid = project.getFirstProject().firstProject.mainGroup;
   project.addToPbxGroup(groupResult.uuid, mainGroupUuid);
 
-  project.addBuildPhase(['ShareViewController.swift'], 'PBXSourcesBuildPhase',  'Sources',   targetUuid);
-  project.addBuildPhase(['Info.plist'],                'PBXResourcesBuildPhase','Resources', targetUuid);
+  project.addBuildPhase(['ShareViewController.swift'], 'PBXSourcesBuildPhase', 'Sources', targetUuid);
 
   // Build settings
   const allConfigs = project.pbxXCBuildConfigurationSection();
@@ -181,10 +197,10 @@ function addExtensionToXcodeProject(project) {
     s.SWIFT_VERSION              = '5.0';
     s.INFOPLIST_FILE             = `${EXT_NAME}/Info.plist`;
     s.CODE_SIGN_ENTITLEMENTS     = `${EXT_NAME}/${EXT_NAME}.entitlements`;
-    s.IPHONEOS_DEPLOYMENT_TARGET = '14.0';
+    s.IPHONEOS_DEPLOYMENT_TARGET = DEPLOYMENT_TARGET;
     s.SKIP_INSTALL               = 'YES';
     s.TARGETED_DEVICE_FAMILY     = '"1,2"';
-    s.PRODUCT_BUNDLE_IDENTIFIER  = `"${EXT_BUNDLE_ID}"`;
+    s.PRODUCT_BUNDLE_IDENTIFIER  = EXT_BUNDLE_ID;
   }
 }
 

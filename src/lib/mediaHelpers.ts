@@ -65,17 +65,19 @@ const YT_ITAG_RANK: Record<number, number> = {
   17: 20,
 };
 
-export function getSourceName(url: string): string {
+export function getSourceName(url: string, mediaKind?: string): string {
   for (const [pattern, name] of SOURCE_NAMES) {
     if (pattern.test(url)) return name;
   }
   try {
     const host = new URL(url).hostname.replace(/^www\./, '');
-    const name = host.split('.').slice(-2, -1)[0] ?? 'Video';
-    return name.charAt(0).toUpperCase() + name.slice(1);
-  } catch {
-    return 'Video';
-  }
+    const name = host.split('.').slice(-2, -1)[0];
+    if (name) return name.charAt(0).toUpperCase() + name.slice(1);
+  } catch {}
+  // Kind-aware fallback when hostname can't be parsed
+  if (mediaKind === 'audio') return 'Audio';
+  if (mediaKind === 'image') return 'Image';
+  return 'Video';
 }
 
 export function isXhsPageUrl(url: string): boolean {

@@ -12,7 +12,7 @@
  */
 import { DetectedMedia, DownloadStrategy } from '../types';
 import { extractFromSocialUrl, isSocialPageUrl } from './platformExtractors';
-import { extractViaServer } from './serverExtractor';
+import { extractViaServer, ServerExtractOptions } from './serverExtractor';
 import { getSiteCapabilities } from './siteRegistry';
 import { pickStrategy } from './downloadStrategies';
 import { debugLog, debugWarn } from './releaseLogger';
@@ -104,7 +104,7 @@ export class ExtractionManager {
    *  4. Collects diagnostics for every attempt.
    *  5. Never throws — failures are encoded in the returned ExtractionResult.
    */
-  async extract(pageUrl: string): Promise<ExtractionResult> {
+  async extract(pageUrl: string, session?: ServerExtractOptions): Promise<ExtractionResult> {
     const caps = getSiteCapabilities(pageUrl);
     const diagnostics: Record<string, string> = {};
 
@@ -132,7 +132,7 @@ export class ExtractionManager {
     // Japanese sites, DRM-lite scenarios, and everything yt-dlp supports. For
     // preferOnDevice sites this is the fallback after the on-device attempt.
     {
-      const attempt = await runAttempt('server-extraction', () => extractViaServer(pageUrl));
+      const attempt = await runAttempt('server-extraction', () => extractViaServer(pageUrl, session));
       if (attempt.success && attempt.media) {
         debugLog('[ExtractionManager] success via server-extraction for', pageUrl);
         return {
@@ -204,8 +204,8 @@ export class ExtractionManager {
    * This is a drop-in replacement for callers that used extractFromSocialUrl
    * directly but want the improved fallback + diagnostics.
    */
-  async extractMedia(pageUrl: string): Promise<DetectedMedia[]> {
-    const result = await this.extract(pageUrl);
+  async extractMedia(pageUrl: string, session?: ServerExtractOptions): Promise<DetectedMedia[]> {
+    const result = await this.extract(pageUrl, session);
     return result.media ?? [];
   }
 

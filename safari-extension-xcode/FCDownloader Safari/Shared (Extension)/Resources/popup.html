@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="popup.css">
+    <title>FCDownloader</title>
+  </head>
+  <body>
+    <main>
+      <header>
+        <strong>FCDownloader</strong>
+        <span id="status">Ready</span>
+      </header>
+
+      <section>
+        <button id="send-page" class="primary">Send page</button>
+        <button id="scan">Find media</button>
+      </section>
+
+      <section id="media-list" class="list"></section>
+
+      <section class="settings">
+        <label for="target">Downloader</label>
+        <select id="target">
+          <option value="fcdownloader">FCDownloader</option>
+          <option value="shortcuts">Shortcuts</option>
+          <option value="ashell">a-Shell</option>
+          <option value="custom">Custom URL template</option>
+        </select>
+        <textarea id="custom-template" rows="3" spellcheck="false"></textarea>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

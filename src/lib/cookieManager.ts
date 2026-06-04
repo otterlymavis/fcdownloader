@@ -1,17 +1,65 @@
 import CookieManager from '@react-native-cookies/cookies';
 
+function cookieHeaderFromMap(cookies: Record<string, { name: string; value: string }>): string {
+  return Object.values(cookies)
+    .filter((c) => c.name && c.value)
+    .map((c) => `${c.name}=${c.value}`)
+    .join('; ');
+}
+
+async function mergedCookieHeader(urls: string[], domains: string[] = []): Promise<string> {
+  const byName = new Map<string, string>();
+  for (const url of urls) {
+    try {
+      const cookies = await CookieManager.get(url, true);
+      for (const cookie of Object.values(cookies)) byName.set(cookie.name, cookie.value);
+    } catch {}
+  }
+  if (domains.length > 0) {
+    try {
+      const all = await CookieManager.getAll(true);
+      for (const cookie of Object.values(all)) {
+        const cd = (cookie.domain ?? '').replace(/^\./, '');
+        if (domains.some((domain) => cd === domain || cd.endsWith(`.${domain}`))) {
+          byName.set(cookie.name, cookie.value);
+        }
+      }
+    } catch {}
+  }
+  return Array.from(byName, ([name, value]) => `${name}=${value}`).join('; ');
+}
+
 /**
  * Returns cookies for the given URL as a Cookie header string.
  * Uses per-URL lookup first (most accurate), falls back to getAll() with
  * domain filtering if the URL-specific call fails.
  */
 export async function extractSessionCookies(url: string): Promise<string> {
+  if (/(?:youtube\.com|youtu\.be|googlevideo\.com)/i.test(url)) {
+    const header = await mergedCookieHeader(
+      ['https://www.youtube.com/', 'https://youtube.com/'],
+      ['youtube.com'],
+    );
+    if (header) return header;
+  }
+
+  if (/(?:xiaohongshu\.com|rednote\.com|xhscdn\.com|xhslink\.com)/i.test(url)) {
+    const header = await mergedCookieHeader(
+      [
+        'https://www.xiaohongshu.com/',
+        'https://xiaohongshu.com/',
+        'https://www.rednote.com/',
+        'https://rednote.com/',
+      ],
+      ['xiaohongshu.com', 'rednote.com'],
+    );
+    if (header) return header;
+  }
+
   // Try URL-specific lookup first — most reliable on both iOS and Android
   try {
     const cookies = await CookieManager.get(url, true);
-    const header = Object.values(cookies)
-      .map((c) => `${c.name}=${c.value}`)
-      .join('; ');
+    const header = cookieHeaderFromMap(cookies);
     if (header) return header;
   } catch {}
 

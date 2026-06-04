@@ -44,6 +44,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   },
   ios: {
     bundleIdentifier: 'com.mabisuuu.fcdownloader',
+    buildNumber: '24',
     supportsTablet: true,
     infoPlist: {
       ...(allowInsecureHttp ? { NSAppTransportSecurity: { NSAllowsArbitraryLoads: true } } : {}),
@@ -80,6 +81,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           // Public releases should use HTTPS. Local/self-hosted LAN builds can
           // opt into HTTP with FCDL_ALLOW_INSECURE_HTTP=1.
           usesCleartextTraffic: allowInsecureHttp,
+        },
+        ios: {
+          deploymentTarget: '15.1',
         },
       },
     ],

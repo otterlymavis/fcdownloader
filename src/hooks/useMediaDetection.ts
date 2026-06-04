@@ -1,6 +1,6 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { WebViewMessageEvent } from 'react-native-webview';
-import { DetectedMedia, MediaType, Provenance } from '../types';
+import { DetectedMedia, MediaType, Provenance, SourceAuditEntry } from '../types';
 import { debugLog } from '../lib/releaseLogger';
 import {
   isLikelyThumbnailUrl,
@@ -10,9 +10,20 @@ import {
   isXhsMediaCandidate,
   isSegmentMediaUrl,
 } from '../lib/mediaHelpers';
+import { extractHtmlAuditCandidates, mediaHintsFromDetected } from '../lib/browserSessionStrategies';
 
 let _seq = 0;
 const genId = () => `media_${Date.now()}_${_seq++}`;
+const SESSION_SNAPSHOT_TIMEOUT_MS = 1500;
+
+export interface BrowserSessionSnapshot {
+  pageUrl?: string;
+  referer?: string;
+  cookies?: string;
+  pageHtml?: string;
+  mediaHints?: Array<Record<string, unknown>>;
+  sourceAudit?: SourceAuditEntry[];
+}
 
 function guessType(url: string): MediaType {
   const u = url.toLowerCase();
@@ -36,6 +47,15 @@ export function useMediaDetection() {
   const [scanDone, setScanDone]     = useState(false);
   const [bridgeOk, setBridgeOk]     = useState(false);
   const currentPageUrl = useRef('');
+  const detectedRef = useRef<DetectedMedia[]>([]);
+  const networkLogRef = useRef<string[]>([]);
+  const pendingSnapshots = useRef(new Map<string, {
+    resolve: (snapshot: BrowserSessionSnapshot) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>());
+
+  useEffect(() => { detectedRef.current = detected; }, [detected]);
+  useEffect(() => { networkLogRef.current = networkLog; }, [networkLog]);
 
   const onPageChange = useCallback((url: string) => {
     currentPageUrl.current = url;
@@ -45,12 +65,45 @@ export function useMediaDetection() {
     setScanDone(false);
   }, []);
 
+  const buildSessionSnapshot = useCallback((pageData: BrowserSessionSnapshot = {}): BrowserSessionSnapshot => {
+    const pageUrl = pageData.pageUrl || currentPageUrl.current || '';
+    const mediaHints = mediaHintsFromDetected(detectedRef.current, pageUrl);
+    const htmlAudit = extractHtmlAuditCandidates(pageUrl, pageData.pageHtml);
+    const networkAudit: SourceAuditEntry[] = networkLogRef.current.slice(0, 120).map((url) => ({
+      strategy: 'network-request',
+      source: 'wkwebview-runtime',
+      url,
+      selected: false,
+    }));
+    const sourceAudit: SourceAuditEntry[] = [...networkAudit, ...htmlAudit];
+    return {
+      referer: pageUrl || undefined,
+      ...pageData,
+      mediaHints,
+      sourceAudit,
+    };
+  }, []);
+
   const onMessage = useCallback((event: WebViewMessageEvent) => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
 
       if (data.event === 'BRIDGE_READY') {
         setBridgeOk(true);
+        return;
+      }
+
+      if (data.event === 'SESSION_SNAPSHOT') {
+        const requestId = String(data.requestId ?? '');
+        const pending = pendingSnapshots.current.get(requestId);
+        if (!pending) return;
+        pendingSnapshots.current.delete(requestId);
+        clearTimeout(pending.timer);
+        pending.resolve(buildSessionSnapshot({
+          pageUrl: String(data.pageUrl ?? currentPageUrl.current),
+          cookies: typeof data.cookies === 'string' ? data.cookies : '',
+          pageHtml: typeof data.pageHtml === 'string' ? data.pageHtml : '',
+        }));
         return;
       }
 
@@ -189,7 +242,37 @@ export function useMediaDetection() {
         return;
       }
     } catch {}
-  }, []);
+  }, [buildSessionSnapshot]);
+
+  const captureSessionSnapshot = useCallback((injectJavaScript?: (script: string) => void): Promise<BrowserSessionSnapshot> => {
+    if (!injectJavaScript) return Promise.resolve(buildSessionSnapshot());
+    const requestId = `snapshot_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        pendingSnapshots.current.delete(requestId);
+        resolve(buildSessionSnapshot());
+      }, SESSION_SNAPSHOT_TIMEOUT_MS);
+      pendingSnapshots.current.set(requestId, { resolve, timer });
+      injectJavaScript(`
+        (function () {
+          try {
+            var html = '';
+            try { html = document.documentElement ? document.documentElement.outerHTML : ''; } catch (_) {}
+            if (html && html.length > 1200000) html = html.slice(0, 1200000);
+            window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({
+              event: 'SESSION_SNAPSHOT',
+              requestId: ${JSON.stringify(requestId)},
+              pageUrl: location.href,
+              cookies: document.cookie || '',
+              pageHtml: html,
+              timestamp: Date.now()
+            }));
+          } catch (_) {}
+          true;
+        })();
+      `);
+    });
+  }, [buildSessionSnapshot]);
 
   const addDetected = useCallback((url: string, pageUrl?: string) => {
     url = url.trim();
@@ -228,6 +311,6 @@ export function useMediaDetection() {
 
   return {
     detected, networkLog, mseActive, scanDone, bridgeOk,
-    onPageChange, onMessage, addDetected, dismiss, clear,
+    onPageChange, onMessage, addDetected, dismiss, clear, captureSessionSnapshot,
   };
 }

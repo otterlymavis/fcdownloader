@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
+import { SafeAreaProvider, SafeAreaView, initialWindowMetrics } from 'react-native-safe-area-context';
 import WebView from 'react-native-webview';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
@@ -28,7 +29,7 @@ import { useBookmarks } from './src/hooks/useBookmarks';
 import { useSettings } from './src/hooks/useSettings';
 import { DetectedMedia, DownloadTask } from './src/types';
 import { extractionManager } from './src/lib/extractionManager';
-import { setRemoveWatermark } from './src/lib/serverExtractor';
+import { ServerExtractOptions, setRemoveWatermark } from './src/lib/serverExtractor';
 import {
   BOTTOM_PAD,
   IS_ANDROID,
@@ -137,7 +138,15 @@ export default function App() {
   const [libSelected, setLibSelected]     = useState<Set<string>>(new Set());
 
   // ── Core hooks ────────────────────────────────────────────
-  const { detected, networkLog, mseActive, onPageChange, onMessage, addDetected } = useMediaDetection();
+  const {
+    detected,
+    networkLog,
+    mseActive,
+    onPageChange,
+    onMessage,
+    addDetected,
+    captureSessionSnapshot,
+  } = useMediaDetection();
   const { bookmarks, toggle: toggleBM, remove: removeBM, isSaved } = useBookmarks();
 
   const showToast = useCallback((msg: string, type: ToastMessage['type'] = 'info') => {
@@ -255,12 +264,27 @@ export default function App() {
     showToast(translate('scanningPage', resolvedLangRef.current), 'info');
   }, [showToast]);
 
+  const browserSessionFor = useCallback(async (pageUrl: string): Promise<ServerExtractOptions | undefined> => {
+    if (tab !== 'browser') return undefined;
+    const target = pageUrl.trim();
+    if (!target || target === 'about:blank') return undefined;
+    const snapshot = await captureSessionSnapshot((script) => webviewRef.current?.injectJavaScript(script));
+    return {
+      referer: snapshot.referer || snapshot.pageUrl || loadedUrl || target,
+      cookies: snapshot.cookies,
+      pageHtml: snapshot.pageHtml,
+      mediaHints: snapshot.mediaHints,
+      sourceAudit: snapshot.sourceAudit,
+    };
+  }, [captureSessionSnapshot, loadedUrl, tab]);
+
   const extractBrowserPage = useCallback(async (pageUrl = loadedUrl) => {
     const url = pageUrl.trim();
     if (!url || url === 'about:blank' || extracting) return;
     setExtracting(true);
     try {
-      const items = await extractionManager.extractMedia(url);
+      const session = await browserSessionFor(url);
+      const items = await extractionManager.extractMedia(url, session);
       if (items.length > 0) {
         for (const item of items) await enqueue(item);
         showToast(
@@ -277,7 +301,7 @@ export default function App() {
     } finally {
       setExtracting(false);
     }
-  }, [enqueue, extracting, loadedUrl, scanBrowserPage, showToast]);
+  }, [browserSessionFor, enqueue, extracting, loadedUrl, scanBrowserPage, showToast]);
 
   // XHS gates its note pages and there's no inline player to detect, so a manual
   // Scan rarely surfaces anything. When an XHS note page finishes loading in the
@@ -494,8 +518,9 @@ export default function App() {
 
   // ─────────────────────────────────────────────────────────
   return (
-    <View style={[s.root, { backgroundColor: t.bg, paddingTop: TOP_PAD }]}>
-      <ExpoStatusBar style={isDark ? 'light' : 'dark'} />
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <SafeAreaView style={[s.root, { backgroundColor: t.bg }, IS_ANDROID && { paddingTop: TOP_PAD }]}>
+        <ExpoStatusBar style={isDark ? 'light' : 'dark'} />
 
       {/* ══════════════════════════════════════════════════ */}
       {/*  HOME TAB                                         */}
@@ -1288,14 +1313,15 @@ export default function App() {
       </Modal>
 
       {/* ── Modals ──────────────────────────────────────── */}
-      <SettingsSheet visible={settingsOpen} onClose={() => setSettingsOpen(false)}
-        theme={theme} fontSize={fontSize} language={language}
-        onThemeChange={setTheme} onFontSizeChange={setFontSize} onLanguageChange={setLanguage}
-        removeWatermark={removeWatermark} onRemoveWatermarkChange={saveRemoveWatermark}
-        resolvedLanguage={resolvedLanguage} t={t} />
-      {playingPath && <VideoPlayerModal path={playingPath} onClose={() => setPlayingPath(null)} language={resolvedLanguage} />}
-      <Toast message={toast} />
-    </View>
+        <SettingsSheet visible={settingsOpen} onClose={() => setSettingsOpen(false)}
+          theme={theme} fontSize={fontSize} language={language}
+          onThemeChange={setTheme} onFontSizeChange={setFontSize} onLanguageChange={setLanguage}
+          removeWatermark={removeWatermark} onRemoveWatermarkChange={saveRemoveWatermark}
+          resolvedLanguage={resolvedLanguage} t={t} />
+        {playingPath && <VideoPlayerModal path={playingPath} onClose={() => setPlayingPath(null)} language={resolvedLanguage} />}
+        <Toast message={toast} />
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 

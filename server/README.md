@@ -36,9 +36,13 @@ server, so cost stays at the lowest possible tier.
 
 ## Run locally (sanity check)
 
+Use Python 3.10 or newer. The Docker image uses Python 3.12, and the
+`yt-dlp` master dependency in `requirements.txt` no longer installs on
+Python 3.9.
+
 ```bash
 cd server
-python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
+python3.12 -m venv .venv && source .venv/bin/activate    # Windows: py -3.12 -m venv .venv; .venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn main:app --port 8080 --reload
 ```

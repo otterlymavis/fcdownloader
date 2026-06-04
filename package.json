@@ -9,6 +9,9 @@
     "web": "expo start --web",
     "postinstall": "patch-package",
     "pack:extension": "node scripts/pack-extension.mjs",
+    "validate:safari-extension": "node --check safari-extension/background.js && node --check safari-extension/content.js && node --check safari-extension/popup.js",
+    "test:ios-urls": "python3 scripts/test_ios_urls.py",
+    "test:macos-safari-urls": "python3 scripts/test_macos_safari_urls.py",
     "bake:web": "node scripts/bake-web-config.mjs",
     "dist:companion": "npm --prefix desktop-companion run dist",
     "dist:companion:nobrowser-go": "npm --prefix desktop-companion run variants:nobrowser-go",
@@ -29,6 +32,7 @@
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-native": "0.83.6",
+    "react-native-safe-area-context": "~5.6.2",
     "react-native-web": "^0.21.0",
     "react-native-webview": "13.16.0"
   },
