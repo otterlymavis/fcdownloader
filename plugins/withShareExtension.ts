@@ -22,7 +22,7 @@ import * as path from 'path';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const EXT_NAME       = 'ShareExtension';
-const BUNDLE_ID      = 'com.mabisuuu.fcdownloader';
+const BUNDLE_ID      = 'com.otterpia.fcdownloader';
 const EXT_BUNDLE_ID  = `${BUNDLE_ID}.ShareExtension`;
 const APP_GROUP      = `group.${BUNDLE_ID}`;
 const APP_SCHEME     = 'fcdownloader';

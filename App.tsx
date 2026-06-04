@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Image,
   Modal,
   Pressable,
   ScrollView,
@@ -10,8 +11,10 @@ import {
   View,
 } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
-import { SafeAreaProvider, SafeAreaView, initialWindowMetrics } from 'react-native-safe-area-context';
 import WebView from 'react-native-webview';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { SafeAreaProvider, SafeAreaView, initialWindowMetrics } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
@@ -71,7 +74,41 @@ import {
 
 // ── Shadow ────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────
-type Tab = 'home' | 'browser' | 'library' | 'bookmarks';
+type Tab = 'home' | 'browser' | 'library' | 'bookmarks' | 'settings';
+
+function getBookmarkColor(domain: string): string {
+  const d = domain.toLowerCase();
+  if (d.includes('youtube')) return '#FF0000';
+  if (d.includes('tiktok')) return '#111111';
+  if (d.includes('instagram')) return '#E1306C';
+  if (d.includes('twitter') || d.includes('x.com')) return '#1DA1F2';
+  if (d.includes('bilibili')) return '#00AEEC';
+  return '#5B5BD6';
+}
+
+function getBookmarkInitials(domain: string): string {
+  const d = domain.toLowerCase();
+  if (d.includes('youtube')) return 'YT';
+  if (d.includes('tiktok')) return 'TT';
+  if (d.includes('instagram')) return 'IG';
+  if (d.includes('twitter') || d.includes('x.com')) return 'X';
+  if (d.includes('bilibili')) return 'B';
+  return domain.charAt(0).toUpperCase();
+}
+
+function getPlatformColor(url: string): string {
+  const lower = url.toLowerCase();
+  if (lower.includes('youtube') || lower.includes('youtu.be')) {
+    return '#A855F7'; // YouTube purple/violet
+  }
+  if (lower.includes('tiktok')) {
+    return '#06B6D4'; // TikTok cyan/blue
+  }
+  if (lower.includes('instagram')) {
+    return '#E1306C'; // Instagram pink/red
+  }
+  return '#5B5BD6'; // Default color
+}
 
 function formatOptionLabel(format: NonNullable<DetectedMedia['availableFormats']>[number]): string {
   const resolution = getFormatResolution(format);
@@ -119,6 +156,8 @@ export default function App() {
   const resolvedLangRef = useRef(resolvedLanguage);
   resolvedLangRef.current = resolvedLanguage;
 
+  const editLabel = resolvedLanguage === 'ar' ? 'تعديل' : (resolvedLanguage === 'zh' ? '编辑' : (resolvedLanguage === 'ja' ? '編集' : (resolvedLanguage === 'ko' ? '편집' : (resolvedLanguage === 'es' ? 'Editar' : (resolvedLanguage === 'fr' ? 'Modifier' : (resolvedLanguage === 'de' ? 'Bearbeiten' : 'Edit'))))));
+
   // ── Navigation ────────────────────────────────────────────
   const [tab, setTab]               = useState<Tab>('home');
   const [pasteUrl, setPasteUrl]     = useState('');
@@ -136,6 +175,8 @@ export default function App() {
   const [fileSizes, setFileSizes]       = useState<Record<string, string>>({});
   const [libSelectMode, setLibSelectMode] = useState(false);
   const [libSelected, setLibSelected]     = useState<Set<string>>(new Set());
+  const [libFilter, setLibFilter]         = useState<'all' | 'videos' | 'audio' | 'failed'>('all');
+  const [bmEditMode, setBmEditMode]       = useState(false);
 
   // ── Core hooks ────────────────────────────────────────────
   const {
@@ -205,6 +246,21 @@ export default function App() {
   const allTasks    = useMemo(() => [...active, ...history], [active, history]);
   const doneTasks   = useMemo(() => history.filter((t) => t.status === 'completed'), [history]);
   const failedTasks = useMemo(() => history.filter((t) => t.status !== 'completed'), [history]);
+
+  const filteredActive = useMemo(() => {
+    if (libFilter === 'failed') return [];
+    if (libFilter === 'videos') return active.filter(t => getMediaKind(t.media) === 'video');
+    if (libFilter === 'audio') return active.filter(t => getMediaKind(t.media) === 'audio');
+    return active;
+  }, [active, libFilter]);
+
+  const filteredHistory = useMemo(() => {
+    if (libFilter === 'all') return history;
+    if (libFilter === 'videos') return history.filter(t => getMediaKind(t.media) === 'video' && t.status === 'completed');
+    if (libFilter === 'audio') return history.filter(t => getMediaKind(t.media) === 'audio' && t.status === 'completed');
+    if (libFilter === 'failed') return history.filter(t => t.status === 'failed');
+    return history;
+  }, [history, libFilter]);
 
   useEffect(() => {
     history.forEach(async (task) => {
@@ -519,181 +575,206 @@ export default function App() {
   // ─────────────────────────────────────────────────────────
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-      <SafeAreaView style={[s.root, { backgroundColor: t.bg }, IS_ANDROID && { paddingTop: TOP_PAD }]}>
-        <ExpoStatusBar style={isDark ? 'light' : 'dark'} />
+      <LinearGradient
+        colors={t.bgGrad}
+        style={s.root}
+      >
+        <SafeAreaView style={[s.flex, IS_ANDROID && { paddingTop: TOP_PAD }]}>
+          <ExpoStatusBar style={isDark ? 'light' : 'dark'} />
 
-      {/* ══════════════════════════════════════════════════ */}
-      {/*  HOME TAB                                         */}
-      {/* ══════════════════════════════════════════════════ */}
-      {tab === 'home' && (
-        <View style={s.flex}>
-          <View style={[s.topBar, { backgroundColor: t.bg, borderBottomColor: t.sep }]}>
-            {IS_IOS
-              ? <Text style={[s.largeTitleIOS, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('downloader', resolvedLanguage)}</Text>
-              : <Text style={[s.titleAndroid, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('downloader', resolvedLanguage)}</Text>
-            }
-            <Pressable android_ripple={RIPPLE_BL} style={[s.gearBtn, { backgroundColor: t.card }]}
-              onPress={() => setSettingsOpen(true)} hitSlop={S.sm}>
-              <Text style={[s.gearIcon, { color: t.ink2 }]}>⚙</Text>
-            </Pressable>
-          </View>
 
-          <ScrollView
-            style={s.flex}
-            contentContainerStyle={[s.homeScroll, { paddingBottom: BOTTOM_PAD + 80 }]}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            {/* Paste card */}
-            <View style={[s.pasteCard, { backgroundColor: t.bg }, subtleShadow,
-              IS_ANDROID && { backgroundColor: t.card }]}>
-              <Text style={[s.pasteLabel, { color: t.ink2, fontSize: fs(12), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                {translate('videoOrPageLink', resolvedLanguage)}
-              </Text>
-              <TextInput
-                style={[s.pasteInput, { backgroundColor: t.card, color: t.ink, fontSize: fs(15),
-                  textAlign: resolvedLanguage === 'ar' ? 'right' : 'left',
-                  ...(IS_ANDROID && { backgroundColor: t.card2 }) }]}
-                value={pasteUrl}
-                onChangeText={(text) => {
-                  // Auto-extract first http(s) URL when the change looks like
-                  // a paste (large delta) and the result contains noise
-                  // around a URL — common with share-sheet output like
-                  // "Watch this: https://… via @user". Manual typing changes
-                  // 1-2 chars at a time so this never disrupts editing.
-                  const delta = Math.abs(text.length - pasteUrl.length);
-                  if (delta >= 6) {
-                    const m = text.match(/https?:\/\/[^\s<>"'`\\]+/i);
-                    if (m) {
-                      const url = m[0].replace(/[.,;:!?)\]}>'"]+$/, '');
-                      if (url !== text.trim()) {
-                        setPasteUrl(url);
-                        return;
-                      }
-                    }
-                  }
-                  setPasteUrl(text);
-                }}
-                placeholder={translate('pastePlaceholder', resolvedLanguage)}
-                placeholderTextColor={t.ink3}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-                returnKeyType="done"
-                onSubmitEditing={handleHomeDownload}
-                editable={!extracting}
-              />
-              <Pressable
-                android_ripple={{ color: 'rgba(255,255,255,0.15)', borderless: false }}
-                style={[s.primaryBtn, { backgroundColor: t.btn }, extracting && { opacity: 0.5 }]}
-                onPress={handleHomeDownload}
-                disabled={extracting}
-              >
-                <Text style={[s.primaryBtnLabel, { color: t.btnTxt, fontSize: fs(16) }]}>
-                  {extracting ? translate('finding', resolvedLanguage) : translate('download', resolvedLanguage)}
-                </Text>
-              </Pressable>
-              <Pressable onPress={() => setTab('browser')} hitSlop={S.xs} style={s.browseLink}>
-                <Text style={[s.browseLinkLabel, { color: t.ink2, fontSize: fs(13), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                  {translate('orBrowse', resolvedLanguage)}
-                </Text>
-              </Pressable>
-              <Text style={[s.browseHint, { color: t.ink3, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                {translate('browseHint', resolvedLanguage)}
-              </Text>
 
+        {/* ══════════════════════════════════════════════════ */}
+        {/*  HOME TAB                                         */}
+        {/* ══════════════════════════════════════════════════ */}
+        {tab === 'home' && (
+          <View style={s.flex}>
+            <View style={s.homeLogoContainer}>
+              <View style={[
+                s.logoGlowWrap,
+                {
+                  backgroundColor: t.dark ? 'rgba(124, 58, 237, 0.25)' : 'rgba(245, 158, 11, 0.25)',
+                  shadowColor: t.dark ? '#7C3AED' : '#F59E0B',
+                }
+              ]}>
+                <Image source={require('./assets/logo.png')} style={s.homeLogoImage} />
+              </View>
+              <Text style={[s.homeLogoTitle, { color: t.ink }]}>FCDownloader</Text>
             </View>
 
-            {/* Active downloads (compact) */}
-            {active.length > 0 && (
-              <View style={s.section}>
-                <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                  {translate('inProgress', resolvedLanguage).toUpperCase()}
+            <ScrollView
+              style={s.flex}
+              contentContainerStyle={[s.homeScroll, { paddingBottom: BOTTOM_PAD + 100 }]}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Paste card */}
+              <View style={[s.pasteCard, { backgroundColor: t.card, borderColor: t.sep, borderWidth: 1 }, subtleShadow]}>
+                <Text style={[s.pasteLabel, { color: t.ink2, fontSize: fs(12), textAlign: 'center' }]}>
+                  {translate('videoOrPageLink', resolvedLanguage)}
                 </Text>
-                {active.map((task) => {
-                  const resolution = getMediaResolution(task.media);
-                  const statusText = task.status === 'downloading' && task.totalSegments > 0
-                    ? translate('parts', resolvedLanguage, { downloaded: task.downloadedSegments, total: task.totalSegments })
-                    : task.status === 'assembling'        ? translate('assembling', resolvedLanguage)
-                    : task.status === 'fetching_manifest' ? translate('readingStream', resolvedLanguage)
-                    : translate('starting', resolvedLanguage);
-                  return (
-                  <View key={task.id} style={[s.compactCard, { backgroundColor: t.card }, subtleShadow]}>
-                    <View style={s.compactRow}>
-                      <Text style={[s.compactSource, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                        {getSourceName(task.media.url)}
-                      </Text>
-                      <Text style={[s.compactPct, { color: t.ink2, fontSize: fs(13) }]}>
-                        {Math.round(task.progress * 100)}%
-                      </Text>
-                      <Pressable android_ripple={RIPPLE_BL} onPress={() => cancel(task.id)} hitSlop={S.xs}
-                        style={[s.cancelBtn, { borderColor: t.sep }]}>
-                        <Text style={[s.cancelBtnLabel, { color: t.ink2, fontSize: fs(12) }]}>{translate('cancel', resolvedLanguage)}</Text>
-                      </Pressable>
-                    </View>
-                    <View style={[s.progressTrack, { backgroundColor: t.card2 }]}>
-                      <View style={[s.progressFill, { backgroundColor: t.btn,
-                        width: `${Math.round(task.progress * 100)}%` as `${number}%` }]} />
-                    </View>
-                    <Text style={[s.compactStatus, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                      {compactMediaDetails(statusText, resolution)}
-                    </Text>
-                  </View>
-                  );
-                })}
+                <TextInput
+                  style={[s.pasteInput, { backgroundColor: t.card2, color: t.ink, fontSize: fs(15), textAlign: 'center' }]}
+                  value={pasteUrl}
+                  onChangeText={(text) => {
+                    const delta = Math.abs(text.length - pasteUrl.length);
+                    if (delta >= 6) {
+                      const m = text.match(/https?:\/\/[^\s<>"'`\\]+/i);
+                      if (m) {
+                        const url = m[0].replace(/[.,;:!?)\]}>'"]+$/, '');
+                        if (url !== text.trim()) {
+                          setPasteUrl(url);
+                          return;
+                        }
+                      }
+                    }
+                    setPasteUrl(text);
+                  }}
+                  placeholder="Paste a link..."
+                  placeholderTextColor={t.ink3}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                  returnKeyType="done"
+                  onSubmitEditing={handleHomeDownload}
+                  editable={!extracting}
+                />
+                <Pressable
+                  android_ripple={{ color: 'rgba(255,255,255,0.15)', borderless: false }}
+                  style={[s.primaryBtn, { backgroundColor: t.btn }, extracting && { opacity: 0.5 }]}
+                  onPress={handleHomeDownload}
+                  disabled={extracting}
+                >
+                  <Text style={[s.primaryBtnLabel, { color: t.btnTxt, fontSize: fs(16) }]}>
+                    {extracting ? translate('finding', resolvedLanguage) : translate('download', resolvedLanguage)}
+                  </Text>
+                </Pressable>
+                <Pressable onPress={() => setTab('browser')} hitSlop={S.xs} style={s.browseLink}>
+                  <Text style={[s.browseLinkLabel, { color: t.ink2, fontSize: fs(13), textAlign: 'center' }]}>
+                    or browse the web →
+                  </Text>
+                </Pressable>
+                <Text style={[s.browseHint, { color: t.ink3, fontSize: fs(11), textAlign: 'center' }]}>
+                  {translate('browseHint', resolvedLanguage)}
+                </Text>
               </View>
-            )}
 
-            {/* Empty state */}
-            {active.length === 0 && allTasks.length === 0 && (
-              <View style={s.emptyHome}>
-                <Text style={[s.emptyHomeIcon, { color: t.ink3 }]}>↓</Text>
-                <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14) }]}>
-                  {translate('noDownloads', resolvedLanguage)}
-                </Text>
-              </View>
-            )}
-            {active.length === 0 && allTasks.length > 0 && (
-              <Pressable android_ripple={RIPPLE} style={[s.libraryLink, { backgroundColor: t.card }, subtleShadow]}
-                onPress={() => setTab('library')}>
-                <Text style={[s.libraryLinkLabel, { color: t.ink, fontSize: fs(14) }]}>
-                  {allTasks.length === 1 ? translate('itemInLibrary', resolvedLanguage) : translate('itemsInLibrary', resolvedLanguage, { count: allTasks.length })}
-                </Text>
-                <Text style={[{ color: t.ink2, fontSize: fs(14) }]}>→</Text>
-              </Pressable>
-            )}
-          </ScrollView>
-        </View>
-      )}
+              {/* Active downloads (V3 Simple rows with slim progress bars) */}
+              {active.length > 0 && (
+                <View style={s.section}>
+                  <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
+                    {translate('inProgress', resolvedLanguage).toUpperCase()}
+                  </Text>
+                  {active.map((task) => {
+                    return (
+                      <View key={task.id} style={[s.homeActiveRow, { backgroundColor: t.card, borderColor: t.sep, borderWidth: 1 }, subtleShadow]}>
+                        <View style={[s.homeActiveHeader, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
+                          <Text style={[s.homeActiveTitle, { color: t.ink, fontSize: fs(14) }]} numberOfLines={1}>
+                            {getSourceName(task.media.url)} · {Math.round(task.progress * 100)}%
+                          </Text>
+                          <Pressable onPress={() => cancel(task.id)} hitSlop={S.xs}>
+                            <Ionicons name="close" size={18} color={t.ink2} />
+                          </Pressable>
+                        </View>
+                        <View style={[s.progressTrack, { backgroundColor: t.card2, marginTop: S.xs }]}>
+                          <View style={[s.progressFill, { backgroundColor: getPlatformColor(task.media.url),
+                            width: `${Math.round(task.progress * 100)}%` as `${number}%` }]} />
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+
+              {/* Empty state */}
+              {active.length === 0 && allTasks.length === 0 && (
+                <View style={s.emptyHome}>
+                  <Text style={[s.emptyHomeIcon, { color: t.ink3 }]}>↓</Text>
+                  <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14) }]}>
+                    {translate('noDownloads', resolvedLanguage)}
+                  </Text>
+                </View>
+              )}
+              {active.length === 0 && allTasks.length > 0 && (
+                <Pressable android_ripple={RIPPLE} style={[s.libraryLink, { backgroundColor: t.card }, subtleShadow]}
+                  onPress={() => setTab('library')}>
+                  <Text style={[s.libraryLinkLabel, { color: t.ink, fontSize: fs(14) }]}>
+                    {allTasks.length === 1 ? translate('itemInLibrary', resolvedLanguage) : translate('itemsInLibrary', resolvedLanguage, { count: allTasks.length })}
+                  </Text>
+                  <Text style={[{ color: t.ink2, fontSize: fs(14) }]}>→</Text>
+                </Pressable>
+              )}
+            </ScrollView>
+          </View>
+        )}
 
       {/* ══════════════════════════════════════════════════ */}
       {/*  BROWSER TAB                                      */}
       {/* ══════════════════════════════════════════════════ */}
       {tab === 'browser' && (
         <View style={s.flex}>
-          <View style={[s.navBar, { backgroundColor: t.bg, borderBottomColor: t.sep }]}>
-            <TextInput
-              style={[s.addressField, { backgroundColor: t.card, color: t.ink, fontSize: fs(14),
-                textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}
-              value={browserInput}
-              onChangeText={setBrowserInput}
-              onSubmitEditing={navigateBrowser}
-              placeholder={translate('searchOrEnterUrl', resolvedLanguage)}
-              placeholderTextColor={t.ink3}
-              returnKeyType="go"
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-              selectTextOnFocus
-            />
-            <Pressable android_ripple={RIPPLE_BL} style={[s.navBtn, { backgroundColor: t.card }]}
-              onPress={() => webviewRef.current?.reload()} hitSlop={S.sm}>
-              <Text style={[s.navBtnIcon, { color: t.ink }]}>↻</Text>
-            </Pressable>
-            <Pressable android_ripple={RIPPLE_BL} style={[s.navBtn, { backgroundColor: t.card }]}
-              onPress={scanBrowserPage} hitSlop={S.sm}>
-              <Text style={[s.navBtnIcon, { color: t.ink }]}>◉</Text>
-            </Pressable>
+          {/* Two-row navbar */}
+          <View style={[s.navBar, { backgroundColor: t.card, borderBottomColor: t.sep, borderBottomWidth: 1 }]}>
+            {/* Row 1 */}
+            <View style={[s.navBarTopRow, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
+              <Pressable
+                android_ripple={RIPPLE_BL}
+                onPress={() => webviewRef.current?.goBack()}
+                hitSlop={S.sm}
+                style={s.navRowBtn}
+              >
+                <Ionicons name="chevron-back" size={24} color={t.ink} />
+              </Pressable>
+              
+              <Text style={[s.browserTitle, { color: t.ink }]}>
+                {translate('browse', resolvedLanguage).toUpperCase()}
+              </Text>
+              
+              <Pressable
+                android_ripple={RIPPLE_BL}
+                onPress={scanBrowserPage}
+                hitSlop={S.sm}
+                style={[
+                  s.navRowBtn,
+                  (videoCount > 0 || mseActive) && {
+                    backgroundColor: 'rgba(168, 85, 247, 0.15)',
+                    borderRadius: 18,
+                  }
+                ]}
+              >
+                <Ionicons
+                  name="scan-outline"
+                  size={22}
+                  color={(videoCount > 0 || mseActive) ? '#A855F7' : t.ink}
+                />
+              </Pressable>
+            </View>
+            
+            {/* Row 2 */}
+            <View style={[s.addressFieldWrap, { backgroundColor: t.card2, borderColor: t.sep, borderWidth: 1 }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
+              <Ionicons name="search-outline" size={18} color={t.ink3} style={{ marginHorizontal: S.xs }} />
+              <TextInput
+                style={[s.addressField, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}
+                value={browserInput}
+                onChangeText={setBrowserInput}
+                onSubmitEditing={navigateBrowser}
+                placeholder={translate('searchOrEnterUrl', resolvedLanguage)}
+                placeholderTextColor={t.ink3}
+                returnKeyType="go"
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                selectTextOnFocus
+              />
+              <Pressable
+                android_ripple={RIPPLE_BL}
+                style={s.nestedReloadBtn}
+                onPress={() => webviewRef.current?.reload()}
+                hitSlop={S.xs}
+              >
+                <Ionicons name="refresh" size={18} color={t.ink2} />
+              </Pressable>
+            </View>
           </View>
 
           <View style={s.flex}>
@@ -737,9 +818,11 @@ export default function App() {
                 }]}
                 onPress={() => toggleBM(loadedUrl, getPageTitle(loadedUrl))}
               >
-                <Text style={[s.bmFabIcon, { color: isSaved(loadedUrl, bookmarks) ? t.btnTxt : t.ink2 }]}>
-                  {isSaved(loadedUrl, bookmarks) ? '★' : '☆'}
-                </Text>
+                <Ionicons
+                  name={isSaved(loadedUrl, bookmarks) ? 'bookmark' : 'bookmark-outline'}
+                  size={22}
+                  color={isSaved(loadedUrl, bookmarks) ? t.btnTxt : t.ink2}
+                />
               </Pressable>
             )}
           </View>
@@ -758,6 +841,7 @@ export default function App() {
           )}
         </View>
       )}
+
 
       {/* ══════════════════════════════════════════════════ */}
       {/*  LIBRARY TAB                                      */}
@@ -804,12 +888,42 @@ export default function App() {
                 {history.length > 0 && (
                   <Pressable onPress={() => { setLibSelectMode(true); setLibSelected(new Set()); }}
                     hitSlop={S.sm} android_ripple={RIPPLE_BL}>
-                    <Text style={[{ color: t.ink2, fontSize: fs(14) }]}>{translate('select', resolvedLanguage)}</Text>
+                    <Text style={[{ color: t.ink2, fontSize: fs(14), fontWeight: '600' }]}>{editLabel}</Text>
                   </Pressable>
                 )}
               </>
             )}
           </View>
+
+          {/* Scrolling category filter chips */}
+          {allTasks.length > 0 && (
+            <View style={s.chipContainer}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chipScroll}>
+                {(['all', 'videos', 'audio', 'failed'] as const).map((filterVal) => {
+                  const isActive = libFilter === filterVal;
+                  const label = translate(filterVal as TranslationKey, resolvedLanguage) || filterVal;
+                  return (
+                    <Pressable
+                      key={filterVal}
+                      onPress={() => setLibFilter(filterVal)}
+                      style={[
+                        s.chip,
+                        {
+                          backgroundColor: isActive ? t.ink : t.card,
+                          borderColor: t.sep,
+                          borderWidth: 1,
+                        }
+                      ]}
+                    >
+                      <Text style={[s.chipText, { color: isActive ? t.bg : t.ink }]}>
+                        {label.toUpperCase()}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
 
           {allTasks.length === 0 ? (
             <View style={[s.flex, s.center, { backgroundColor: t.bg }]}>
@@ -826,62 +940,75 @@ export default function App() {
               showsVerticalScrollIndicator={false}>
 
               {/* Active downloads */}
-              {active.length > 0 && (
+              {filteredActive.length > 0 && (
                 <>
                   <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.sm, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
                     {translate('inProgress', resolvedLanguage).toUpperCase()}
                   </Text>
-                  {active.map((task) => {
+                  {filteredActive.map((task) => {
                     const resolution = getMediaResolution(task.media);
                     const statusText = task.status === 'downloading' && task.totalSegments > 0
                       ? translate('parts', resolvedLanguage, { downloaded: task.downloadedSegments, total: task.totalSegments })
                       : task.status === 'assembling'        ? translate('assembling', resolvedLanguage)
                       : task.status === 'fetching_manifest' ? translate('readingStream', resolvedLanguage)
                       : translate('starting', resolvedLanguage);
+                    const showThumbnail = getMediaKind(task.media) === 'video' || getMediaKind(task.media) === 'image';
+                    const source = getSourceName(task.media.url);
                     return (
-                    <View key={task.id} style={[s.libraryCard, { backgroundColor: t.card }, subtleShadow]}>
-                      <View style={s.libraryCardLeft}>
-                        <View style={[s.sourceAvatar, { backgroundColor: t.card2 }]}>
-                          <Text style={[s.sourceAvatarText, { color: t.ink, fontSize: fs(18) }]}>
-                            {getInitial(getSourceName(task.media.url))}
+                      <View key={task.id} style={[s.libraryCard, { backgroundColor: t.card }, subtleShadow]}>
+                        <View style={s.libraryCardLeft}>
+                          {showThumbnail && task.media.thumbnailUrl ? (
+                            <View style={s.thumbnailContainer}>
+                              <Image source={{ uri: task.media.thumbnailUrl }} style={s.libraryThumbnail} />
+                            </View>
+                          ) : (
+                            <View style={[s.sourceAvatar, { backgroundColor: t.card2 }]}>
+                              <Text style={[s.sourceAvatarText, { color: t.ink, fontSize: fs(18) }]}>
+                                {getInitial(source)}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                        <View style={s.libraryCardBody}>
+                          <View style={s.libraryCardRow}>
+                            <Text style={[s.libraryCardTitle, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
+                              {source}
+                            </Text>
+                          </View>
+                          <View style={[s.progressTrack, { backgroundColor: t.card2, marginVertical: S.xs }]}>
+                            <View style={[s.progressFill, { backgroundColor: t.btn,
+                              width: `${Math.round(task.progress * 100)}%` as `${number}%` }]} />
+                          </View>
+                          <Text style={[s.libraryCardSub, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
+                            {compactMediaDetails(statusText, resolution)}
                           </Text>
+                        </View>
+                        <View style={s.libraryCardRight}>
+                          <View style={[s.statusCircle, { borderColor: t.progress, borderWidth: 2 }]}>
+                            <Text style={{ fontSize: 9, fontWeight: '700', color: t.progress }}>
+                              {Math.round(task.progress * 100)}%
+                            </Text>
+                          </View>
+                          <Pressable android_ripple={RIPPLE_BL} onPress={() => cancel(task.id)} hitSlop={S.xs}>
+                            <Text style={{ color: t.ink2, fontSize: 11, fontWeight: '600', marginTop: S.xs }}>
+                              {translate('cancel', resolvedLanguage)}
+                            </Text>
+                          </Pressable>
                         </View>
                       </View>
-                      <View style={s.libraryCardBody}>
-                        <View style={s.libraryCardRow}>
-                          <Text style={[s.libraryCardTitle, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                            {getSourceName(task.media.url)}
-                          </Text>
-                          <Text style={[s.libraryCardPct, { color: t.ink2, fontSize: fs(13) }]}>
-                            {Math.round(task.progress * 100)}%
-                          </Text>
-                        </View>
-                        <View style={[s.progressTrack, { backgroundColor: t.card2, marginVertical: S.xs }]}>
-                          <View style={[s.progressFill, { backgroundColor: t.btn,
-                            width: `${Math.round(task.progress * 100)}%` as `${number}%` }]} />
-                        </View>
-                        <Text style={[s.libraryCardSub, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                          {compactMediaDetails(statusText, resolution)}
-                        </Text>
-                        <Pressable android_ripple={RIPPLE_BL} onPress={() => cancel(task.id)}
-                          style={[s.outlineBtn, { borderColor: t.sep, marginTop: S.xs }]}>
-                          <Text style={[s.outlineBtnLabel, { color: t.ink2, fontSize: fs(12) }]}>{translate('cancel', resolvedLanguage)}</Text>
-                        </Pressable>
-                      </View>
-                    </View>
                     );
                   })}
-                  {history.length > 0 && <View style={[s.sep, { backgroundColor: t.sep }]} />}
+                  {filteredHistory.length > 0 && <View style={[s.sep, { backgroundColor: t.sep }]} />}
                 </>
               )}
 
               {/* Completed / failed / cancelled */}
-              {history.length > 0 && active.length > 0 && (
+              {filteredHistory.length > 0 && filteredActive.length > 0 && (
                 <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.sm, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
                   {translate('completed', resolvedLanguage).toUpperCase()}
                 </Text>
               )}
-              {history.map((task) => {
+              {filteredHistory.map((task) => {
                 const source      = getSourceName(task.media.url);
                 const quality     = getQuality(task.media.url, task.media.label);
                 const resolution  = getMediaResolution(task.media);
@@ -891,6 +1018,8 @@ export default function App() {
                 const isPlayable  = !!task.localPlaylistPath && getMediaKind(task.media) === 'video' && /\.(mp4|ts|mov|webm|m4v)$/i.test(task.localPlaylistPath);
                 const canSaveToLibrary = !!task.localPlaylistPath && getMediaKind(task.media) !== 'audio';
                 const isSelected  = libSelected.has(task.id);
+                const showThumbnail = getMediaKind(task.media) === 'video' || getMediaKind(task.media) === 'image';
+                const isVideo = getMediaKind(task.media) === 'video';
 
                 const cardContent = (
                   <>
@@ -902,18 +1031,31 @@ export default function App() {
                           {isSelected && <Text style={{ color: t.btnTxt, fontSize: fs(13), fontWeight: '700' }}>✓</Text>}
                         </View>
                       ) : (
-                        <View style={[s.sourceAvatar,
-                          { backgroundColor: isDone ? t.card2 : isFail ? t.redBg : t.card2 }]}>
-                          <Text style={[s.sourceAvatarText,
-                            { color: isFail ? t.red : t.ink, fontSize: fs(18) }]}>
-                            {getInitial(source)}
-                          </Text>
-                        </View>
+                        showThumbnail && task.media.thumbnailUrl ? (
+                          <View style={s.thumbnailContainer}>
+                            <Image source={{ uri: task.media.thumbnailUrl }} style={s.libraryThumbnail} />
+                            {isVideo && isDone && (
+                              <View style={s.thumbnailPlayOverlay}>
+                                <View style={s.playCircle}>
+                                  <Ionicons name="play" size={10} color="#000000" style={{ marginLeft: 2 }} />
+                                </View>
+                              </View>
+                            )}
+                          </View>
+                        ) : (
+                          <View style={[s.sourceAvatar,
+                            { backgroundColor: isDone ? t.card2 : isFail ? t.redBg : t.card2 }]}>
+                            <Text style={[s.sourceAvatarText,
+                              { color: isFail ? t.red : t.ink, fontSize: fs(18) }]}>
+                              {getInitial(source)}
+                            </Text>
+                          </View>
+                        )
                       )}
                     </View>
                     <View style={s.libraryCardBody}>
                       <View style={s.libraryCardRow}>
-                        <Text style={[s.libraryCardTitle, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
+                        <Text style={[s.libraryCardTitle, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
                           {source}
                         </Text>
                         {quality && (
@@ -977,6 +1119,31 @@ export default function App() {
                         </View>
                       )}
                     </View>
+
+                    {!libSelectMode && (
+                      <View style={s.libraryCardRight}>
+                        {isDone ? (
+                          <View style={[s.statusCircle, { backgroundColor: t.greenBg, borderColor: t.green, borderWidth: 1 }]}>
+                            <Ionicons name="checkmark" size={16} color={t.green} />
+                          </View>
+                        ) : isFail ? (
+                          <>
+                            <View style={[s.statusCircle, { backgroundColor: t.redBg, borderColor: t.red, borderWidth: 1 }]}>
+                              <Ionicons name="alert" size={16} color={t.red} />
+                            </View>
+                            <Pressable onPress={() => handleRetry(task)} style={s.retryTextBtn}>
+                              <Text style={{ color: t.red, fontSize: 11, fontWeight: '600', marginTop: S.xs }}>
+                                {translate('retry', resolvedLanguage)}
+                              </Text>
+                            </Pressable>
+                          </>
+                        ) : (
+                          <View style={[s.statusCircle, { backgroundColor: t.card2, borderColor: t.sep, borderWidth: 1 }]}>
+                            <Ionicons name="close" size={16} color={t.ink3} />
+                          </View>
+                        )}
+                      </View>
+                    )}
                   </>
                 );
 
@@ -1009,9 +1176,15 @@ export default function App() {
               : <Text style={[s.titleAndroid, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('bookmarks', resolvedLanguage)}</Text>
             }
             {bookmarks.length > 0 && (
-              <Text style={[s.topBarCount, { color: t.ink2, fontSize: fs(13) }]}>
-                {bookmarks.length}
-              </Text>
+              <Pressable
+                onPress={() => setBmEditMode(!bmEditMode)}
+                hitSlop={S.sm}
+                android_ripple={RIPPLE_BL}
+              >
+                <Text style={{ color: t.btn, fontSize: fs(14), fontWeight: '600' }}>
+                  {bmEditMode ? translate('done', resolvedLanguage) : editLabel}
+                </Text>
+              </Pressable>
             )}
           </View>
 
@@ -1033,19 +1206,49 @@ export default function App() {
               {bookmarks.map((bm) => {
                 let domain = '';
                 try { domain = new URL(bm.url).hostname.replace(/^www\./, ''); } catch {}
+                
+                const domainLower = domain.toLowerCase();
+                const isInstagram = domainLower.includes('instagram');
+                const initials = getBookmarkInitials(domain);
+                const avatarBg = getBookmarkColor(domain);
+
+                const avatarContent = (
+                  <Text style={[s.bmRowAvatarText, { color: '#FFFFFF', fontSize: fs(15), fontWeight: '700' }]}>
+                    {initials}
+                  </Text>
+                );
+
+                const avatarView = isInstagram ? (
+                  <LinearGradient
+                    colors={['#F91A7F', '#B528BA', '#FF8A00']}
+                    start={{ x: 0, y: 1 }}
+                    end={{ x: 1, y: 0 }}
+                    style={s.bmRowAvatar}
+                  >
+                    {avatarContent}
+                  </LinearGradient>
+                ) : (
+                  <View style={[s.bmRowAvatar, { backgroundColor: avatarBg }]}>
+                    {avatarContent}
+                  </View>
+                );
+
                 return (
                   <Pressable key={bm.id} android_ripple={RIPPLE}
                     style={[s.bmRow, { backgroundColor: t.card }, subtleShadow]}
-                    onPress={() => { setLoadedUrl(bm.url); setBrowserInput(bm.url); setTab('browser'); }}
-                    onLongPress={() => Alert.alert(translate('removeBookmark', resolvedLangRef.current), translate('removeBookmarkConfirm', resolvedLangRef.current, { title: bm.title || domain }), [
-                      { text: translate('cancel', resolvedLangRef.current), style: 'cancel' },
-                      { text: translate('remove', resolvedLangRef.current), style: 'destructive', onPress: () => removeBM(bm.id) },
-                    ])}>
-                    <View style={[s.bmRowAvatar, { backgroundColor: t.card2 }]}>
-                      <Text style={[s.bmRowAvatarText, { color: t.ink, fontSize: fs(16) }]}>
-                        {getInitial(bm.title || domain)}
-                      </Text>
-                    </View>
+                    onPress={() => {
+                      if (bmEditMode) {
+                        Alert.alert(translate('removeBookmark', resolvedLangRef.current), translate('removeBookmarkConfirm', resolvedLangRef.current, { title: bm.title || domain }), [
+                          { text: translate('cancel', resolvedLangRef.current), style: 'cancel' },
+                          { text: translate('remove', resolvedLangRef.current), style: 'destructive', onPress: () => removeBM(bm.id) },
+                        ]);
+                      } else {
+                        setLoadedUrl(bm.url);
+                        setBrowserInput(bm.url);
+                        setTab('browser');
+                      }
+                    }}>
+                    {avatarView}
                     <View style={s.bmRowBody}>
                       <Text style={[s.bmRowTitle, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
                         {bm.title || domain}
@@ -1056,42 +1259,101 @@ export default function App() {
                         </Text>
                       ) : null}
                     </View>
-                    <Text style={[s.bmRowChevron, { color: t.ink3 }]}>›</Text>
+                    {bmEditMode ? (
+                      <Pressable
+                        onPress={() => {
+                          Alert.alert(translate('removeBookmark', resolvedLangRef.current), translate('removeBookmarkConfirm', resolvedLangRef.current, { title: bm.title || domain }), [
+                            { text: translate('cancel', resolvedLangRef.current), style: 'cancel' },
+                            { text: translate('remove', resolvedLangRef.current), style: 'destructive', onPress: () => removeBM(bm.id) },
+                          ]);
+                        }}
+                        hitSlop={S.xs}
+                        style={{ padding: S.xs }}
+                      >
+                        <Ionicons name="trash-outline" size={20} color={t.red} />
+                      </Pressable>
+                    ) : (
+                      <Ionicons name="chevron-forward" size={18} color={t.ink3} />
+                    )}
                   </Pressable>
                 );
               })}
+              
+              <Text style={[s.browseHint, { color: t.ink3, fontSize: fs(12), marginTop: S.md, textAlign: 'center' }]}>
+                Tap ☆ in the browser to save sites
+              </Text>
             </ScrollView>
           )}
         </View>
       )}
 
+      {tab === 'settings' && (
+        <SettingsSheet
+          inline
+          theme={theme}
+          fontSize={fontSize}
+          language={language}
+          onThemeChange={setTheme}
+          onFontSizeChange={setFontSize}
+          onLanguageChange={setLanguage}
+          removeWatermark={removeWatermark}
+          onRemoveWatermarkChange={saveRemoveWatermark}
+          resolvedLanguage={resolvedLanguage}
+          t={t}
+        />
+      )}
+
       {/* ── Tab bar ─────────────────────────────────────── */}
-      <View style={[s.tabBar, { backgroundColor: t.bg, borderTopColor: t.sep, paddingBottom: BOTTOM_PAD }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
-        {(['home', 'browser', 'library', 'bookmarks'] as Tab[]).map((id, idx) => {
-          const transKey: TranslationKey = id === 'bookmarks' ? 'saved' : id === 'browser' ? 'browse' : id as TranslationKey;
-          const translatedLabel = translate(transKey, resolvedLanguage);
-          const countSuffix = id === 'home' && activeCount > 0 ? `  ${activeCount}`
-            : id === 'browser' && mediaCount > 0 ? `  ${mediaCount}`
-            : id === 'library' && allTasks.length > 0 ? `  ${allTasks.length}`
-            : id === 'bookmarks' && bookmarks.length > 0 ? `  ${bookmarks.length}`
-            : '';
-          const labelText = `${translatedLabel}${countSuffix}`;
+      <View style={[
+        s.tabBar,
+        {
+          backgroundColor: t.glass.tabBg,
+          borderColor: t.glass.tabBorder,
+          borderWidth: 1,
+          bottom: BOTTOM_PAD + 16,
+        },
+        resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }
+      ]}>
+        {(['home', 'library', 'bookmarks', 'browser', 'settings'] as Tab[]).map((id) => {
           const isActive = tab === id;
+          let iconName: React.ComponentProps<typeof Ionicons>['name'];
+          switch (id) {
+            case 'home':
+              iconName = isActive ? 'home' : 'home-outline';
+              break;
+            case 'library':
+              iconName = isActive ? 'download' : 'download-outline';
+              break;
+            case 'bookmarks':
+              iconName = isActive ? 'bookmark' : 'bookmark-outline';
+              break;
+            case 'browser':
+              iconName = isActive ? 'globe' : 'globe-outline';
+              break;
+            case 'settings':
+              iconName = isActive ? 'settings' : 'settings-outline';
+              break;
+          }
           return (
-            <React.Fragment key={id}>
-              {idx > 0 && <View style={[s.tabSep, { backgroundColor: t.sep }]} />}
-              <Pressable android_ripple={RIPPLE} style={s.tabItem} onPress={() => setTab(id)}>
-                {IS_ANDROID && isActive && <View style={[s.tabPill, { backgroundColor: `${t.btn}12` }]} />}
-                <Text style={[s.tabLabel, { color: isActive ? t.ink : t.ink2,
-                  fontWeight: isActive ? '600' : '400', fontSize: fs(13) }]}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.75}>
-                  {labelText}
-                </Text>
-                {IS_IOS && isActive && <View style={[s.tabDot, { backgroundColor: t.ink }]} />}
-              </Pressable>
-            </React.Fragment>
+            <Pressable
+              key={id}
+              android_ripple={RIPPLE_BL}
+              style={s.tabItem}
+              onPress={() => setTab(id)}
+            >
+              {isActive ? (
+                <View style={[
+                  s.tabPill,
+                  {
+                    backgroundColor: t.glass.pillActive,
+                  }
+                ]}>
+                  <Ionicons name={iconName} size={22} color={t.glass.pillActiveTxt} />
+                </View>
+              ) : (
+                <Ionicons name={iconName} size={22} color={t.ink2} />
+              )}
+            </Pressable>
           );
         })}
       </View>
@@ -1313,14 +1575,10 @@ export default function App() {
       </Modal>
 
       {/* ── Modals ──────────────────────────────────────── */}
-        <SettingsSheet visible={settingsOpen} onClose={() => setSettingsOpen(false)}
-          theme={theme} fontSize={fontSize} language={language}
-          onThemeChange={setTheme} onFontSizeChange={setFontSize} onLanguageChange={setLanguage}
-          removeWatermark={removeWatermark} onRemoveWatermarkChange={saveRemoveWatermark}
-          resolvedLanguage={resolvedLanguage} t={t} />
         {playingPath && <VideoPlayerModal path={playingPath} onClose={() => setPlayingPath(null)} language={resolvedLanguage} />}
         <Toast message={toast} />
       </SafeAreaView>
+      </LinearGradient>
     </SafeAreaProvider>
   );
 }
@@ -1331,6 +1589,22 @@ const s = StyleSheet.create({
   flex:   { flex: 1 },
   center: { alignItems: 'center', justifyContent: 'center' },
   sep:    { height: StyleSheet.hairlineWidth, marginVertical: S.md },
+
+  // ── Background Glows ──────────────────────────────────────
+  bgGlow1: {
+    position: 'absolute',
+    width: 320,
+    height: 320,
+    borderRadius: 160,
+    opacity: 1.0,
+  },
+  bgGlow2: {
+    position: 'absolute',
+    width: 320,
+    height: 320,
+    borderRadius: 160,
+    opacity: 1.0,
+  },
 
   // ── Top bar ───────────────────────────────────────────────
   topBar: {
@@ -1349,12 +1623,37 @@ const s = StyleSheet.create({
 
   // ── Home ──────────────────────────────────────────────────
   homeScroll: { padding: S.md, gap: S.md },
-
+  homeLogoContainer: {
+    alignItems: 'center',
+    marginTop: S.xl * 1.5,
+    marginBottom: S.md,
+  },
+  logoGlowWrap: {
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowRadius: 20,
+    shadowOpacity: 0.6,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 5,
+  },
+  homeLogoImage: {
+    width: 80,
+    height: 80,
+    resizeMode: 'contain',
+  },
+  homeLogoTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    marginTop: S.sm,
+    letterSpacing: 0.5,
+  },
   pasteCard: {
     borderRadius: R.lg,
     padding: S.md,
     gap: S.sm,
-    ...(IS_IOS ? {} : {}),
   },
   pasteLabel: { fontWeight: '600', letterSpacing: 0.6, marginBottom: S.xs },
   pasteInput: {
@@ -1365,7 +1664,7 @@ const s = StyleSheet.create({
   },
   primaryBtn: {
     height: 52,
-    borderRadius: R.md,
+    borderRadius: 26, // Perfect pill
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1395,31 +1694,23 @@ const s = StyleSheet.create({
   section:      { gap: S.sm },
   sectionLabel: { fontWeight: '600', letterSpacing: 0.6, textTransform: 'uppercase' },
 
-  compactCard: {
+  homeActiveRow: {
     borderRadius: R.md,
     padding: S.md,
     gap: S.xs,
+    marginBottom: S.sm,
   },
-  compactRow: {
+  homeActiveHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: S.sm,
+    justifyContent: 'space-between',
   },
-  compactSource: { flex: 1, fontWeight: '500' },
-  compactPct:    { fontWeight: '400' },
-  cancelBtn: {
-    height: 28,
-    paddingHorizontal: S.sm,
-    borderRadius: R.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center',
-    justifyContent: 'center',
+  homeActiveTitle: {
+    fontWeight: '600',
   },
-  cancelBtnLabel: { fontWeight: '400' },
-  compactStatus:  { fontWeight: '400' },
 
-  progressTrack: { height: 3, borderRadius: 2, overflow: 'hidden' },
-  progressFill:  { height: 3, borderRadius: 2 },
+  progressTrack: { height: 8, borderRadius: 4, overflow: 'hidden' }, // height 8, border radius 4
+  progressFill:  { height: 8, borderRadius: 4 },
 
   emptyHome:     { alignItems: 'center', paddingTop: S.xl * 2, gap: S.sm },
   emptyHomeIcon: { fontSize: 40, fontWeight: '200' },
@@ -1436,36 +1727,56 @@ const s = StyleSheet.create({
 
   // ── Browser ───────────────────────────────────────────────
   navBar: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
     paddingHorizontal: S.md,
     paddingVertical: S.sm,
     gap: S.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  addressField: {
-    flex: 1,
-    height: 40,
-    borderRadius: R.md,
-    paddingHorizontal: S.md,
+  navBarTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: S.xs,
   },
-  navBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: R.md,
+  navRowBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  navBtnIcon: { fontSize: 18, lineHeight: 22 },
-
-
+  browserTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 1,
+  },
+  addressFieldWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 20,
+    height: 40,
+    flex: 1,
+    paddingHorizontal: S.sm,
+  },
+  addressField: {
+    flex: 1,
+    height: 40,
+    paddingHorizontal: S.sm,
+  },
+  nestedReloadBtn: {
+    padding: S.xs,
+  },
   floatingBadge: {
     position: 'absolute',
-    top: S.md,
+    bottom: 20,
     alignSelf: 'center',
     paddingHorizontal: S.md,
     paddingVertical: S.sm,
     borderRadius: 100,
+    zIndex: 10,
     ...(IS_IOS
       ? { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } }
       : { elevation: 4 }),
@@ -1479,7 +1790,24 @@ const s = StyleSheet.create({
 
   // ── Library ───────────────────────────────────────────────
   gridContent: { padding: S.md, gap: S.sm },
-
+  chipContainer: {
+    paddingVertical: S.sm,
+    paddingHorizontal: S.md,
+  },
+  chipScroll: {
+    gap: S.sm,
+    flexDirection: 'row',
+  },
+  chip: {
+    paddingHorizontal: S.md,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  chipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
   libraryCard: {
     flexDirection: 'row',
     borderRadius: R.lg,
@@ -1496,12 +1824,57 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   sourceAvatarText: { fontWeight: '600' },
+  thumbnailContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: R.md,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  libraryThumbnail: {
+    width: '100%',
+    height: '100%',
+  },
+  thumbnailPlayOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  playCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   libraryCardBody: { flex: 1, gap: S.xs },
   libraryCardRow: { flexDirection: 'row', alignItems: 'center', gap: S.sm },
   libraryCardTitle: { flex: 1, fontWeight: '600' },
   libraryCardPct:   { fontWeight: '400' },
   libraryCardSub:   { fontWeight: '400' },
   libraryActions: { flexDirection: 'row', flexWrap: 'wrap', gap: S.sm, marginTop: S.xs },
+  libraryCardRight: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 48,
+  },
+  statusCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryTextBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   librarySelectEdge: {
     width: 88,
     minHeight: 36,
@@ -1543,9 +1916,19 @@ const s = StyleSheet.create({
 
   // ── Tab bar ───────────────────────────────────────────────
   tabBar: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    height: 56,
+    borderRadius: 28,
     flexDirection: 'row',
-    height: 52,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
   },
   tabItem: {
     flex: 1,
@@ -1554,10 +1937,11 @@ const s = StyleSheet.create({
     overflow: 'hidden',
   },
   tabPill: {
-    position: 'absolute',
-    height: 32,
-    borderRadius: 16,
-    width: '80%',
+    height: 38,
+    borderRadius: 19,
+    width: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   tabLabel: {},
   tabDot: {
@@ -1687,13 +2071,14 @@ const s = StyleSheet.create({
   // ── Floating bookmark FAB ─────────────────────────────────
   bmFab: {
     position: 'absolute',
-    bottom: S.lg,
+    bottom: 80,
     right: S.lg,
     width: 52,
     height: 52,
     borderRadius: 26,
     alignItems: 'center',
     justifyContent: 'center',
+    zIndex: 10,
   },
   bmFabIcon: { fontSize: 22, lineHeight: 26 },
 

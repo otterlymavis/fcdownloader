@@ -18,11 +18,13 @@
     "test:companion:nobrowser-go": "npm --prefix desktop-companion run test:nobrowser-go"
   },
   "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-cookies/cookies": "^6.2.1",
     "expo": "~55.0.26",
     "expo-build-properties": "~55.0.14",
     "expo-file-system": "~55.0.22",
+    "expo-linear-gradient": "~55.0.14",
     "expo-linking": "~55.0.15",
     "expo-media-library": "~55.0.17",
     "expo-sharing": "~55.0.20",

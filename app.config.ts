@@ -20,7 +20,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     backgroundColor: '#000000',
   },
   android: {
-    package: 'com.mabisuuu.fcdownloader',
+    package: 'com.otterpia.fcdownloader',
     versionCode: 24,
     allowBackup: false,
     icon: './web/icon-512.png',
@@ -43,7 +43,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ],
   },
   ios: {
-    bundleIdentifier: 'com.mabisuuu.fcdownloader',
+    bundleIdentifier: 'com.otterpia.fcdownloader',
     buildNumber: '24',
     supportsTablet: true,
     infoPlist: {
@@ -58,7 +58,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       LSApplicationQueriesSchemes: ['vlc', 'infuse', 'nplayer'],
     },
     entitlements: {
-      'com.apple.security.application-groups': ['group.com.mabisuuu.fcdownloader'],
+      'com.apple.security.application-groups': ['group.com.otterpia.fcdownloader'],
     },
   },
   plugins: [

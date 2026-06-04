@@ -25,8 +25,8 @@ interface ThemeColors {
 }
 
 interface Props {
-  visible: boolean;
-  onClose: () => void;
+  visible?: boolean;
+  onClose?: () => void;
   theme: ThemePref;
   fontSize: FontSizePref;
   language: LanguagePref;
@@ -37,6 +37,7 @@ interface Props {
   onRemoveWatermarkChange: (v: boolean) => void;
   resolvedLanguage: CommonLanguageCode;
   t: ThemeColors;
+  inline?: boolean;
 }
 
 const IS_ANDROID = Platform.OS === 'android';
@@ -78,7 +79,7 @@ const LANGUAGE_OPTIONS: { value: LanguagePref; label: string; key?: TranslationK
 ];
 
 export default function SettingsSheet({
-  visible,
+  visible = false,
   onClose,
   theme,
   fontSize,
@@ -90,136 +91,136 @@ export default function SettingsSheet({
   onRemoveWatermarkChange,
   resolvedLanguage,
   t,
+  inline = false,
 }: Props) {
   const isRTL = resolvedLanguage === 'ar';
 
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
-      <View style={[styles.sheet, { backgroundColor: t.bg }]}>
-        <View style={[styles.handle, { backgroundColor: t.ink3 }]} />
-        <Text style={[styles.title, { color: t.ink, textAlign: isRTL ? 'right' : 'left' }]}>
-          {translate('settings', resolvedLanguage)}
+  const content = (
+    <View style={[styles.sheet, inline ? { flex: 1, maxHeight: undefined, paddingBottom: 0 } : { backgroundColor: t.bg }]}>
+      {!inline && <View style={[styles.handle, { backgroundColor: t.ink3 }]} />}
+      <Text style={[styles.title, { color: t.ink, textAlign: isRTL ? 'right' : 'left', marginTop: inline ? S.lg : 0 }]}>
+        {translate('settings', resolvedLanguage)}
+      </Text>
+
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={inline && { paddingBottom: 100 }}>
+
+        {/* ── Appearance ── */}
+        <Text style={[styles.sectionLabel, { color: t.ink2, textAlign: isRTL ? 'right' : 'left' }]}>
+          {translate('appearance', resolvedLanguage).toUpperCase()}
         </Text>
-
-        <ScrollView showsVerticalScrollIndicator={false}>
-
-          {/* ── Appearance ── */}
-          <Text style={[styles.sectionLabel, { color: t.ink2, textAlign: isRTL ? 'right' : 'left' }]}>
-            {translate('appearance', resolvedLanguage).toUpperCase()}
+        <View style={[styles.card, { backgroundColor: t.card }]}>
+          <Text style={[styles.rowLabel, { color: t.ink, textAlign: isRTL ? 'right' : 'left' }]}>
+            {translate('theme', resolvedLanguage)}
           </Text>
-          <View style={[styles.card, { backgroundColor: t.card }]}>
-            <Text style={[styles.rowLabel, { color: t.ink, textAlign: isRTL ? 'right' : 'left' }]}>
-              {translate('theme', resolvedLanguage)}
-            </Text>
-            <View style={[styles.segmentRow, isRTL && { flexDirection: 'row-reverse' }]}>
-              {THEME_OPTIONS.map(({ value, labelKey }) => {
-                const active = theme === value;
-                return (
-                  <Pressable
-                    key={value}
-                    onPress={() => onThemeChange(value)}
-                    style={[
-                      styles.segment,
-                      { backgroundColor: active ? BLUE : t.card2 },
-                    ]}
-                  >
-                    <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.ink2 }]}>
-                      {translate(labelKey, resolvedLanguage)}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+          <View style={[styles.segmentRow, isRTL && { flexDirection: 'row-reverse' }]}>
+            {THEME_OPTIONS.map(({ value, labelKey }) => {
+              const active = theme === value;
+              return (
+                <Pressable
+                  key={value}
+                  onPress={() => onThemeChange(value)}
+                  style={[
+                    styles.segment,
+                    { backgroundColor: active ? BLUE : t.card2 },
+                  ]}
+                >
+                  <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.ink2 }]}>
+                    {translate(labelKey, resolvedLanguage)}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
+        </View>
 
-          {/* ── Text Size ── */}
-          <Text style={[styles.sectionLabel, { color: t.ink2, textAlign: isRTL ? 'right' : 'left' }]}>
-            {translate('textSize', resolvedLanguage).toUpperCase()}
+        {/* ── Text Size ── */}
+        <Text style={[styles.sectionLabel, { color: t.ink2, textAlign: isRTL ? 'right' : 'left' }]}>
+          {translate('textSize', resolvedLanguage).toUpperCase()}
+        </Text>
+        <View style={[styles.card, { backgroundColor: t.card }]}>
+          <Text style={[styles.rowLabel, { color: t.ink, textAlign: isRTL ? 'right' : 'left' }]}>
+            {translate('fontSize', resolvedLanguage)}
           </Text>
-          <View style={[styles.card, { backgroundColor: t.card }]}>
-            <Text style={[styles.rowLabel, { color: t.ink, textAlign: isRTL ? 'right' : 'left' }]}>
-              {translate('fontSize', resolvedLanguage)}
-            </Text>
-            <View style={[styles.segmentRow, isRTL && { flexDirection: 'row-reverse' }]}>
-              {FONT_OPTIONS.map(({ value, labelKey, preview }) => {
-                const active = fontSize === value;
-                return (
-                  <Pressable
-                    key={value}
-                    onPress={() => onFontSizeChange(value)}
-                    style={[
-                      styles.segment,
-                      { backgroundColor: active ? BLUE : t.card2 },
-                    ]}
-                  >
-                    <Text style={[
-                      styles.fontPreview,
-                      { color: active ? '#fff' : t.ink2, fontSize: 14 * FONT_SCALE[value] },
-                    ]}>
-                      {preview}
-                    </Text>
-                    <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.ink2 }]}>
-                      {translate(labelKey, resolvedLanguage)}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+          <View style={[styles.segmentRow, isRTL && { flexDirection: 'row-reverse' }]}>
+            {FONT_OPTIONS.map(({ value, labelKey, preview }) => {
+              const active = fontSize === value;
+              return (
+                <Pressable
+                  key={value}
+                  onPress={() => onFontSizeChange(value)}
+                  style={[
+                    styles.segment,
+                    { backgroundColor: active ? BLUE : t.card2 },
+                  ]}
+                >
+                  <Text style={[
+                    styles.fontPreview,
+                    { color: active ? '#fff' : t.ink2, fontSize: 14 * FONT_SCALE[value] },
+                  ]}>
+                    {preview}
+                  </Text>
+                  <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.ink2 }]}>
+                    {translate(labelKey, resolvedLanguage)}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
+        </View>
 
-          {/* ── Language ── */}
-          <Text style={[styles.sectionLabel, { color: t.ink2, textAlign: isRTL ? 'right' : 'left' }]}>
-            {translate('language', resolvedLanguage).toUpperCase()}
-          </Text>
-          <View style={[styles.card, { backgroundColor: t.card }]}>
-            <View style={[styles.langGrid, isRTL && { flexDirection: 'row-reverse' }]}>
-              {LANGUAGE_OPTIONS.map(({ value, label, key }) => {
-                const active = language === value;
-                const displayText = key ? translate(key, resolvedLanguage) : label;
-                return (
-                  <Pressable
-                    key={value}
-                    onPress={() => onLanguageChange(value)}
-                    style={[
-                      styles.langChip,
-                      { backgroundColor: active ? BLUE : t.card2 },
-                    ]}
-                  >
-                    <Text style={[styles.langChipLabel, { color: active ? '#fff' : t.ink2 }]}>
-                      {displayText}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+        {/* ── Language ── */}
+        <Text style={[styles.sectionLabel, { color: t.ink2, textAlign: isRTL ? 'right' : 'left' }]}>
+          {translate('language', resolvedLanguage).toUpperCase()}
+        </Text>
+        <View style={[styles.card, { backgroundColor: t.card }]}>
+          <View style={[styles.langGrid, isRTL && { flexDirection: 'row-reverse' }]}>
+            {LANGUAGE_OPTIONS.map(({ value, label, key }) => {
+              const active = language === value;
+              const displayText = key ? translate(key, resolvedLanguage) : label;
+              return (
+                <Pressable
+                  key={value}
+                  onPress={() => onLanguageChange(value)}
+                  style={[
+                    styles.langChip,
+                    { backgroundColor: active ? BLUE : t.card2 },
+                  ]}
+                >
+                  <Text style={[styles.langChipLabel, { color: active ? '#fff' : t.ink2 }]}>
+                    {displayText}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
+        </View>
 
-          {/* ── Downloads ── */}
-          <Text style={[styles.sectionLabel, { color: t.ink2, textAlign: isRTL ? 'right' : 'left' }]}>
-            DOWNLOADS
-          </Text>
-          <View style={[styles.card, { backgroundColor: t.card }]}>
-            <View style={[styles.toggleRow, isRTL && { flexDirection: 'row-reverse' }]}>
-              <View style={styles.toggleText}>
-                <Text style={[styles.rowLabel, { color: t.ink }]}>
-                  Remove Watermark
-                </Text>
-                <Text style={[styles.toggleNote, { color: t.ink3 }]}>
-                  {REMOVE_WATERMARK_NOTE}
-                </Text>
-              </View>
-              <Switch
-                value={removeWatermark}
-                onValueChange={onRemoveWatermarkChange}
-                trackColor={{ false: t.card2, true: BLUE }}
-                thumbColor="#fff"
-              />
+        {/* ── Downloads ── */}
+        <Text style={[styles.sectionLabel, { color: t.ink2, textAlign: isRTL ? 'right' : 'left' }]}>
+          DOWNLOADS
+        </Text>
+        <View style={[styles.card, { backgroundColor: t.card }]}>
+          <View style={[styles.toggleRow, isRTL && { flexDirection: 'row-reverse' }]}>
+            <View style={styles.toggleText}>
+              <Text style={[styles.rowLabel, { color: t.ink }]}>
+                Remove Watermark
+              </Text>
+              <Text style={[styles.toggleNote, { color: t.ink3 }]}>
+                {REMOVE_WATERMARK_NOTE}
+              </Text>
             </View>
+            <Switch
+              value={removeWatermark}
+              onValueChange={onRemoveWatermarkChange}
+              trackColor={{ false: t.card2, true: BLUE }}
+              thumbColor="#fff"
+            />
           </View>
+        </View>
 
-        </ScrollView>
+      </ScrollView>
 
+      {!inline && onClose && (
         <Pressable
           style={[styles.doneButton, { backgroundColor: t.card2 }]}
           onPress={onClose}
@@ -228,7 +229,18 @@ export default function SettingsSheet({
             {translate('done', resolvedLanguage)}
           </Text>
         </Pressable>
-      </View>
+      )}
+    </View>
+  );
+
+  if (inline) {
+    return content;
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose} />
+      {content}
     </Modal>
   );
 }
