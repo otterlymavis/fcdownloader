@@ -879,7 +879,10 @@ def _strategy_page_embeds(
     # Bare "src"/"source" keys are excluded — they are used for images throughout
     # React/Next.js hydration data and have a very high false-positive rate.
     _VIDEO_KEY_RE = re.compile(
-        r'"(?:video|audio|media|stream|play|file|download)(?:Url|_url|URL|Src|_src|File|_file|Path|_path|Link)?"\s*:\s*"(https?://[^"]{10,})"'
+        # High-confidence bare or suffixed keys
+        r'"(?:video|audio|media|stream|play|file|download|hls|mp4|dash|manifest|content)'
+        r'(?:Url|_url|URL|Src|_src|File|_file|Path|_path|Link)?"\s*:\s*"(https?://[^"]{10,})"'
+        # Require a suffix when the key is source/src (too generic to match bare)
         r'|"(?:source|src)(?:Url|_url|URL|Src|_src|File|_file|Path|_path|Link)+"\s*:\s*"(https?://[^"]{10,})"',
         re.IGNORECASE,
     )
