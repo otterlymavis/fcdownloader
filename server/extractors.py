@@ -1304,6 +1304,15 @@ def extract_generic_media_images(page_url: str, cookies: str | None) -> dict[str
 
     def _add(url: str) -> None:
         url = html.unescape(url.replace("\\/", "/")).strip()
+        # Decode Next.js image optimization proxy: /_next/image?url=<real-url>&w=...&q=...
+        if "/_next/image" in url:
+            try:
+                _qs = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+                _real = (_qs.get("url") or [""])[0]
+                if _real.startswith("http"):
+                    url = urllib.parse.unquote(_real)
+            except Exception:
+                pass
         if not url.startswith("http") or not _is_article_image(url):
             return
         dedup = re.sub(r"\?.*$", "", url)
@@ -1566,6 +1575,13 @@ def _normalize_curated_media_url(url: str) -> str:
     """Prefer original article assets over CDN thumbnail transforms."""
     url = html.unescape(url).strip()
     parsed = urllib.parse.urlsplit(url)
+    # Next.js image optimization: /_next/image?url=<encoded-real-url>&w=...&q=...
+    if "/_next/image" in parsed.path:
+        params = urllib.parse.parse_qs(parsed.query)
+        real = (params.get("url") or [""])[0]
+        if real.startswith("http"):
+            url = html.unescape(urllib.parse.unquote(real))
+            parsed = urllib.parse.urlsplit(url)
     if "daumcdn.net/thumb/" in parsed.netloc + parsed.path:
         params = urllib.parse.parse_qs(parsed.query)
         fname = (params.get("fname") or [""])[0]
