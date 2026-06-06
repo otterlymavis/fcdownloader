@@ -199,7 +199,7 @@ _CURATED_SITE_PROFILES: tuple[dict[str, Any], ...] = (
             "cancam.jp", "classy-online.jp", "classyonline.jp", "jj-jj.net",
             "gingerweb.jp", "ar-mag.jp", "bisweb.jp", "ray-web.jp", "hpplus.jp",
             "ananweb.jp", "croissant-online.jp", "frau.tokyo", "mi-mollet.com",
-            "fashion-press.net", "fashionsnap.com", "wwdjapan.com",
+            "fashion-press.net", "fashionsnap.com", "fashionsnap-assets.com", "wwdjapan.com",
             "thetv.jp", "mantan-web.jp", "crank-in.net", "cinematoday.jp",
             "eiga.com", "realsound.jp", "spice.eplus.jp", "jprime.jp",
             "smart-flash.jp", "flash.jp", "nikkan-gendai.com", "asagei.com",
