@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DetectedMedia, DownloadStatus, DownloadStrategy, DownloadTask } from '../types';
 import { deleteDownload } from '../lib/hlsDownloader';
 import { DRMProtectedError, pickStrategy, runDownload } from '../lib/downloadStrategies';
+import { ServerExtractionError } from '../lib/serverExtractor';
 
 const STORAGE_KEY = '@fcdownloader/tasks_v1';
 
@@ -103,12 +104,16 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
         console.error('[useDownloadManager] Download failed:', err);
         const isDRM = err instanceof DRMProtectedError;
         const isCancelled = (err as Error).message === 'Cancelled';
+        const errorCode = err instanceof ServerExtractionError ? err.code : undefined;
         const errorMsg = isDRM
           ? 'DRM-protected — cannot download'
           : (err as Error).message;
 
-        const failedTask: DownloadTask = { ...task, status: isCancelled ? 'cancelled' : 'failed', error: errorMsg };
-        update(id, { status: failedTask.status, error: errorMsg });
+        const failedTask: DownloadTask = {
+          ...task, status: isCancelled ? 'cancelled' : 'failed',
+          error: errorMsg, errorCode,
+        };
+        update(id, { status: failedTask.status, error: errorMsg, errorCode });
 
         if (!isDRM && !isCancelled) {
           await deleteDownload(id);

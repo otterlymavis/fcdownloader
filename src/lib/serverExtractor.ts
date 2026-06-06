@@ -62,6 +62,16 @@ const BUNDLED_TOKEN = (
 ).trim();
 const SERVER_CONFIDENCE = 0.97;
 
+/** Thrown when the server returns a non-200 extraction response. Carries the
+ *  machine-readable error_code from the server's ErrorCode enum so callers
+ *  can show tailored UX (AUTH_REQUIRED, GEO_BLOCKED, RATE_LIMITED, etc.). */
+export class ServerExtractionError extends Error {
+  constructor(message: string, public readonly code?: string) {
+    super(message);
+    this.name = 'ServerExtractionError';
+  }
+}
+
 // Synced from useSettings on load and on every toggle change.
 let _removeWatermark = false;
 export function setRemoveWatermark(value: boolean): void {
@@ -183,12 +193,30 @@ export async function extractViaServer(pageUrl: string, options: ServerExtractOp
       signal: ac.signal,
     });
     if (!res.ok) {
-      debugWarn('[serverExtractor] HTTP', res.status);
-      return [];
+      let errorCode: string | undefined;
+      let errorMsg = `HTTP ${res.status}`;
+      if (res.status === 429) {
+        errorCode = 'RATE_LIMITED';
+        errorMsg = 'Server rate limit reached — please wait a moment and try again';
+      } else {
+        try {
+          const errBody = await res.json() as { detail?: { message?: string; error_code?: string } | string };
+          const detail = errBody.detail;
+          if (detail && typeof detail === 'object') {
+            errorCode = detail.error_code;
+            if (detail.message) errorMsg = detail.message;
+          } else if (typeof detail === 'string') {
+            errorMsg = detail;
+          }
+        } catch {}
+      }
+      debugWarn('[serverExtractor] HTTP', res.status, errorCode ?? '');
+      throw new ServerExtractionError(errorMsg, errorCode);
     }
     const data = (await res.json()) as ServerExtractResponse;
     return toDetectedMedia(data, pageUrl);
   } catch (e) {
+    if (e instanceof ServerExtractionError) throw e;
     debugWarn('[serverExtractor] request failed:', String(e).slice(0, 200));
     return [];
   } finally {

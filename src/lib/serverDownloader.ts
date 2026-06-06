@@ -4,7 +4,7 @@ import { fetch as expoFetch } from 'expo/fetch';
 import { DetectedMedia } from '../types';
 import { DownloadOptions } from './hlsDownloader';
 import { extractSessionCookies } from './cookieManager';
-import { getServerExtractorToken, getServerExtractorUrl } from './serverExtractor';
+import { getServerExtractorToken, getServerExtractorUrl, ServerExtractionError } from './serverExtractor';
 import { debugWarn } from './releaseLogger';
 
 function guessExt(media: DetectedMedia, contentType?: string | null): string {
@@ -123,15 +123,29 @@ async function _streamServerDownloadOnce(
   if (signal?.aborted) throw new Error('Cancelled');
   if (!res.ok) {
     let detail = `Server download failed (${res.status})`;
-    try {
-      const text = await res.text();
-      const parsed = JSON.parse(text);
-      const msg = parsed?.detail ?? parsed?.error ?? text;
-      if (typeof msg === 'string' && msg.trim()) detail = msg.slice(0, 400);
-    } catch {}
+    let errorCode: string | undefined;
+    if (res.status === 429) {
+      errorCode = 'RATE_LIMITED';
+      detail = 'Server rate limit reached — please wait a moment and try again';
+    } else {
+      try {
+        const text = await res.text();
+        const parsed = JSON.parse(text);
+        const rawDetail = parsed?.detail;
+        if (rawDetail && typeof rawDetail === 'object') {
+          if (rawDetail.message) detail = String(rawDetail.message).slice(0, 400);
+          errorCode = rawDetail.error_code;
+        } else {
+          const msg = rawDetail ?? parsed?.error ?? text;
+          if (typeof msg === 'string' && msg.trim()) detail = msg.slice(0, 400);
+        }
+      } catch {}
+    }
     // Preserve the status code in the message so isRetryableDownloadError can
     // see 5xx even when a JSON detail replaced the default text.
-    throw new Error(/\(\d{3}\)/.test(detail) ? detail : `${detail} (${res.status})`);
+    const finalDetail = /\(\d{3}\)/.test(detail) ? detail : `${detail} (${res.status})`;
+    if (errorCode) throw new ServerExtractionError(finalDetail, errorCode);
+    throw new Error(finalDetail);
   }
   if (!res.body) throw new Error('Server download returned an empty body');
 
@@ -208,15 +222,26 @@ async function _downloadYtdlStream(
 
   if (signal?.aborted) throw new Error('Cancelled');
   if (!res.ok) {
-    // Attempt to pull the server's error detail from the JSON body so the
-    // toast shows something actionable instead of a bare HTTP status.
     let detail = `ytdl-stream failed (${res.status})`;
-    try {
-      const body = await res.text();
-      const parsed = JSON.parse(body);
-      const msg = parsed?.detail ?? parsed?.error ?? body;
-      if (typeof msg === 'string' && msg.trim()) detail = msg.slice(0, 400);
-    } catch { /* ignore parse errors — fall through to generic message */ }
+    let errorCode: string | undefined;
+    if (res.status === 429) {
+      errorCode = 'RATE_LIMITED';
+      detail = 'Server rate limit reached — please wait a moment and try again';
+    } else {
+      try {
+        const body = await res.text();
+        const parsed = JSON.parse(body);
+        const rawDetail = parsed?.detail;
+        if (rawDetail && typeof rawDetail === 'object') {
+          if (rawDetail.message) detail = String(rawDetail.message).slice(0, 400);
+          errorCode = rawDetail.error_code;
+        } else {
+          const msg = rawDetail ?? parsed?.error ?? body;
+          if (typeof msg === 'string' && msg.trim()) detail = msg.slice(0, 400);
+        }
+      } catch { /* ignore parse errors — fall through to generic message */ }
+    }
+    if (errorCode) throw new ServerExtractionError(detail, errorCode);
     throw new Error(detail);
   }
 

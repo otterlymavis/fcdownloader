@@ -52,7 +52,7 @@ from typing import Any, Iterator
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from yt_dlp import YoutubeDL
 from yt_dlp.version import __version__ as YT_DLP_VERSION
@@ -137,8 +137,19 @@ app = FastAPI(
     default_response_class=UTF8JSONResponse,
 )
 BACKEND_API_VERSION = "v1"
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": {
+                "message": f"Rate limit exceeded ({exc.detail}). Please wait before retrying.",
+                "error_code": "RATE_LIMITED",
+            }
+        },
+    )
+
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
 _extension_origin_regex = r"^(chrome|moz|safari-web|edge)-extension://[a-zA-Z0-9_-]+$"
 app.add_middleware(

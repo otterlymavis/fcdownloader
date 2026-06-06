@@ -212,8 +212,13 @@ export default function App() {
   // ── Download manager ──────────────────────────────────────
   const { active, history, enqueue, retry, cancel, remove } = useDownloadManager({
     onComplete: useCallback(() => showToast(translate('downloadComplete', resolvedLangRef.current), 'success'), [showToast]),
-    onError:    useCallback((task: DownloadTask) =>
-      showToast(translate('failedError', resolvedLangRef.current, { error: task.error ?? 'unknown error' }), 'error'), [showToast]),
+    onError:    useCallback((task: DownloadTask) => {
+      const lang = resolvedLangRef.current;
+      if (task.errorCode === 'AUTH_REQUIRED') showToast(translate('authRequired', lang), 'error');
+      else if (task.errorCode === 'GEO_BLOCKED') showToast(translate('geoBlocked', lang), 'error');
+      else if (task.errorCode === 'RATE_LIMITED') showToast(translate('rateLimited', lang), 'error');
+      else showToast(translate('failedError', lang, { error: task.error ?? 'unknown error' }), 'error');
+    }, [showToast]),
   });
 
   const [extractionQueue, setExtractionQueue] = useState<string[]>([]);
@@ -240,7 +245,8 @@ export default function App() {
 
     setExtracting(true);
     try {
-      const items = await extractionManager.extractMedia(targetUrl);
+      const result = await extractionManager.extract(targetUrl);
+      const items = result.media ?? [];
       if (items.length > 0) {
         for (const item of items) await enqueue(item);
         setPasteUrl('');
@@ -253,7 +259,11 @@ export default function App() {
         setTab('library');
         return;
       }
-      showToast(translate('openingInBrowserScan', resolvedLangRef.current), 'info');
+      const lang = resolvedLangRef.current;
+      if (result.errorCode === 'AUTH_REQUIRED') showToast(translate('authRequired', lang), 'error');
+      else if (result.errorCode === 'GEO_BLOCKED') showToast(translate('geoBlocked', lang), 'error');
+      else if (result.errorCode === 'RATE_LIMITED') showToast(translate('rateLimited', lang), 'error');
+      else showToast(translate('openingInBrowserScan', lang), 'info');
     } catch {
       showToast(translate('openingInBrowser', resolvedLangRef.current), 'info');
     } finally {
@@ -1095,7 +1105,12 @@ export default function App() {
                       <Text style={[s.libraryCardSub,
                         { color: isFail ? t.red : t.ink2, fontSize: fs(12), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
                         {isDone   ? `${translate('saved', resolvedLanguage)}${size ? `  ·  ${size}` : ''}`
-                         : isFail ? (task.error ?? translate('failedError', resolvedLanguage, { error: '' }).replace(': ', '').replace('：', ''))
+                         : isFail ? (
+                             task.errorCode === 'AUTH_REQUIRED' ? translate('authRequired', resolvedLanguage) :
+                             task.errorCode === 'GEO_BLOCKED'   ? translate('geoBlocked', resolvedLanguage) :
+                             task.errorCode === 'RATE_LIMITED'  ? translate('rateLimited', resolvedLanguage) :
+                             (task.error ?? translate('failedError', resolvedLanguage, { error: '' }).replace(': ', '').replace('：', ''))
+                           )
                          : translate('cancel', resolvedLanguage)}
                       </Text>
                       {resolution && (

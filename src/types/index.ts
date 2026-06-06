@@ -106,6 +106,7 @@ export interface DownloadTask {
   downloadedSegments: number;
   localPlaylistPath?: string;
   error?: string;
+  errorCode?: string;
   createdAt: number;
   completedAt?: number;
 }

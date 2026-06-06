@@ -1071,7 +1071,9 @@ def run_extraction(
     _has_auth = any(k in reason_lower for k in ("sign in", "login", "auth", "cookie"))
     _has_geo = any(k in reason_lower for k in ("geo", "region", "country", "not available"))
 
+    error_code: str | None = None
     if _has_auth or (_has_403 and not cookies):
+        error_code = "AUTH_REQUIRED"
         detail = (
             "This page requires you to be signed in, or the server's IP is "
             "blocked by the site. Open the page in your browser, use the "
@@ -1079,12 +1081,14 @@ def run_extraction(
             "cookies, and try again."
         )
     elif _has_geo:
+        error_code = "GEO_BLOCKED"
         detail = (
             "This video is geo-restricted and cannot be accessed from the "
             "server's location. Try using a proxy, or use the FCDownload "
             "bookmarklet in a browser with VPN access."
         )
     elif _has_unsupported and _has_403:
+        error_code = "AUTH_REQUIRED"
         detail = (
             "The page blocked the server's request (HTTP 403). This usually "
             "means the site requires a browser session or is geo-restricted. "
@@ -1092,6 +1096,7 @@ def run_extraction(
             "send your session cookies with the request."
         )
     elif _has_unsupported:
+        error_code = "FORMAT_UNAVAILABLE"
         detail = (
             "No extractor found for this URL and the page HTML contained no "
             "detectable media. This usually means the video is loaded by a "
@@ -1103,10 +1108,12 @@ def run_extraction(
             f"URL directly. (details: {reason_str[:400]})"
         )
     else:
+        error_code = "FORMAT_UNAVAILABLE"
         detail = f"unsupported after all extraction strategies failed: {reason_str[:800]}"
 
     raise HTTPException(502, {
         "message": detail,
+        "error_code": error_code,
         "diagnostics": diagnostics,
         "sourceAudit": source_audit.sanitize_audit(accumulated_audit),
     })

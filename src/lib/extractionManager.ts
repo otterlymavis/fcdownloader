@@ -12,7 +12,7 @@
  */
 import { DetectedMedia, DownloadStrategy } from '../types';
 import { extractFromSocialUrl, isSocialPageUrl } from './platformExtractors';
-import { extractViaServer, ServerExtractOptions } from './serverExtractor';
+import { extractViaServer, ServerExtractionError, ServerExtractOptions } from './serverExtractor';
 import { getSiteCapabilities } from './siteRegistry';
 import { pickStrategy } from './downloadStrategies';
 import { debugLog, debugWarn } from './releaseLogger';
@@ -38,6 +38,9 @@ export interface ExtractionResult {
   media?: DetectedMedia[];
   /** Per-attempt diagnostics (name → reason). Populated on full failure. */
   diagnostics?: Record<string, string>;
+  /** Machine-readable error code from the server (AUTH_REQUIRED, GEO_BLOCKED, etc.)
+   *  when the server was the reason all strategies failed. */
+  errorCode?: string;
 }
 
 // ── Capability scoring ────────────────────────────────────────────────────────
@@ -81,13 +84,14 @@ export function pickBestMedia(items: DetectedMedia[]): DetectedMedia | undefined
 async function runAttempt(
   name: string,
   fn: () => Promise<DetectedMedia[]>,
-): Promise<{ success: boolean; media?: DetectedMedia[]; reason?: string }> {
+): Promise<{ success: boolean; media?: DetectedMedia[]; reason?: string; errorCode?: string }> {
   try {
     const media = await fn();
     if (media.length > 0) return { success: true, media };
     return { success: false, reason: 'no media returned' };
   } catch (e) {
-    return { success: false, reason: String((e as Error)?.message ?? e).slice(0, 240) };
+    const errorCode = e instanceof ServerExtractionError ? e.code : undefined;
+    return { success: false, reason: String((e as Error)?.message ?? e).slice(0, 240), errorCode };
   }
 }
 
@@ -107,6 +111,7 @@ export class ExtractionManager {
   async extract(pageUrl: string, session?: ServerExtractOptions): Promise<ExtractionResult> {
     const caps = getSiteCapabilities(pageUrl);
     const diagnostics: Record<string, string> = {};
+    let serverErrorCode: string | undefined;
 
     // ── Fast path: on-device first for sites the server can't extract without a
     // session (Xiaohongshu). The gated server round-trip is slow and usually
@@ -144,6 +149,7 @@ export class ExtractionManager {
         };
       }
       diagnostics['server-extraction'] = attempt.reason ?? 'no media';
+      serverErrorCode = attempt.errorCode;
       debugLog('[ExtractionManager] server-extraction failed:', attempt.reason);
     }
 
@@ -196,6 +202,7 @@ export class ExtractionManager {
       confidence: 0,
       reason: summary || 'all extraction strategies failed',
       diagnostics,
+      errorCode: serverErrorCode,
     };
   }
 
