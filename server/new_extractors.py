@@ -12,7 +12,7 @@ import urllib.request
 from typing import Any
 
 import source_audit
-from utils import cache_key, guess_ext_from_url, safe_headers
+from utils import cache_key, fetch_with_retry, guess_ext_from_url, safe_headers
 
 _MOBILE_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
@@ -25,15 +25,10 @@ _DESKTOP_UA = (
 
 
 def _fetch(url: str, headers: dict[str, str], timeout: int = 15) -> bytes | None:
-    try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read()
-            if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
-                body = gzip.decompress(body)
-            return body
-    except Exception:
-        return None
+    body, _ = fetch_with_retry(url, headers, timeout=timeout)
+    if body and body[:2] == b"\x1f\x8b":
+        body = gzip.decompress(body)
+    return body
 
 
 def _script_json(html: str, marker: str) -> dict[str, Any] | None:
