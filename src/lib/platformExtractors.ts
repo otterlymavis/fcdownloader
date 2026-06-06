@@ -168,8 +168,18 @@ function _scanOg(html: string, pageUrl: string): DetectedMedia[] {
     .map(u => makeItem(u, pageUrl));
 }
 
-// Fetch the page once and scan in HLS→DASH→OG→generic priority order.
-// Avoids 3 redundant HTTP fetches vs calling extractHtmlMedia + extractOgVideo separately.
+function _scanOgImage(html: string, pageUrl: string): DetectedMedia[] {
+  return extractUrls(
+    html,
+    /<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["'](?:og:image(?::url|:secure_url)?|twitter:image(?::src)?)["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
+  )
+    .filter(u => u.startsWith('http'))
+    .map(u => makeItem(u, pageUrl, 'Image', 'social-extractor', 0.6));
+}
+
+// Fetch the page once and scan in HLS→DASH→OG video→generic video→OG image priority order.
+// OG image is a last resort — almost all article pages have one, so we only use it
+// when no video content was found.
 async function extractHtmlMediaAll(pageUrl: string): Promise<DetectedMedia[]> {
   try {
     const html = await fetchHtml(pageUrl);
@@ -179,7 +189,9 @@ async function extractHtmlMediaAll(pageUrl: string): Promise<DetectedMedia[]> {
     }
     const og = _scanOg(html, pageUrl);
     if (og.length > 0) return og;
-    return _scanHtml(html, pageUrl, 'generic');
+    const generic = _scanHtml(html, pageUrl, 'generic');
+    if (generic.length > 0) return generic;
+    return _scanOgImage(html, pageUrl);
   } catch { return []; }
 }
 

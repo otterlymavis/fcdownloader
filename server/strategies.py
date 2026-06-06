@@ -466,7 +466,7 @@ def _strategy_html_scan_combined(
         path_stem = _re.sub(r'\.\w{2,5}$', '', path_stem)
         return p.netloc + path_stem
 
-    for mode in ("hls", "dash", "og", "generic"):
+    for mode in ("hls", "dash", "og", "generic", "og_image"):
         urls = _scan_media_urls(html_text, mode)
         if not urls:
             continue
@@ -695,6 +695,14 @@ def _scan_media_urls(html_text: str, mode: str) -> list[str]:
         # content=… then property=… (some sites reverse the attribute order)
         patterns.append(
             r'<meta\s[^>]*?content\s*=\s*["\']([^"\']+)["\'][^>]*?(?:property|name)\s*=\s*["\']' + _vt + r'["\']'
+        )
+    if mode == "og_image":
+        _it = r'(?:og:image(?::url|:secure_url)?|twitter:image(?::src)?)'
+        patterns.append(
+            r'<meta\s[^>]*?(?:property|name)\s*=\s*["\']' + _it + r'["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']'
+        )
+        patterns.append(
+            r'<meta\s[^>]*?content\s*=\s*["\']([^"\']+)["\'][^>]*?(?:property|name)\s*=\s*["\']' + _it + r'["\']'
         )
     found: list[str] = []
     variants = [
