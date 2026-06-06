@@ -247,8 +247,11 @@ async function extractReddit(pageUrl: string): Promise<DetectedMedia[]> {
     const post = data[0]?.data?.children?.[0]?.data;
     const results: DetectedMedia[] = [];
 
-    if (post?.secure_media?.reddit_video?.fallback_url) {
-      results.push(makeItem(post.secure_media.reddit_video.fallback_url, pageUrl, 'Reddit Video', 'social-extractor', 0.9));
+    const rv = post?.secure_media?.reddit_video || post?.media?.reddit_video;
+    if (rv) {
+      // HLS (hls_url) carries both audio and video in one stream; fallback_url is video-only.
+      const videoUrl = rv.hls_url || rv.fallback_url;
+      if (videoUrl) results.push(makeItem(videoUrl, pageUrl, 'Reddit Video', 'social-extractor', 0.9));
     } else if (post?.is_gallery && post?.media_metadata) {
       // Gallery post: ordered by gallery_data.items when available
       const items: Array<{ media_id: string }> =
@@ -272,17 +275,12 @@ async function extractReddit(pageUrl: string): Promise<DetectedMedia[]> {
 // ── Twitter / X ───────────────────────────────────────────────────
 async function extractTwitter(pageUrl: string): Promise<DetectedMedia[]> {
   try {
-    let targetUrl = pageUrl;
-    const html = await fetchHtml(targetUrl);
+    const html = await fetchHtml(pageUrl);
     const results: DetectedMedia[] = [];
 
-    const scriptMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-    if (scriptMatch) {
-      extractUrls(
-        scriptMatch[1],
-        /https?:\\\/\\\/video\.twimg\.com\\\/[^"\\]+?\.mp4[^"\\]*/g,
-      ).forEach(u => results.push(makeItem(u, pageUrl)));
-    }
+    // video.twimg.com CDN — MP4 and HLS (.m3u8) URLs in SSR JSON blobs
+    const twimpRe = /https?:\\\/\\\/video\.twimg\.com\\\/[^"\\]+?\.(?:mp4|m3u8)[^"\\]*/g;
+    extractUrls(html, twimpRe).forEach(u => pushUnique(results, makeItem(u, pageUrl)));
 
     // OG / Twitter card meta-tags as fallback
     extractUrls(
@@ -490,9 +488,6 @@ async function extractBilibili(pageUrl: string): Promise<DetectedMedia[]> {
 
 async function extractBilibiliLocal(pageUrl: string): Promise<DetectedMedia[]> {
   try {
-    const serverItems = await extractViaServer(pageUrl);
-    if (serverItems.length > 0) return serverItems;
-
     const html = await fetchHtml(pageUrl, DESKTOP_UA);
     const results: DetectedMedia[] = [];
 
