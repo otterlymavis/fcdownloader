@@ -633,6 +633,13 @@ def _scan_media_urls(html_text: str, mode: str) -> list[str]:
             r'<(?:video|source)\b[^>]{0,400}?\bdata-src=["\']'
             r'(https?://[^"\'<>\s]{10,})["\']'
         )
+        # data-video-url / data-stream-url / data-mp4 / data-hls on arbitrary
+        # container elements (common in custom CMS and sports/news video players).
+        patterns.append(
+            r'<[a-z][a-z0-9-]*\b[^>]{0,600}?\bdata-(?:video-url|stream-url|media-url'
+            r'|video-src|stream-src|hls-url|mp4-url|mp4|m3u8|hls)=["\']'
+            r'(https?://[^"\'<>\s]{10,})["\']'
+        )
     if mode == "og":
         _vt = r'(?:og:video(?::url)?|og:video:secure_url|twitter:player:stream|og:audio(?::url)?)'
         # property=… then content=… (most common ordering)
