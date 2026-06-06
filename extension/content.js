@@ -280,8 +280,10 @@
       [/"browser_native_(?:hd|sd)_url"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, "direct"],
       [/"hd_src"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, "direct"],
       [/"sd_src"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, "direct"],
+      // General JSON image/media key names (note.com, trilltrill, API responses)
+      [/"(?:article_photo_link|image_url|photo_url|src_url|original_url|cover_url|thumbnail_url|download_url|media_url|play_url|stream_url)"\s*:\s*"(https?:\\?\/\\?\/[^"]{10,})"/gi, "image"],
       [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|vod\.pstatic\.net)[^"'\\<>\s]*\.(?:mp4|m3u8)[^"'\\<>\s]*)/g, "direct"],
-      [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|pinimg\.com|weibocdn\.com|sinaimg\.cn|xhscdn\.com)[^"'\\<>\s]*\.(?:jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/g, "image"],
+      [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|pinimg\.com|weibocdn\.com|sinaimg\.cn|xhscdn\.com|media\.trilltrill\.jp|obs\.line-scdn\.net|fashionsnap-assets\.com|i\.gyazo\.com)[^"'\\<>\s]*\.(?:jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/g, "image"],
       [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:weibocdn\.com|xhscdn\.com)[^"'\\<>\s]*\.(?:mp4|m3u8|mov)[^"'\\<>\s]*)/g, "direct"],
     ];
     for (const [re, kind] of patterns) {
@@ -615,6 +617,27 @@
     }];
   }
 
+  // Article / image gallery sites — creates a backendRouted item so the popup
+  // always shows a download option even when the image URL isn't directly
+  // detectable from HTML (the server extractor handles the full extraction).
+  const ARTICLE_GALLERY_HOST_RE = /(?:^|\.)(?:trilltrill\.jp|note\.com|lineblog\.me|hatenablog\.(?:com|jp)|hatenadiary\.(?:com|jp)|hatena\.ne\.jp|blog\.fc2\.com|gyazo\.com|streamable\.com|redgifs\.com)$/i;
+  const ARTICLE_GALLERY_PATH_RE = /\/(?:articles?|posts?|n\/[a-z0-9_-]+|[a-z0-9_-]{5,}\/archives?|watch\/|gifs?\/)|\d{5,}/i;
+
+  function scanArticleGalleries() {
+    const host = location.hostname;
+    const path = location.pathname;
+    if (!ARTICLE_GALLERY_HOST_RE.test(host)) return [];
+    if (!ARTICLE_GALLERY_PATH_RE.test(path)) return [];
+    return [{
+      url: location.href,
+      pageUrl: location.href,
+      kind: "embed",
+      source: "article-gallery",
+      label: host.replace(/^(?:www|m)\./, ""),
+      backendRouted: true,
+    }];
+  }
+
   function scanNaverFeedLinks() {
     if (!/(?:^|\.)(?:m\.entertain\.naver\.com|entertain\.naver\.com|m\.sports\.naver\.com|sports\.news\.naver\.com)$/i.test(location.hostname)) {
       return [];
@@ -670,6 +693,7 @@
     out.push(...scanBilibiliDynamic());
     out.push(...scanWeibo());
     out.push(...scanJapanesePlatforms());
+    out.push(...scanArticleGalleries());
     out.push(...scanNaverFeedLinks());
 
     // Page-wide JSON-field scan is noisy: news pages with comments / feeds
