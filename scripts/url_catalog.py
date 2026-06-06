@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 EXTRA_URLS: dict[str, tuple[str, str]] = {
     "Direct-MP4": (
-        "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+        "https://www.w3schools.com/html/mov_bbb.mp4",
         "stable direct MP4 smoke test",
     ),
     "Direct-HLS": (
@@ -20,7 +20,7 @@ EXTRA_URLS: dict[str, tuple[str, str]] = {
         "Apple sample HLS manifest",
     ),
     "Direct-DASH": (
-        "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd",
+        "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.mpd",
         "DASH manifest smoke test",
     ),
 }

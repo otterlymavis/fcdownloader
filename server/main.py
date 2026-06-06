@@ -514,7 +514,7 @@ def _info_from_media_hints(page_url: str, hints: list[dict[str, Any]] | None) ->
         kind = safe_text(raw.get("kind")).lower() or _direct_media_url_kind(url) or "direct"
         if kind == "dash":
             protocol = "http_dash_segments"
-        elif kind == "hls" or looks_like_hls(url):
+        elif kind == "hls" or looks_like_hls(url, None):
             protocol = "m3u8"
         else:
             protocol = "https"
