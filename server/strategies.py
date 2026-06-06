@@ -752,7 +752,11 @@ def _strategy_page_embeds(
         # Extract the first 2000 chars of the setup object to avoid runaway matches
         setup_text = html_text[jw.end():jw.end() + 2000]
         # JS objects use both quoted ("file") and unquoted (file) keys.
-        for jw_file_m in re.finditer(r'(?:["\']file["\']|file)\s*:\s*["\']([^"\']{10,})["\']', setup_text, re.IGNORECASE):
+        # Also catch playlist: "URL" (when playlist is a remote JSON URL, not an array).
+        for jw_file_m in re.finditer(
+            r'(?:["\'](?:file|playlist)["\']|file|playlist)\s*:\s*["\']([^"\']{10,})["\']',
+            setup_text, re.IGNORECASE,
+        ):
             fu = html_mod.unescape(jw_file_m.group(1).replace("\\/", "/"))
             if fu.startswith(("http://", "https://")) and fu not in embed_urls:
                 embed_urls.append(fu)
