@@ -596,6 +596,17 @@ def _scan_media_urls(html_text: str, mode: str) -> list[str]:
         patterns.append(r'https?:\\?/\\?/[^"\'<>\s\\]+?\.mpd[^"\'<>\s\\]*')
     if mode in {"generic"}:
         patterns.append(r'https?:\\?/\\?/[^"\'<>\s\\]+?\.(?:mp4|m4v|webm|mov)[^"\'<>\s\\]*')
+        # HTML5 <video src="...">, <source src="...">, <audio src="..."> — captures the
+        # URL even when it lacks a file extension (common with signed CDN URLs).
+        patterns.append(
+            r'<(?:video|audio|source)\b[^>]{0,400}?\bsrc=["\']'
+            r'(https?://[^"\'<>\s]{10,})["\']'
+        )
+        # data-src lazy-loaded variants (used by some video libraries).
+        patterns.append(
+            r'<(?:video|source)\b[^>]{0,400}?\bdata-src=["\']'
+            r'(https?://[^"\'<>\s]{10,})["\']'
+        )
     if mode == "og":
         _vt = r'(?:og:video(?::url)?|og:video:secure_url|twitter:player:stream)'
         # property=… then content=… (most common ordering)
@@ -684,19 +695,62 @@ def _strategy_page_embeds(
         if fu.startswith(("http://", "https://")):
             embed_urls.append(fu)
 
-    # ── iframe embeds: YouTube, Vimeo, Brightcove, Dailymotion ───────────────
+    # ── iframe embeds: YouTube, Vimeo, Brightcove, Dailymotion, Kaltura, Wistia ─
     for m in re.finditer(
         r'<iframe\b[^>]+?src=["\']'
         r'((?:https?:)?//(?:www\.)?'
         r'(?:youtube\.com/embed/|youtu\.be/|player\.vimeo\.com/video/'
         r'|vimeo\.com/\d|players\.brightcove\.net/'
-        r'|dai\.ly/|dailymotion\.com/embed/video/)[^"\']{4,})["\']',
+        r'|dai\.ly/|dailymotion\.com/embed/video/'
+        r'|cdnapisec\.kaltura\.com/p/'
+        r'|[a-z0-9-]+\.kaltura\.com/p/'
+        r'|fast\.wistia\.(?:net|com)/embed/'
+        r'|play\.vidyard\.com/'
+        r'|embed\.vidyard\.com/)[^"\']{4,})["\']',
         html_text, re.IGNORECASE,
     ):
         u = html_mod.unescape(m.group(1))
         if u.startswith("//"):
             u = "https:" + u
         embed_urls.append(u)
+
+    # ── Wistia async embed: <div class="wistia_embed wistia_async_{id}"> ────────
+    wistia_m = re.search(r'wistia_async_([A-Za-z0-9]{6,20})', html_text)
+    if wistia_m:
+        embed_urls.append(f"https://fast.wistia.com/medias/{wistia_m.group(1)}")
+
+    # ── VideoJS data-setup: <video data-setup='{"sources":[{"src":"URL"}]}'> ────
+    # JSON almost always uses double-quotes, so the attribute itself uses single-quotes.
+    # Two separate patterns avoid the [^"'] pitfall (which would exclude JSON double-quotes).
+    _vjs_patterns = [
+        r"""<video\b[^>]+?data-setup='(\{[^']{0,2000}\})'""",   # single-quoted attribute
+        r'<video\b[^>]+?data-setup="(\{[^"]{0,2000}\})"',        # double-quoted attribute
+    ]
+    import json as _json
+    for _vjs_pat in _vjs_patterns:
+        for vjs_m in re.finditer(_vjs_pat, html_text, re.IGNORECASE | re.DOTALL):
+            try:
+                vjs_cfg = _json.loads(html_mod.unescape(vjs_m.group(1)))
+                for src_obj in vjs_cfg.get("sources") or []:
+                    src = src_obj.get("src") if isinstance(src_obj, dict) else None
+                    if src and src.startswith("http"):
+                        embed_urls.append(src)
+            except Exception:
+                pass
+
+    # ── Kaltura entry from page JS (kWidget.embed / flashvars) ──────────────────
+    kw_partner = re.search(r'kWidget\.embed\s*\([^)]{0,800}?wid\s*[=:]\s*["\']_?(\d{4,})["\']', html_text)
+    kw_entry   = re.search(r'kWidget\.embed\s*[^)]{0,800}?entry_?[Ii]d\s*[=:]\s*["\']([0-9_a-zA-Z-]{4,})["\']', html_text)
+    if not (kw_partner and kw_entry):
+        kw_partner = re.search(r'["\']?partner_?id["\']?\s*[=:]\s*["\']?(\d{4,})["\']?', html_text)
+        kw_entry   = re.search(r'["\']?entry_?id["\']?\s*[=:]\s*["\']([0-9_a-zA-Z-]{4,})["\']', html_text)
+    if kw_partner and kw_entry:
+        pid = kw_partner.group(1)
+        eid = kw_entry.group(1)
+        embed_urls.append(
+            f"https://cdnapisec.kaltura.com/p/{pid}/sp/{pid}00/"
+            f"embedIframeJs/uiconf_id/0/partner_id/{pid}?iframeembed=true&entry_id={eid}"
+        )
 
     if not embed_urls:
         return _result(name, False, reason="no embedded player signatures found in page HTML")
