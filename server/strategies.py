@@ -472,7 +472,7 @@ def _strategy_html_scan_combined(
         path_stem = _re.sub(r'\.\w{2,5}$', '', path_stem)
         return p.netloc + path_stem
 
-    for mode in ("hls", "dash", "og", "generic", "og_image"):
+    for mode in ("hls", "dash", "og", "generic"):
         urls = _scan_media_urls(html_text, mode)
         if not urls:
             continue
@@ -499,6 +499,55 @@ def _strategy_html_scan_combined(
         return _result(name, True, media=info)
 
     return _result(name, False, reason="no media found in page HTML (hls/dash/og/generic modes)")
+
+
+def _strategy_og_image_fallback(
+    page_url: str,
+    http_headers: dict[str, str],
+    cookies: str | None,
+    _html_cache: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Last-resort image extraction via og:image / twitter:image meta tags.
+
+    Runs after embed detection so that pages with video embeds (Brightcove,
+    JW Player, etc.) are handled by those strategies first; we only fall
+    through here when everything else — including the embed detector — has
+    returned no media.
+    """
+    import html as html_mod
+
+    name = "og:image fallback"
+    html_text = (_html_cache or {}).get(page_url, "")
+
+    if not html_text:
+        # Re-fetch only when the HTML was not cached from the prior scan step.
+        req_headers = safe_headers({
+            "User-Agent": http_headers.get("User-Agent") or MOBILE_UA,
+            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+            **({"Cookie": cookies} if cookies else {}),
+        })
+        body, status = fetch_with_retry(page_url, req_headers, timeout=15, max_retries=1)
+        if not body:
+            return _result(name, False, reason=f"fetch failed (HTTP {status})")
+        html_text = body.decode("utf-8", errors="replace")
+
+    urls = _scan_media_urls(html_text, "og_image")
+    if not urls:
+        return _result(name, False, reason="no og:image / twitter:image meta tags found")
+
+    media_url = urllib.parse.urljoin(page_url, html_mod.unescape(urls[0]))
+    title = _html_title(html_text)
+    ext = guess_ext_from_url(media_url) or "jpg"
+    info: dict[str, Any] = {
+        "url": media_url,
+        "ext": ext,
+        "title": title,
+        "id": cache_key(media_url),
+        "protocol": "https",
+        "http_headers": safe_headers({"Referer": page_url}),
+    }
+    print(f"[og-image] {media_url[:80]}")
+    return _result(name, True, media=info)
 
 
 def _strategy_ytdl_stream_url(
@@ -830,7 +879,10 @@ def _strategy_page_embeds(
         r'|cloudflarestream\.com/[a-f0-9]+/iframe'
         r'|iframe\.bunny\.net/embed/'
         r'|videopress\.com/(?:v|embed)/'
-        r'|wordpress\.com/v/)[^"\']{4,})["\']',
+        r'|wordpress\.com/v/'
+        r'|(?:www\.)?loom\.com/embed/'
+        r'|open\.spotify\.com/embed/(?:episode|track|show|playlist)/'
+        r'|player\.vdocipher\.com/v2/)[^"\']{4,})["\']',
         html_text, re.IGNORECASE,
     ):
         u = html_mod.unescape(m.group(1))
@@ -1311,6 +1363,7 @@ def run_extraction(
             # subsequent embed-detector strategy reuses it without a second HTTP request.
             ("HTML media scanner",       lambda: _strategy_html_scan_combined(page_url, http_headers, cookies, _html_cache)),
             ("embedded player detector", lambda: _strategy_page_embeds(page_url, http_headers, cookies, ydl_opts, _html_cache)),
+            ("og:image fallback",        lambda: _strategy_og_image_fallback(page_url, http_headers, cookies, _html_cache)),
             ("generic yt-dlp extractor", lambda: _strategy_ydl(page_url, ydl_opts, True)),
             *(
                 []
