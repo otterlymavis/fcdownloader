@@ -1,4 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import { File } from 'expo-file-system';
+import { fetch as expoFetch } from 'expo/fetch';
 import { extractSessionCookies } from './cookieManager';
 import { DetectedMedia } from '../types';
 import { DownloadOptions } from './hlsDownloader';
@@ -101,43 +103,41 @@ export async function downloadDirect(
   onStatus?.('downloading');
   onProgress?.(0, 1);
 
-  let aborted = false;
-  const resumable = FileSystem.createDownloadResumable(
-    media.url,
-    filePath,
-    { headers },
-    ({ totalBytesWritten, totalBytesExpectedToWrite }) => {
-      if (totalBytesExpectedToWrite > 0) {
-        onProgress?.(totalBytesWritten, totalBytesExpectedToWrite);
-      }
-    },
-  );
-
-  signal?.addEventListener('abort', () => {
-    aborted = true;
-    resumable.pauseAsync().catch(() => {});
-  });
-
-  const result = await resumable.downloadAsync();
-
-  if (aborted || signal?.aborted) throw new Error('Cancelled');
-  if (!result || result.status < 200 || result.status >= 300) {
-    throw new Error(`HTTP ${result?.status ?? 'unknown'} — server rejected the request`);
+  const res = await expoFetch(media.url, { headers, signal });
+  if (signal?.aborted) throw new Error('Cancelled');
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} — server rejected the request`);
   }
+  if (!res.body) throw new Error('Download returned an empty body');
 
-  // Reject HTML error pages returned with 200 OK (CDN redirect chains to /404, /error, etc.)
-  const ct = (
-    (result.headers as Record<string, string> | undefined)?.['Content-Type'] ??
-    (result.headers as Record<string, string> | undefined)?.['content-type'] ?? ''
-  ).toLowerCase();
+  const ct = (res.headers.get('content-type') ?? '').toLowerCase();
   if (!contentTypeLooksLikeMedia(ct, media)) {
     throw new Error('Server returned a page or non-media response instead of downloadable media');
   }
 
-  const info = await FileSystem.getInfoAsync(filePath);
-  if (!info.exists || (info.size ?? 0) === 0) {
-    throw new Error('Downloaded file is empty — the URL may require a login or has expired');
+  const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
+  onProgress?.(0, contentLength || 1);
+
+  const file = new File(filePath);
+  file.create({ intermediates: true, overwrite: true });
+  const handle = file.open();
+
+  try {
+    const reader = res.body.getReader();
+    let written = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (signal?.aborted) throw new Error('Cancelled');
+      handle.writeBytes(value);
+      written += value.byteLength;
+      onProgress?.(written, contentLength || Math.max(written, 1));
+    }
+  } finally {
+    handle.close();
   }
+
+  if (file.size === 0) throw new Error('Downloaded file is empty — the URL may require a login or has expired');
 
   onProgress?.(1, 1);
   onStatus?.('assembling');

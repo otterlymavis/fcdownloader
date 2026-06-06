@@ -1,6 +1,25 @@
-import CookieManager from '@react-native-cookies/cookies';
+import { Platform } from 'react-native';
 
-function cookieHeaderFromMap(cookies: Record<string, { name: string; value: string }>): string {
+type NativeCookie = {
+  name: string;
+  value: string;
+  domain?: string;
+};
+
+type NativeCookieManager = {
+  get: (url: string, useWebKit?: boolean) => Promise<Record<string, NativeCookie>>;
+  getAll: (useWebKit?: boolean) => Promise<Record<string, NativeCookie>>;
+};
+
+declare const require: (moduleName: string) => { default?: NativeCookieManager } & NativeCookieManager;
+
+function getCookieManager(): NativeCookieManager | null {
+  if (Platform.OS === 'web') return null;
+  const mod = require('@react-native-cookies/cookies');
+  return mod.default ?? mod;
+}
+
+function cookieHeaderFromMap(cookies: Record<string, NativeCookie>): string {
   return Object.values(cookies)
     .filter((c) => c.name && c.value)
     .map((c) => `${c.name}=${c.value}`)
@@ -8,6 +27,9 @@ function cookieHeaderFromMap(cookies: Record<string, { name: string; value: stri
 }
 
 async function mergedCookieHeader(urls: string[], domains: string[] = []): Promise<string> {
+  const CookieManager = getCookieManager();
+  if (!CookieManager) return '';
+
   const byName = new Map<string, string>();
   for (const url of urls) {
     try {
@@ -35,6 +57,9 @@ async function mergedCookieHeader(urls: string[], domains: string[] = []): Promi
  * domain filtering if the URL-specific call fails.
  */
 export async function extractSessionCookies(url: string): Promise<string> {
+  const CookieManager = getCookieManager();
+  if (!CookieManager) return '';
+
   if (/(?:youtube\.com|youtu\.be|googlevideo\.com)/i.test(url)) {
     const header = await mergedCookieHeader(
       ['https://www.youtube.com/', 'https://youtube.com/'],

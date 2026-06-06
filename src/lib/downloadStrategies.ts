@@ -1,16 +1,19 @@
 import { DetectedMedia, DownloadStrategy } from '../types';
+import { Platform } from 'react-native';
 import { downloadHLS, DRMProtectedError, DownloadOptions } from './hlsDownloader';
 import { downloadDirect } from './directDownloader';
 import { downloadVimeoJson } from './vimeoJsonDownloader';
 import { downloadDASH } from './dashDownloader';
 import { downloadYouTube } from './youtubeDownloader';
 import { downloadViaServer } from './serverDownloader';
+import { getServerExtractorUrl } from './serverExtractor';
 import { getSiteCapabilities } from './siteRegistry';
 
 export { DRMProtectedError };
 
 const VIMEO_PLAYLIST_JSON = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i;
 const DASH_MIME = /application\/(dash|x-mpegdash)\+xml/i;
+const DIRECT_MEDIA_RE = /\.(?:mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)|googlevideo\.com\/videoplayback/i;
 
 /**
  * Determine download strategy purely by manifest type, not by platform.
@@ -21,6 +24,7 @@ const YT_PAGE_RE = /(?:youtube\.com\/(?:watch|shorts|embed)|youtu\.be\/)/i;
 export function pickStrategy(media: DetectedMedia): DownloadStrategy {
   const url  = media.url;
   const mime = media.mimeType ?? '';
+  const pageUrl = media.pageUrl ?? '';
 
   if (media.audioOnly) return 'server-download';
   if (media.forceServerDownload) return 'server-download';
@@ -44,7 +48,7 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
     media.hasVideo === true;
   const hasServerHeaders =
     !!media.httpHeaders && Object.keys(media.httpHeaders).length > 0;
-  const caps = getSiteCapabilities(media.pageUrl);
+  const caps = getSiteCapabilities(pageUrl);
   if (
     isVideo &&
     hasServerHeaders &&
@@ -57,7 +61,10 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
 
   // YouTube: on Android use yt-dlp binary; on iOS re-extract fresh signed URLs.
   // Both paths avoid the 403 caused by missing nsig transform on browse-tab-detected URLs.
-  if (YT_PAGE_RE.test(media.pageUrl)) return 'yt-dlp';
+  if (pageUrl.includes('tv.naver.com')) {
+    return 'server-download';
+  }
+  if (YT_PAGE_RE.test(pageUrl)) return 'yt-dlp';
 
   // Paired tracks delivered as HLS playlists (e.g. Twitter/X's
   // video.twimg.com/.../pl/ renditions) can't be muxed by the on-device DASH
@@ -108,6 +115,8 @@ export async function runDownload(
   strategy: DownloadStrategy,
   opts: DownloadOptions = {},
 ): Promise<string> {
+  if (Platform.OS === 'web') return downloadInBrowser(media, strategy, opts);
+
   try {
     switch (strategy) {
       case 'yt-dlp':       return downloadYouTube(media, taskId, opts);
@@ -129,4 +138,46 @@ export async function runDownload(
     }
     throw err;
   }
+}
+
+async function downloadInBrowser(
+  media: DetectedMedia,
+  strategy: DownloadStrategy,
+  opts: DownloadOptions = {},
+): Promise<string> {
+  opts.onStatus?.('fetching_manifest');
+
+  let href = media.url;
+  const base = await getServerExtractorUrl();
+  const pageUrl = media.sourcePageUrl || media.pageUrl;
+  const shouldUseBackend =
+    Boolean(base && pageUrl) &&
+    (
+      strategy !== 'direct' ||
+      media.provenance === 'social-extractor' ||
+      Boolean(media.httpHeaders && Object.keys(media.httpHeaders).length) ||
+      !DIRECT_MEDIA_RE.test(media.url)
+    );
+
+  if (base && shouldUseBackend) {
+    const params = new URLSearchParams({ url: pageUrl });
+    href = `${base}/download?${params.toString()}`;
+  }
+
+  opts.onStatus?.('downloading');
+  opts.onProgress?.(1, 1);
+
+  const doc = globalThis.document;
+  if (!doc) throw new Error('Browser downloads are not available in this environment');
+
+  const a = doc.createElement('a');
+  a.href = href;
+  a.rel = 'noopener';
+  a.download = '';
+  doc.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  opts.onStatus?.('assembling');
+  return href;
 }

@@ -11,7 +11,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   version: '1.5.20',
   orientation: 'default',
   userInterfaceStyle: 'automatic', // dark mode support
-  platforms: ['ios', 'android'],
+  platforms: ['ios', 'android', 'web'],
   scheme: 'fcdownloader',
   icon: './assets/icon.png',
   splash: {
@@ -62,6 +62,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
   },
   plugins: [
+    'expo-font',
     'expo-sharing',
     'expo-video',
     [

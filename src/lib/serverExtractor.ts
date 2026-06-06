@@ -32,12 +32,14 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 import { DetectedMedia, FormatOption, SourceAuditEntry } from '../types';
 import { extractSessionCookies } from './cookieManager';
 import { debugLog, debugWarn } from './releaseLogger';
 
 const STORAGE_KEY = '@fcdownloader/server_extractor_url';
 const TOKEN_STORAGE_KEY = '@fcdownloader/server_extractor_token';
+const WEB_DEFAULT_EXTRACTOR_URL = 'https://fcdownloader-extractor.fly.dev';
 // YouTube via ytdl-stream: server runs 1–2 yt-dlp calls (extract + metadata)
 // before returning. Each call takes 5–15 s from a datacenter IP. Allow 45 s.
 const REQUEST_TIMEOUT_MS = 45_000;
@@ -49,8 +51,15 @@ const _extra = (Constants.expoConfig?.extra ?? {}) as {
   bundledExtractorUrl?: string;
   bundledExtractorToken?: string;
 };
-const BUNDLED_URL   = (_extra.bundledExtractorUrl   ?? '').trim();
-const BUNDLED_TOKEN = (_extra.bundledExtractorToken ?? '').trim();
+const BUNDLED_URL = (
+  (_extra.bundledExtractorUrl ?? '') ||
+  (process.env.EXPO_PUBLIC_EXTRACTOR_URL ?? '') ||
+  (Platform.OS === 'web' ? WEB_DEFAULT_EXTRACTOR_URL : '')
+).trim();
+const BUNDLED_TOKEN = (
+  (_extra.bundledExtractorToken ?? '') ||
+  (process.env.EXPO_PUBLIC_EXTRACTOR_TOKEN ?? '')
+).trim();
 const SERVER_CONFIDENCE = 0.97;
 
 // Synced from useSettings on load and on every toggle change.

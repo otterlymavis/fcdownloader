@@ -206,28 +206,93 @@ export default function App() {
     homepageSet.current = true;
   }, [bookmarks]);
 
-  const handleIncomingUrl = useCallback((raw: string) => {
-    try {
-      const parsed = Linking.parse(raw);
-      if (parsed.path === 'share' || parsed.hostname === 'share') {
-        const mediaUrl = parsed.queryParams?.url ? String(parsed.queryParams.url) : null;
-        if (mediaUrl) { setPasteUrl(mediaUrl); setTab('home'); showToast(translate('linkReceived', resolvedLangRef.current), 'success'); }
-      }
-    } catch {}
-  }, [showToast]);
-
-  useEffect(() => {
-    Linking.getInitialURL().then((url) => { if (url) handleIncomingUrl(url); });
-    const sub = Linking.addEventListener('url', ({ url }) => handleIncomingUrl(url));
-    return () => sub.remove();
-  }, [handleIncomingUrl]);
-
   // ── Download manager ──────────────────────────────────────
   const { active, history, enqueue, retry, cancel, remove } = useDownloadManager({
     onComplete: useCallback(() => showToast(translate('downloadComplete', resolvedLangRef.current), 'success'), [showToast]),
     onError:    useCallback((task: DownloadTask) =>
       showToast(translate('failedError', resolvedLangRef.current, { error: task.error ?? 'unknown error' }), 'error'), [showToast]),
   });
+
+  const [extractionQueue, setExtractionQueue] = useState<string[]>([]);
+
+  const runExtractionAndDownload = useCallback(async (url: string) => {
+    let targetUrl = url.trim();
+    if (!targetUrl) return;
+    if (!targetUrl.startsWith('http')) targetUrl = `https://${targetUrl}`;
+
+    if (isDirectMediaUrl(targetUrl)) {
+      const item: DetectedMedia = {
+        id: `home_${Date.now()}`, url: targetUrl, pageUrl: targetUrl, userAgent: '',
+        timestamp: Date.now(),
+        mediaType: guessMediaType(targetUrl),
+        mediaKind: getMediaKind({ url: targetUrl }),
+        confidence: 0.75, provenance: 'manual',
+      };
+      await enqueue(item);
+      setPasteUrl('');
+      showToast(translate('downloadStarted', resolvedLangRef.current), 'success');
+      setTab('library');
+      return;
+    }
+
+    setExtracting(true);
+    try {
+      const items = await extractionManager.extractMedia(targetUrl);
+      if (items.length > 0) {
+        for (const item of items) await enqueue(item);
+        setPasteUrl('');
+        showToast(
+          items.length === 1
+            ? translate('startedDownload', resolvedLangRef.current)
+            : translate('startedDownloads', resolvedLangRef.current, { count: items.length }),
+          'success'
+        );
+        setTab('library');
+        return;
+      }
+      showToast(translate('openingInBrowserScan', resolvedLangRef.current), 'info');
+    } catch {
+      showToast(translate('openingInBrowser', resolvedLangRef.current), 'info');
+    } finally {
+      setExtracting(false);
+    }
+    setLoadedUrl(targetUrl); setBrowserInput(targetUrl); setTab('browser');
+  }, [enqueue, showToast, setPasteUrl, setTab, setLoadedUrl, setBrowserInput]);
+
+  useEffect(() => {
+    if (extracting || extractionQueue.length === 0) return;
+    const nextUrl = extractionQueue[0];
+    setExtractionQueue((prev) => prev.slice(1));
+    runExtractionAndDownload(nextUrl);
+  }, [extracting, extractionQueue, runExtractionAndDownload]);
+
+  // ── Start download and extraction ───────────────────────
+  const startDownloadAndExtraction = useCallback((url: string) => {
+    const targetUrl = url.trim();
+    if (!targetUrl) return;
+    setExtractionQueue((prev) => [...prev, targetUrl]);
+  }, []);
+
+  const handleIncomingUrl = useCallback((raw: string) => {
+    try {
+      const parsed = Linking.parse(raw);
+      if (parsed.path === 'share' || parsed.hostname === 'share') {
+        const mediaUrl = parsed.queryParams?.url ? String(parsed.queryParams.url) : null;
+        if (mediaUrl) {
+          setPasteUrl(mediaUrl);
+          setTab('home');
+          showToast(translate('linkReceived', resolvedLangRef.current), 'success');
+          startDownloadAndExtraction(mediaUrl);
+        }
+      }
+    } catch {}
+  }, [showToast, startDownloadAndExtraction, setPasteUrl, setTab]);
+
+  useEffect(() => {
+    Linking.getInitialURL().then((url) => { if (url) handleIncomingUrl(url); });
+    const sub = Linking.addEventListener('url', ({ url }) => handleIncomingUrl(url));
+    return () => sub.remove();
+  }, [handleIncomingUrl]);
 
   // ── Detected videos ───────────────────────────────────────
   const allVideos = useMemo<DetectedMedia[]>(() => {
@@ -371,49 +436,9 @@ export default function App() {
   }, [extractBrowserPage]);
 
   // ── Home: paste → download ────────────────────────────────
-  const handleHomeDownload = useCallback(async () => {
-    let url = pasteUrl.trim();
-    if (!url || extracting) return;
-    if (!url.startsWith('http')) url = `https://${url}`;
-
-    if (isDirectMediaUrl(url)) {
-      const item: DetectedMedia = {
-        id: `home_${Date.now()}`, url, pageUrl: url, userAgent: '',
-        timestamp: Date.now(),
-        mediaType: guessMediaType(url),
-        mediaKind: getMediaKind({ url }),
-        confidence: 0.75, provenance: 'manual',
-      };
-      await enqueue(item);
-      setPasteUrl('');
-      showToast(translate('downloadStarted', resolvedLangRef.current), 'success');
-      setTab('library');
-      return;
-    }
-
-    setExtracting(true);
-    try {
-      const items = await extractionManager.extractMedia(url);
-      if (items.length > 0) {
-        for (const item of items) await enqueue(item);
-        setPasteUrl('');
-        showToast(
-          items.length === 1
-            ? translate('startedDownload', resolvedLangRef.current)
-            : translate('startedDownloads', resolvedLangRef.current, { count: items.length }),
-          'success'
-        );
-        setTab('library');
-        return;
-      }
-      showToast(translate('openingInBrowserScan', resolvedLangRef.current), 'info');
-    } catch {
-      showToast(translate('openingInBrowser', resolvedLangRef.current), 'info');
-    } finally {
-      setExtracting(false);
-    }
-    setLoadedUrl(url); setBrowserInput(url); setTab('browser');
-  }, [pasteUrl, extracting, enqueue, showToast]);
+  const handleHomeDownload = useCallback(() => {
+    startDownloadAndExtraction(pasteUrl);
+  }, [pasteUrl, startDownloadAndExtraction]);
 
   // ── Browser: download detected video ─────────────────────
   const handleDetectedDownload = useCallback(async (item: DetectedMedia) => {
