@@ -923,11 +923,23 @@ export function isSocialPageUrl(url: string): boolean {
  * Every extractor failure is non-fatal; unsupported is only reported by the
  * caller after this full chain returns no media.
  */
+const _SHORT_URL_RE = /^https?:\/\/(?:t\.co|bit\.ly|tinyurl\.com|ow\.ly|buff\.ly|dlvr\.it|fb\.me|goo\.gl|j\.mp|ln\.is|ift\.tt|wp\.me|naver\.me|amzn\.to)\//i;
+
+async function resolveShortUrl(url: string): Promise<string> {
+  if (!_SHORT_URL_RE.test(url)) return url;
+  try {
+    const res = await fetch(url, { method: 'HEAD', redirect: 'follow' });
+    if (res.url && res.url !== url) return res.url;
+  } catch {}
+  return url;
+}
+
 export async function extractFromSocialUrl(pageUrl: string): Promise<DetectedMedia[]> {
   if (!/^https?:\/\//i.test(pageUrl)) {
     debugWarn('[extract] invalid URL or unsupported protocol:', pageUrl);
     return [];
   }
+  pageUrl = await resolveShortUrl(pageUrl);
   const platform = PLATFORMS.find(p => p.re.test(pageUrl));
   const japaneseUrl = isJapaneseDomain(pageUrl);
   // For sites the server can't extract without a session (Xiaohongshu), run the
