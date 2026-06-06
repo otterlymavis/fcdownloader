@@ -808,19 +808,20 @@ def _strategy_page_embeds(
 
     name = "embedded player detector"
 
+    req_headers = safe_headers({
+        "User-Agent": http_headers.get("User-Agent") or MOBILE_UA,
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Language": (
+            http_headers.get("Accept-Language")
+            or languages.accept_language_for_url(page_url, "en-US,en;q=0.9")
+        ),
+        **({"Referer": http_headers["Referer"]} if http_headers.get("Referer") else {}),
+        **({"Cookie": cookies} if cookies else {}),
+    })
+
     if _html_cache is not None and page_url in _html_cache:
         html_text = _html_cache[page_url]
     else:
-        req_headers = safe_headers({
-            "User-Agent": http_headers.get("User-Agent") or MOBILE_UA,
-            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-            "Accept-Language": (
-                http_headers.get("Accept-Language")
-                or languages.accept_language_for_url(page_url, "en-US,en;q=0.9")
-            ),
-            **({"Referer": http_headers["Referer"]} if http_headers.get("Referer") else {}),
-            **({"Cookie": cookies} if cookies else {}),
-        })
         try:
             req = urllib.request.Request(page_url, headers=req_headers)
             with urllib.request.urlopen(req, timeout=20) as resp:
