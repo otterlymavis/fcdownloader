@@ -21,6 +21,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Iterator
@@ -574,6 +575,573 @@ def extract_modelpress(page_url: str, cookies: str | None) -> dict[str, Any] | N
         "id": cache_key(page_url),
         "extractor": "modelpress",
     }
+
+# ── Trilltrill ────────────────────────────────────────────────────────────────
+
+
+def extract_trilltrill(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """Extract article photos from trilltrill.jp.
+
+    Photo pages embed a page_view_content JS object with article_photo_link.
+    Gallery: probe /photos/2, /photos/3, ... until 404.
+    """
+    page_url = normalize_url(page_url)
+
+    m = re.search(r"/articles/(\d+)(?:/photos/(\d+))?", page_url)
+    if not m:
+        return None
+    article_id = m.group(1)
+    start_photo = int(m.group(2)) if m.group(2) else 1
+
+    def _fetch(url: str) -> tuple[str | None, int]:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers=safe_headers({
+                    "User-Agent": _WEIBO_DESKTOP_UA,
+                    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                    "Accept-Language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+                    "Referer": "https://trilltrill.jp/",
+                    **({"Cookie": cookies} if cookies else {}),
+                }),
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = resp.read()
+                if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+                    import gzip
+                    body = gzip.decompress(body)
+                return _decode_html_body(body, resp.headers), 200
+        except urllib.error.HTTPError as exc:
+            return None, exc.code
+        except Exception as exc:  # noqa: BLE001
+            print(f"[trilltrill] fetch failed for {url}: {str(exc)[:200]}")
+            return None, 0
+
+    def _photo_link(html_text: str) -> str | None:
+        m2 = re.search(r"page_view_content\s*=\s*(\{[^;]+\})", html_text)
+        if not m2:
+            return None
+        try:
+            data = json.loads(m2.group(1))
+            link = data.get("article_photo_link") or ""
+        except (json.JSONDecodeError, AttributeError):
+            lm = re.search(r'"article_photo_link"\s*:\s*"([^"]+)"', m2.group(1))
+            link = lm.group(1) if lm else ""
+        if not link:
+            return None
+        # Ensure original quality
+        if "?" not in link:
+            link += "?s=origin"
+        elif "s=" not in link:
+            link += "&s=origin"
+        return link
+
+    def _title(html_text: str) -> str | None:
+        m2 = re.search(r"page_view_content\s*=\s*(\{[^;]+\})", html_text)
+        if m2:
+            try:
+                return json.loads(m2.group(1)).get("title")
+            except Exception:
+                pass
+        tm = re.search(
+            r'<meta\s[^>]*?(?:property|name)\s*=\s*["\']og:title["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']',
+            html_text, re.IGNORECASE | re.DOTALL,
+        )
+        return tm.group(1).strip() if tm else None
+
+    first_html, status = _fetch(f"https://trilltrill.jp/articles/{article_id}/photos/{start_photo}")
+    if not first_html or status == 404:
+        return None
+
+    article_title = _title(first_html)
+    found: list[str] = []
+    first_link = _photo_link(first_html)
+    if first_link:
+        found.append(first_link)
+
+    photo_idx = start_photo + 1
+    consecutive_fails = 0
+    while photo_idx <= start_photo + 99 and consecutive_fails < 2:
+        html_text, status = _fetch(f"https://trilltrill.jp/articles/{article_id}/photos/{photo_idx}")
+        if status == 404 or not html_text:
+            consecutive_fails += 1
+            photo_idx += 1
+            continue
+        consecutive_fails = 0
+        link = _photo_link(html_text)
+        if link and link not in found:
+            found.append(link)
+        photo_idx += 1
+
+    if not found:
+        return None
+
+    headers = {"User-Agent": _WEIBO_DESKTOP_UA, "Referer": "https://trilltrill.jp/"}
+    entries = []
+    for idx, url in enumerate(found):
+        ext = guess_ext_from_url(url) or "jpg"
+        entries.append({
+            "id": cache_key(url),
+            "url": url,
+            "ext": ext,
+            "protocol": "https",
+            "http_headers": headers,
+            "title": f"{article_title or 'TRILL'} #{idx + 1}" if len(found) > 1 else (article_title or "TRILL"),
+            "thumbnail": url,
+            "extractor": "trilltrill",
+        })
+
+    print(f"[trilltrill] gallery: {len(entries)} image(s)")
+    if len(entries) == 1:
+        return {**entries[0], "title": article_title or "TRILL"}
+    return {
+        "_type": "playlist",
+        "entries": entries,
+        "title": article_title or "TRILL",
+        "thumbnail": found[0],
+        "id": cache_key(page_url),
+        "extractor": "trilltrill",
+    }
+
+
+# ── Generic article photo gallery ─────────────────────────────────────────────
+
+
+def extract_article_photo_gallery(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """Universal extractor for article photo gallery pages.
+
+    Handles sites that use /photos/N, /photo/N, /gallery/N, /image/N,
+    /images/N, /pic/N, /picture/N URL patterns.  Finds the image on each page
+    via JS data blobs (__NEXT_DATA__, __NUXT__, page_view_content, etc.),
+    JSON-LD, og:image, and article-area <img> tags, then probes N+1, N+2, …
+    until 404 to collect the full gallery.
+
+    Only activates when the URL clearly contains one of the above numbered
+    path segments so it never fires on unrelated pages.
+    """
+    page_url = normalize_url(page_url)
+
+    # Covers /photos/1, /photo/1, /gallery/1, /images/1, /image/1,
+    # /pictures/1, /picture/1, /pics/1, /pic/1
+    m = re.search(
+        r"(/(?:photos?|gallery|images?|pic(?:tures?)?)/)(\d+)(?:[/?#]|$)",
+        page_url,
+    )
+    if not m:
+        return None
+    photo_prefix = m.group(1)      # e.g. "/photos/"
+    start_idx    = int(m.group(2))
+    base_url     = page_url[: m.start()]
+
+    parsed_host = urllib.parse.urlsplit(page_url).netloc
+    origin = urllib.parse.urlsplit(page_url).scheme + "://" + parsed_host + "/"
+
+    _SKIP_TOKENS = (
+        "sprite", "logo", "icon", "avatar", "emoji", "header", "footer",
+        "placeholder", "blank", "btn_", "favicon", "background",
+        "pattern", "sharebutton", "/static/", "/assets/", "/css/",
+    )
+    _MEDIA_CDN_RE = re.compile(
+        r"^https?://(?:media|img|cdn|images?|photo|photos?|upload|uploads|content)\.",
+        re.IGNORECASE,
+    )
+
+    def _ok(url: str) -> bool:
+        lowered = url.lower()
+        return not any(t in lowered for t in _SKIP_TOKENS)
+
+    def _fetch_html(url: str) -> tuple[str | None, int]:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers=safe_headers({
+                    "User-Agent": _WEIBO_DESKTOP_UA,
+                    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                    "Accept-Language": languages.accept_language_for_url(
+                        url, "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5"
+                    ),
+                    "Referer": origin,
+                    **({"Cookie": cookies} if cookies else {}),
+                }),
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = resp.read()
+                if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+                    import gzip
+                    body = gzip.decompress(body)
+                return _decode_html_body(body, resp.headers), 200
+        except urllib.error.HTTPError as exc:
+            return None, exc.code
+        except Exception as exc:  # noqa: BLE001
+            print(f"[article-photo-gallery] fetch failed for {url}: {str(exc)[:200]}")
+            return None, 0
+
+    def _best_image(html_text: str) -> str | None:
+        # 1. Named JS keys: *_photo, *_image, *_picture, *_img, *_link
+        for script_m in re.finditer(
+            r"<script[^>]*>(.*?)</script>", html_text, re.DOTALL | re.IGNORECASE
+        ):
+            script = script_m.group(1)
+            if not re.search(r"photo|image|picture", script, re.IGNORECASE):
+                continue
+            for key_m in re.finditer(
+                r'"(?:[a-z_]*(?:photo|image|picture|img|link)[a-z_]*)"\s*:\s*"(https?://[^"]{10,})"',
+                script, re.IGNORECASE,
+            ):
+                url = html.unescape(key_m.group(1).replace("\\/", "/"))
+                if _ok(url):
+                    return url
+
+        # 1b. Large hydration blobs: __NEXT_DATA__, __NUXT__, __INITIAL_STATE__,
+        #     __DATA__, gon.* — scan for "url"/"src"/"image_url"/"cover" etc.
+        #     pointing at media CDN or article content paths
+        for blob_pat in (
+            r"(?:window\.)?__NEXT_DATA__\s*=\s*(\{)",
+            r"(?:window\.)?__NUXT__\s*[=:]\s*(\{)",
+            r"(?:window\.)?__INITIAL_STATE__\s*=\s*(\{)",
+            r"(?:window\.)?__DATA__\s*=\s*(\{)",
+            r"gon\.[a-z_]+\s*=\s*(\{)",
+        ):
+            blob_m = re.search(blob_pat, html_text)
+            if not blob_m:
+                continue
+            blob_text = html_text[blob_m.start(1): blob_m.start(1) + 300_000]
+            for url_m in re.finditer(
+                r'"(?:url|src|image_url|photo_url|src_url|cover_url|cover|thumbnail_url)"\s*:\s*"(https?://[^"]{10,})"',
+                blob_text, re.IGNORECASE,
+            ):
+                url = html.unescape(url_m.group(1).replace("\\/", "/"))
+                if _ok(url) and (
+                    _MEDIA_CDN_RE.match(url)
+                    or re.search(r"/(?:articles?|posts?|uploads?|media|content)/\d", url, re.I)
+                ):
+                    return url
+
+        # 2. All JSON-LD blocks
+        for ld_m in re.finditer(
+            r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+            html_text, re.DOTALL | re.IGNORECASE,
+        ):
+            try:
+                data = json.loads(ld_m.group(1))
+                if not isinstance(data, dict):
+                    continue
+                for field in ("image", "thumbnailUrl", "thumbnail"):
+                    img = data.get(field)
+                    if isinstance(img, list):
+                        img = img[0]
+                    if isinstance(img, dict):
+                        img = img.get("url") or img.get("contentUrl")
+                    if isinstance(img, str) and img.startswith("http") and _ok(img):
+                        return img
+            except Exception:
+                pass
+
+        # 3. og:image — both attribute orderings; filter out site-chrome images
+        for pat in (
+            r'<meta\s[^>]*?(?:property|name)\s*=\s*["\']og:image["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']',
+            r'<meta\s[^>]*?content\s*=\s*["\']([^"\']+)["\'][^>]*?(?:property|name)\s*=\s*["\']og:image["\']',
+        ):
+            og_m = re.search(pat, html_text, re.IGNORECASE | re.DOTALL)
+            if og_m:
+                candidate = html.unescape(og_m.group(1)).strip()
+                if (candidate.startswith("http")
+                        and _ok(candidate)
+                        and "/assets/" not in candidate.lower()):
+                    return candidate
+
+        # 4. Article-area <img> tags
+        for container_pat in (
+            r"<article[^>]*>(.*?)</article>",
+            r"<figure[^>]*>(.*?)</figure>",
+            r"<main[^>]*>(.*?)</main>",
+        ):
+            for area_m in re.finditer(container_pat, html_text, re.DOTALL | re.IGNORECASE):
+                for img_m in re.finditer(
+                    r'<img[^>]+(?:src|data-src|data-original|data-lazy-src)\s*=\s*["\']([^"\']+)["\']',
+                    area_m.group(1), re.IGNORECASE,
+                ):
+                    url = html.unescape(img_m.group(1).replace("\\/", "/"))
+                    if url.startswith("http") and _ok(url):
+                        return url
+
+        return None
+
+    def _page_title(html_text: str) -> str | None:
+        for pat in (
+            r'<meta\s[^>]*?(?:property|name)\s*=\s*["\']og:title["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']',
+            r'<meta\s[^>]*?content\s*=\s*["\']([^"\']+)["\'][^>]*?(?:property|name)\s*=\s*["\']og:title["\']',
+        ):
+            tm = re.search(pat, html_text, re.IGNORECASE | re.DOTALL)
+            if tm:
+                return html.unescape(tm.group(1)).strip()
+        return None
+
+    first_html, status = _fetch_html(page_url)
+    if not first_html or status == 404:
+        return None
+
+    title = _page_title(first_html)
+    found: list[str] = []
+    first_img = _best_image(first_html)
+    if first_img:
+        found.append(first_img)
+
+    photo_idx = start_idx + 1
+    consecutive_fails = 0
+    while photo_idx <= start_idx + 99 and consecutive_fails < 2:
+        probe_url = base_url + photo_prefix + str(photo_idx)
+        html_text, status = _fetch_html(probe_url)
+        if status == 404 or not html_text:
+            consecutive_fails += 1
+            photo_idx += 1
+            continue
+        consecutive_fails = 0
+        img = _best_image(html_text)
+        if img and img not in found:
+            found.append(img)
+        photo_idx += 1
+
+    if not found:
+        return None
+
+    headers = {"User-Agent": _WEIBO_DESKTOP_UA, "Referer": origin}
+    entries = []
+    for idx, url in enumerate(found):
+        ext = guess_ext_from_url(url) or "jpg"
+        entries.append({
+            "id": cache_key(url),
+            "url": url,
+            "ext": ext,
+            "protocol": "https",
+            "http_headers": headers,
+            "title": f"{title or parsed_host} #{idx + 1}" if len(found) > 1 else (title or parsed_host),
+            "thumbnail": url,
+            "extractor": "article-photo-gallery",
+        })
+
+    print(f"[article-photo-gallery:{parsed_host}] gallery: {len(entries)} image(s)")
+    if len(entries) == 1:
+        return {**entries[0], "title": title or parsed_host}
+    return {
+        "_type": "playlist",
+        "entries": entries,
+        "title": title or parsed_host,
+        "thumbnail": found[0],
+        "id": cache_key(page_url),
+        "extractor": "article-photo-gallery",
+    }
+
+
+def extract_generic_media_images(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """Generic fallback: extract article images from any content page.
+
+    Activates for article/post/news/photo URLs that have a numeric or slug ID.
+    Finds images via JSON-LD, media CDN subdomain patterns, and article-area
+    <img> tags.  Never activates for homepages, category pages, or URLs already
+    handled by extract_article_photo_gallery.
+    """
+    page_url = normalize_url(page_url)
+    parsed = urllib.parse.urlsplit(page_url)
+    path = parsed.path
+
+    # Only activate for content pages with a recognisable article/post path
+    if not re.search(
+        r"/(?:articles?|posts?|news|stories?|entries?|photos?|gallery|"
+        r"pictures?|blog|content|media|topic|item|detail)/[a-z0-9]",
+        path, re.IGNORECASE,
+    ):
+        return None
+
+    # Skip URLs already handled by extract_article_photo_gallery
+    if re.search(
+        r"/(?:photos?|gallery|images?|pic(?:tures?)?)/\d+(?:[/?#]|$)",
+        page_url,
+    ):
+        return None
+
+    _SKIP_TOKENS = (
+        "sprite", "logo", "icon", "avatar", "emoji", "header", "footer",
+        "placeholder", "blank", "btn_", "favicon", "background",
+        "pattern", "no-image", "noimage", "default_", "loading",
+        "/common/", "/static/icons/", "/assets/", "/css/",
+    )
+    _MEDIA_CDN_RE = re.compile(
+        r"^https?://(?:media|img|cdn|images?|photo|photos?|upload|uploads|content)\.",
+        re.IGNORECASE,
+    )
+    _CONTENT_PATH_RE = re.compile(
+        r"/(?:articles?|posts?|uploads?|wp-content|media|images?|photos?)/\d",
+        re.IGNORECASE,
+    )
+
+    def _is_article_image(url: str) -> bool:
+        lowered = url.lower()
+        if any(t in lowered for t in _SKIP_TOKENS):
+            return False
+        return bool(_MEDIA_CDN_RE.match(url) or _CONTENT_PATH_RE.search(url))
+
+    host = parsed.netloc
+    origin = parsed.scheme + "://" + host + "/"
+
+    def _fetch_html(url: str) -> str | None:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers=safe_headers({
+                    "User-Agent": _WEIBO_DESKTOP_UA,
+                    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                    "Accept-Language": languages.accept_language_for_url(
+                        url, "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5"
+                    ),
+                    "Referer": origin,
+                    **({"Cookie": cookies} if cookies else {}),
+                }),
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = resp.read()
+                if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+                    import gzip
+                    body = gzip.decompress(body)
+                return _decode_html_body(body, resp.headers)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[generic-media-images] fetch failed for {url}: {str(exc)[:200]}")
+            return None
+
+    html_text = _fetch_html(page_url)
+    if not html_text:
+        return None
+
+    title: str | None = None
+    for pat in (
+        r'<meta\s[^>]*?(?:property|name)\s*=\s*["\']og:title["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']',
+        r'<meta\s[^>]*?content\s*=\s*["\']([^"\']+)["\'][^>]*?(?:property|name)\s*=\s*["\']og:title["\']',
+    ):
+        tm = re.search(pat, html_text, re.IGNORECASE | re.DOTALL)
+        if tm:
+            title = html.unescape(tm.group(1)).strip()
+            break
+
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _add(url: str) -> None:
+        url = html.unescape(url.replace("\\/", "/")).strip()
+        if not url.startswith("http") or not _is_article_image(url):
+            return
+        dedup = re.sub(r"\?.*$", "", url)
+        if dedup not in seen:
+            seen.add(dedup)
+            found.append(url)
+
+    # 1. All JSON-LD blocks — image arrays and thumbnailUrl
+    for ld_m in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html_text, re.DOTALL | re.IGNORECASE,
+    ):
+        try:
+            data = json.loads(ld_m.group(1))
+            if not isinstance(data, dict):
+                continue
+            for field in ("image", "thumbnailUrl"):
+                img = data.get(field)
+                if isinstance(img, list):
+                    for item in img:
+                        if isinstance(item, str):
+                            _add(item)
+                        elif isinstance(item, dict):
+                            _add(item.get("url") or item.get("contentUrl") or "")
+                elif isinstance(img, dict):
+                    _add(img.get("url") or img.get("contentUrl") or "")
+                elif isinstance(img, str):
+                    _add(img)
+        except Exception:
+            pass
+
+    # 2. Named JS keys with image-like names in any script block
+    for script_m in re.finditer(
+        r"<script[^>]*>(.*?)</script>", html_text, re.DOTALL | re.IGNORECASE
+    ):
+        script = script_m.group(1)
+        if not re.search(r"photo|image|picture", script, re.IGNORECASE):
+            continue
+        for key_m in re.finditer(
+            r'"(?:[a-z_]*(?:photo|image|picture|img)[a-z_]*)"\s*:\s*"(https?://[^"]{10,})"',
+            script, re.IGNORECASE,
+        ):
+            _add(html.unescape(key_m.group(1).replace("\\/", "/")))
+
+    # 3. __NEXT_DATA__ / __NUXT__ / __INITIAL_STATE__ — scan for media CDN URLs
+    for blob_pat in (
+        r"(?:window\.)?__NEXT_DATA__\s*=\s*(\{)",
+        r"(?:window\.)?__NUXT__\s*[=:]\s*(\{)",
+        r"(?:window\.)?__INITIAL_STATE__\s*=\s*(\{)",
+        r"(?:window\.)?__DATA__\s*=\s*(\{)",
+    ):
+        blob_m = re.search(blob_pat, html_text)
+        if not blob_m:
+            continue
+        blob_text = html_text[blob_m.start(1): blob_m.start(1) + 300_000]
+        for url_m in re.finditer(
+            r'"(?:url|src|image_url|photo_url|src_url|cover_url|cover|thumbnail_url)"\s*:\s*"(https?://[^"]{10,})"',
+            blob_text, re.IGNORECASE,
+        ):
+            _add(html.unescape(url_m.group(1).replace("\\/", "/")))
+
+    # 4. <article>, <figure>, <main> content-area <img> tags
+    for container_pat in (
+        r"<article[^>]*>(.*?)</article>",
+        r"<figure[^>]*>(.*?)</figure>",
+        r"<main[^>]*>(.*?)</main>",
+    ):
+        for area_m in re.finditer(container_pat, html_text, re.DOTALL | re.IGNORECASE):
+            for img_m in re.finditer(
+                r'<img[^>]+(?:src|data-src|data-original|data-lazy-src)\s*=\s*["\']([^"\']+)["\']',
+                area_m.group(1), re.IGNORECASE,
+            ):
+                url = html.unescape(img_m.group(1).replace("\\/", "/"))
+                if url.startswith("http"):
+                    _add(url)
+
+    # 5. Any remaining <img> tags from media CDN subdomains
+    for img_m in re.finditer(
+        r'<img[^>]+(?:src|data-src|data-original|data-lazy-src)\s*=\s*["\']([^"\']+)["\']',
+        html_text, re.IGNORECASE,
+    ):
+        url = html.unescape(img_m.group(1).replace("\\/", "/"))
+        if url.startswith("http"):
+            _add(url)
+
+    if not found:
+        return None
+
+    headers = {"User-Agent": _WEIBO_DESKTOP_UA, "Referer": origin}
+    entries = []
+    for idx, url in enumerate(found[:40]):
+        ext = guess_ext_from_url(url) or "jpg"
+        entries.append({
+            "id": cache_key(url),
+            "url": url,
+            "ext": ext,
+            "protocol": "https",
+            "http_headers": headers,
+            "title": f"{title or host} #{idx + 1}" if len(found) > 1 else (title or host),
+            "thumbnail": url,
+            "extractor": "generic-media-images",
+        })
+
+    print(f"[generic-media-images:{host}] gallery: {len(entries)} image(s)")
+    if len(entries) == 1:
+        return {**entries[0], "title": title or host}
+    return {
+        "_type": "playlist",
+        "entries": entries,
+        "title": title or host,
+        "thumbnail": found[0],
+        "id": cache_key(page_url),
+        "extractor": "generic-media-images",
+    }
+
 
 # ── Weibo ─────────────────────────────────────────────────────────────────────
 

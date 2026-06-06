@@ -263,6 +263,12 @@ def _strategy_platform_extractors(
                 return _result(name, True, media=info)
             return _result(name, False, reason="Modelpress extractor found no media")
 
+        if "trilltrill.jp" in page_url:
+            info = extractors.extract_trilltrill(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            return _result(name, False, reason="Trilltrill extractor found no media")
+
         if "blog.naver.com" in page_url:
             info = extractors.extract_naver_blog(page_url, cookies)
             if info:
@@ -294,6 +300,14 @@ def _strategy_platform_extractors(
             return _result(name, False, reason="Reddit extractor found no media")
 
         info = extractors.extract_curated_site(page_url, cookies)
+        if info:
+            return _result(name, True, media=info)
+
+        info = extractors.extract_article_photo_gallery(page_url, cookies)
+        if info:
+            return _result(name, True, media=info)
+
+        info = extractors.extract_generic_media_images(page_url, cookies)
         if info:
             return _result(name, True, media=info)
 
