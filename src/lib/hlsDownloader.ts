@@ -2,6 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { File, Paths } from 'expo-file-system';
 import { fetch as expoFetch } from 'expo/fetch';
 import { extractSessionCookies } from './cookieManager';
+import { debugLog } from './releaseLogger';
 import { DetectedMedia, DownloadStatus } from '../types';
 
 export class DRMProtectedError extends Error {
@@ -139,7 +140,7 @@ async function downloadSegment(
   signal?: AbortSignal,
 ): Promise<void> {
   if (signal?.aborted) throw new Error('Cancelled');
-  console.log('[downloadSegment] starting:', url.split('?')[0].split('/').pop(), 'range:', headers['Range']);
+  debugLog('[downloadSegment] starting:', url.split('?')[0].split('/').pop(), 'range:', headers['Range']);
   try {
     const result = await FileSystem.downloadAsync(url, destPath, { headers });
     if (signal?.aborted) {
@@ -153,9 +154,9 @@ async function downloadSegment(
     if (!info.exists || (info.size ?? 0) === 0) {
       throw new Error(`Empty segment - ${url.split('?')[0].split('/').pop()}`);
     }
-    console.log('[downloadSegment] success:', destPath.split('/').pop(), 'size:', info.size);
+    debugLog('[downloadSegment] success:', destPath.split('/').pop(), 'size:', info.size);
   } catch (err: any) {
-    console.error('[downloadSegment] failed:', err.message);
+    console.error('[downloadSegment] failed:', (err as Error).message);
     throw err;
   }
 }
@@ -171,10 +172,10 @@ async function muxSegments(
   const outFile = new File(Paths.document, 'downloads', taskId, `video.${ext}`);
   outFile.create({ intermediates: true, overwrite: true });
 
-  console.log(`[muxSegments] Started muxing ${segPaths.length} segments into video.${ext}`);
-  
+  debugLog(`[muxSegments] Started muxing ${segPaths.length} segments into video.${ext}`);
+
   if (initPath) {
-    console.log(`[muxSegments] Appending init segment: ${initPath}`);
+    debugLog(`[muxSegments] Appending init segment: ${initPath}`);
     const initFile = new File(initPath);
     const bytes = await initFile.bytes();
     outFile.write(bytes, { append: true });
@@ -182,7 +183,7 @@ async function muxSegments(
 
   for (let i = 0; i < segPaths.length; i++) {
     if (i % 10 === 0 || i === segPaths.length - 1) {
-      console.log(`[muxSegments] Appending segment ${i + 1}/${segPaths.length}`);
+      debugLog(`[muxSegments] Appending segment ${i + 1}/${segPaths.length}`);
     }
     const segFile = new File(segPaths[i]);
     const bytes = await segFile.bytes();
@@ -191,7 +192,7 @@ async function muxSegments(
   }
 
   if (outFile.size === 0) throw new Error('Output file is empty - segments may be corrupted or the URL expired');
-  console.log(`[muxSegments] Completed. Output size: ${outFile.size}`);
+  debugLog(`[muxSegments] Completed. Output size: ${outFile.size}`);
 
   return outFile.uri;
 }
@@ -294,7 +295,7 @@ export async function downloadHLS(
   for (let i = 0; i < segments.length; i += SEGMENT_BATCH) {
     if (signal?.aborted) throw new Error('Cancelled');
     const batch = segments.slice(i, i + SEGMENT_BATCH);
-    console.log(`[downloadHLS] starting batch ${i / SEGMENT_BATCH + 1}/${Math.ceil(segments.length / SEGMENT_BATCH)}`);
+    debugLog(`[downloadHLS] starting batch ${i / SEGMENT_BATCH + 1}/${Math.ceil(segments.length / SEGMENT_BATCH)}`);
     await Promise.all(batch.map((url, j) => {
       const idx = i + j;
       const br = byteRanges?.[idx];
@@ -312,7 +313,7 @@ export async function downloadHLS(
       }
       return downloadSegment(url, segPaths[idx], segmentHeaders, signal);
     }));
-    console.log(`[downloadHLS] finished batch ${i / SEGMENT_BATCH + 1}/${Math.ceil(segments.length / SEGMENT_BATCH)}`);
+    debugLog(`[downloadHLS] finished batch ${i / SEGMENT_BATCH + 1}/${Math.ceil(segments.length / SEGMENT_BATCH)}`);
     onProgress?.(Math.min(i + SEGMENT_BATCH, segments.length), segments.length);
   }
 
