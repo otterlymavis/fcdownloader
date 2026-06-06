@@ -756,9 +756,9 @@ async function extractNicoNico(pageUrl: string): Promise<DetectedMedia[]> {
       } catch {}
     }
 
-    // Fallback: scan for any HLS/MP4 CDN URLs in page
+    // Fallback: scan for HLS CDN URLs (dmc.nico / nicovideo CDN)
     if (results.length === 0) {
-      extractUrls(html, /(https?:\/\/[^"'\\<>\s]*nicovideo\.cdn[^"'\\<>\s]*\.m3u8[^"'\\<>\s]*)/g)
+      extractUrls(html, /(https?:\/\/[^"'\\<>\s]*(?:nicovideo\.cdn|dmc\.nico)[^"'\\<>\s]*\.m3u8[^"'\\<>\s]*)/g)
         .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'NicoNico')));
     }
 
