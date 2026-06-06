@@ -793,7 +793,9 @@ def _strategy_page_embeds(
         r'|iframe\.mediadelivery\.net/embed/'
         r'|videodelivery\.net/'
         r'|cloudflarestream\.com/[a-f0-9]+/iframe'
-        r'|iframe\.bunny\.net/embed/)[^"\']{4,})["\']',
+        r'|iframe\.bunny\.net/embed/'
+        r'|videopress\.com/(?:v|embed)/'
+        r'|wordpress\.com/v/)[^"\']{4,})["\']',
         html_text, re.IGNORECASE,
     ):
         u = html_mod.unescape(m.group(1))
