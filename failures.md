@@ -1,6 +1,6 @@
 # FCDownloader — Known Failures & Extraction Limits
 
-Last updated after session: trilltrill fix + 10 universal downloader improvements (helper-version).
+Last updated after session: Bilibili dynamic post fix + structured server error codes.
 
 ---
 
@@ -8,6 +8,7 @@ Last updated after session: trilltrill fix + 10 universal downloader improvement
 
 | Platform | Fix |
 |---|---|
+| **Bilibili dynamic / opus** | Dynamic API (`x/polymer/web-dynamic/v1/detail`) resolves embedded BV ID; video posts on `t.bilibili.com` and `bilibili.com/opus` now extract correctly |
 | **trilltrill.jp** | New `extract_trilltrill` reads `page_view_content.article_photo_link` |
 | **Fashionsnap** | Added `fashionsnap-assets.com` to curated CDN token list |
 | **ViVi** | Test URL was a wp-json API endpoint; actual article pages work fine |
@@ -54,7 +55,6 @@ These fail from the server's datacenter IP by design. They work correctly in the
 
 | Platform | Status |
 |---|---|
-| **Bilibili dynamic/opus** | `t.bilibili.com` dynamic posts: page HTML returns 412 to datacenter IPs; REST API fallback extracts some but `UnexpectedEmptyVideoUrl` on certain post types |
 | **Naver Entertainment / Sports** | Article pages extract images fine; video content often requires login |
 | **YouTube** | Skip-download mode returns SABR manifest (bound to extracting IP) → falls to `ytdl-stream` which works but is slow (~15–30s) |
 

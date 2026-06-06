@@ -404,6 +404,29 @@ def extract_bilibili(page_url: str, cookies: str | None) -> dict[str, Any] | Non
     bvid = "BV" + bvid_m.group(1) if bvid_m else None
     aid = aid_m.group(1) if aid_m else None
 
+    # Dynamic / opus posts (t.bilibili.com/{id} or bilibili.com/opus/{id}) embed a
+    # video card whose BV ID is not in the URL.  Resolve via the polymer dynamic API.
+    if not bvid and not aid:
+        dyn_m = re.search(r"(?:t\.bilibili\.com|bilibili\.com/(?:opus|dynamic))/(\d+)", page_url)
+        if dyn_m:
+            dyn_id = dyn_m.group(1)
+            try:
+                dyn_body = _fetch(
+                    f"https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id={dyn_id}&gaia_source=main_web",
+                    api_headers, timeout=10,
+                )
+                if dyn_body:
+                    dyn_data = json.loads(dyn_body.decode("utf-8"))
+                    item = (dyn_data.get("data") or {}).get("item") or {}
+                    modules = item.get("modules") or {}
+                    major = (modules.get("module_dynamic") or {}).get("major") or {}
+                    major_type = major.get("type", "")
+                    if major_type == "MAJOR_TYPE_ARCHIVE":
+                        archive = major.get("archive") or {}
+                        bvid = archive.get("bvid") or None
+            except Exception:
+                pass
+
     title = "Bilibili Video"
     thumb: str | None = None
 
