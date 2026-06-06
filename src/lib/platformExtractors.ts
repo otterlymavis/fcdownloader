@@ -159,15 +159,28 @@ async function extractHtmlMedia(pageUrl: string, mode: 'hls' | 'dash' | 'generic
   return _scanHtml(html, pageUrl, mode);
 }
 
-// Fetch the page once and scan in HLS→DASH→generic priority order.
-// Avoids 2 redundant HTTP fetches vs calling extractHtmlMedia 3 times separately.
+function _scanOg(html: string, pageUrl: string): DetectedMedia[] {
+  return extractUrls(
+    html,
+    /<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream)["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
+  )
+    .filter(u => u.startsWith('http'))
+    .map(u => makeItem(u, pageUrl));
+}
+
+// Fetch the page once and scan in HLS→DASH→OG→generic priority order.
+// Avoids 3 redundant HTTP fetches vs calling extractHtmlMedia + extractOgVideo separately.
 async function extractHtmlMediaAll(pageUrl: string): Promise<DetectedMedia[]> {
-  const html = await fetchHtml(pageUrl);
-  for (const mode of ['hls', 'dash', 'generic'] as const) {
-    const found = _scanHtml(html, pageUrl, mode);
-    if (found.length > 0) return found;
-  }
-  return [];
+  try {
+    const html = await fetchHtml(pageUrl);
+    for (const mode of ['hls', 'dash'] as const) {
+      const found = _scanHtml(html, pageUrl, mode);
+      if (found.length > 0) return found;
+    }
+    const og = _scanOg(html, pageUrl);
+    if (og.length > 0) return og;
+    return _scanHtml(html, pageUrl, 'generic');
+  } catch { return []; }
 }
 
 function isLikelyNonContentMediaUrl(url: string): boolean {
@@ -842,22 +855,10 @@ async function extractAmeba(pageUrl: string): Promise<DetectedMedia[]> {
  * extractor. Fetches with locale-aware headers and scans for HLS/MP4/DASH URLs.
  */
 async function extractCuratedArticle(pageUrl: string): Promise<DetectedMedia[]> {
-  try {
-    const items = await extractViaServer(pageUrl);
-    if (items.length > 0) return items;
-  } catch (e) {
-    debugWarn('[extractCuratedArticle] server extractor errored:', String(e).slice(0, 200));
-  }
-  return extractHtmlMedia(pageUrl, 'generic');
+  return extractHtmlMediaAll(pageUrl);
 }
 
 async function extractJapaneseGeneric(pageUrl: string): Promise<DetectedMedia[]> {
-  // Server-first
-  try {
-    const items = await extractViaServer(pageUrl);
-    if (items.length > 0) return items;
-  } catch {}
-
   try {
     const html = await fetchHtml(pageUrl, DESKTOP_UA, getAcceptLanguage(pageUrl));
     const results: DetectedMedia[] = [];
@@ -885,18 +886,6 @@ async function extractJapaneseGeneric(pageUrl: string): Promise<DetectedMedia[]>
       .forEach(u => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.55)));
 
     return results;
-  } catch { return []; }
-}
-
-async function extractOgVideo(pageUrl: string): Promise<DetectedMedia[]> {
-  try {
-    const html = await fetchHtml(pageUrl);
-    return extractUrls(
-      html,
-      /<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream)["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
-    )
-      .filter(u => u.startsWith('http'))
-      .map(u => makeItem(u, pageUrl));
   } catch { return []; }
 }
 
@@ -956,9 +945,8 @@ export async function extractFromSocialUrl(pageUrl: string): Promise<DetectedMed
       ? [['Japanese generic extractor', () => extractJapaneseGeneric(pageUrl)] as [string, () => Promise<DetectedMedia[]>]]
       : []),
     ['WebView/runtime interception', () => Promise.resolve([])],
-    // Single page fetch; scans HLS→DASH→generic in priority order.
+    // Single page fetch; scans HLS→DASH→OG→generic in priority order.
     ['HTML media scan', () => extractHtmlMediaAll(pageUrl)],
-    ['OG/meta tag extraction', () => extractOgVideo(pageUrl)],
     ['browser playback fallback', () => Promise.resolve([])],
   ];
 
