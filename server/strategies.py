@@ -306,6 +306,21 @@ def _strategy_platform_extractors(
                 return _result(name, True, media=info)
             return _result(name, False, reason="Bluesky extractor found no media")
 
+        # Mastodon: detect by snowflake ID in path — works across all instances.
+        # Guard against known non-Mastodon sites that use similar URL patterns.
+        _NON_MASTODON = ("twitter.com", "x.com", "bsky.app", "github.com", "instagram.com")
+        if (
+            not any(h in page_url for h in _NON_MASTODON)
+            and re.search(
+                r"/(?:@[^/?#]+|users/[^/?#]+/statuses)/\d{17,20}(?:[/?#]|$)",
+                page_url,
+            )
+        ):
+            info = extractors.extract_mastodon(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            # Don't hard-stop — fall through to yt-dlp if API returns nothing
+
         if any(h in page_url for h in ("twitter.com", "x.com", "t.co")):
             tw_url = page_url
             if "t.co" in page_url:

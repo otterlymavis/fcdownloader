@@ -1036,12 +1036,57 @@ async function extractBluesky(pageUrl: string): Promise<DetectedMedia[]> {
   } catch { return []; }
 }
 
+async function extractMastodon(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const parsed = new URL(pageUrl);
+    // Mastodon status URL patterns:
+    // /@{user}/{snowflake_id}       -- primary format
+    // /users/{user}/statuses/{id}   -- older ActivityPub format
+    const m = parsed.pathname.match(/\/(?:@[^/?#]+|users\/[^/?#]+\/statuses)\/(\d{17,20})(?:[/?#]|$)/);
+    if (!m) return [];
+    const statusId = m[1];
+    const baseUrl = `${parsed.protocol}//${parsed.host}`;
+
+    const res = await fetch(`${baseUrl}/api/v1/statuses/${statusId}`, {
+      headers: { 'User-Agent': DESKTOP_UA, Accept: 'application/json' },
+    });
+    if (!res.ok) return [];
+    const data = await res.json() as {
+      content?: string;
+      media_attachments?: Array<{
+        id?: string; type?: string; url?: string; preview_url?: string;
+        description?: string;
+        meta?: { original?: { width?: number; height?: number } };
+      }>;
+    };
+
+    const attachments = data.media_attachments ?? [];
+    if (!attachments.length) return [];
+
+    const title = (data.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200)
+      || `Mastodon post ${statusId}`;
+    const results: DetectedMedia[] = [];
+    for (const att of attachments) {
+      const url = att.url ?? '';
+      if (!url.startsWith('http')) continue;
+      const entry = makeItem(url, pageUrl, att.type === 'image' ? 'Image' : undefined, 'social-extractor', 0.92);
+      if (att.preview_url) entry.thumbnailUrl = att.preview_url;
+      const orig = att.meta?.original;
+      if (orig?.width && orig?.height) { entry.width = orig.width; entry.height = orig.height; }
+      results.push(entry);
+    }
+    return results;
+  } catch { return []; }
+}
+
 // ── Platform registry ─────────────────────────────────────────────
 const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[]> }> = [
   { re: /tiktok\.com\/@[^/]+\/(?:video|photo|item)\/\d+|tiktok\.com\/(?:t|v)\/[A-Za-z0-9]+|vm\.tiktok\.com\/[A-Za-z0-9]+/, fn: extractTikTok },
   { re: /(?:twitter|x)\.com\/[^/]+\/status\/\d+/,                                  fn: extractTwitter     },
   { re: /redgifs\.com\/(?:watch|ifr|gif)\/[A-Za-z0-9]+/i,                          fn: extractRedgifs     },
   { re: /bsky\.app\/profile\/[^/?#]+\/post\/[A-Za-z0-9]+/,                         fn: extractBluesky     },
+  // Mastodon: detect by snowflake ID in path — works across all fediverse instances
+  { re: /\/(?:@[^/?#]+|users\/[^/?#]+\/statuses)\/\d{17,20}(?:[/?#]|$)/,          fn: extractMastodon    },
   { re: /instagram\.com\/(?:(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+|share\/(?:p|reel)\/[A-Za-z0-9_-]+)/, fn: extractInstagram   },
   { re: /threads\.net\/@[^/]+\/post\/[A-Za-z0-9_-]+/,                              fn: extractInstagram   },
   { re: /dailymotion\.com\/video\/[A-Za-z0-9]+/,                                    fn: extractDailymotion },

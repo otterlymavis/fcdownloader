@@ -1433,3 +1433,74 @@ def extract_bluesky(page_url: str, cookies: str | None) -> dict[str, Any] | None
 
     print(f"[bluesky] no media found for {rkey!r} (embed type: {embed_type!r})")
     return None
+
+
+def extract_mastodon(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """
+    Extract media from any Mastodon instance via the public REST API.
+    Detects status by snowflake ID in the URL path — works across all instances
+    without needing a whitelist. No auth required for public posts.
+    """
+    parsed = urllib.parse.urlsplit(page_url)
+    # Mastodon status URL patterns:
+    # /@{user}/{snowflake_id}       -- primary format
+    # /users/{user}/statuses/{id}   -- older ActivityPub format
+    m = re.search(
+        r"/(?:@[^/?#]+|users/[^/?#]+/statuses)/(\d{17,20})(?:[/?#]|$)",
+        parsed.path,
+    )
+    if not m:
+        return None
+    status_id = m.group(1)
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+    hdrs = safe_headers({"User-Agent": _DESKTOP_UA, "Accept": "application/json"})
+    body, status_code = fetch_with_retry(
+        f"{base_url}/api/v1/statuses/{status_id}",
+        hdrs, timeout=10, max_retries=1,
+    )
+    if not body or status_code != 200:
+        print(f"[mastodon] API returned {status_code} for {base_url}/…/{status_id}")
+        return None
+
+    try:
+        data = json.loads(body)
+    except Exception:
+        return None
+
+    attachments = data.get("media_attachments") or []
+    if not attachments:
+        return None
+
+    raw_content = data.get("content") or ""
+    title = re.sub(r"<[^>]+>", "", raw_content).strip()[:200] or f"Mastodon post {status_id}"
+
+    entries: list[dict[str, Any]] = []
+    for att in attachments:
+        url = att.get("url", "")
+        if not url or not url.startswith("http"):
+            continue
+        att_type = att.get("type", "")
+        ext = guess_ext_from_url(url) or ("mp4" if att_type in ("video", "gifv") else "jpg")
+        entry: dict[str, Any] = {
+            "id": att.get("id") or cache_key(url),
+            "url": url,
+            "ext": ext,
+            "title": att.get("description") or title,
+        }
+        preview = att.get("preview_url", "")
+        if preview and preview.startswith("http"):
+            entry["thumbnail"] = preview
+        meta = (att.get("meta") or {}).get("original") or {}
+        if meta.get("width") and meta.get("height"):
+            entry["width"] = meta["width"]
+            entry["height"] = meta["height"]
+        entries.append(entry)
+
+    if not entries:
+        return None
+
+    print(f"[mastodon] {base_url} status {status_id}: {len(entries)} attachment(s)")
+    if len(entries) == 1:
+        return entries[0]
+    return {"_type": "playlist", "id": status_id, "title": title, "entries": entries}
