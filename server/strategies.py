@@ -32,7 +32,7 @@ import extractors
 import languages
 import registry
 import source_audit
-from config import COOKIES_FILE, FORMAT_SPEC, SERVER_BASE_URL, MOBILE_UA
+from config import COOKIES_FILE, FORMAT_SPEC, QUALITY_FORMAT_SPECS, SERVER_BASE_URL, MOBILE_UA
 from telemetry import RequestContext
 from utils import (
     cache_key,
@@ -728,6 +728,7 @@ def build_ydl_opts(
     concurrent_fragments: int = 1,
     proxy: str | None = None,
     referer: str | None = None,
+    preferred_quality: str | None = None,
 ) -> dict[str, Any]:
     """Build yt-dlp options dict for the given request."""
     extractor_args: dict[str, Any] = {
@@ -738,13 +739,15 @@ def build_ydl_opts(
     if referer:
         extractor_args["vimeo"] = {"referer": [referer]}
 
+    format_spec = (
+        "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio"
+        if audio_only
+        else QUALITY_FORMAT_SPECS.get(preferred_quality or "", FORMAT_SPEC)
+    )
     opts: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
-        "format": (
-            "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio"
-            if audio_only else FORMAT_SPEC
-        ),
+        "format": format_spec,
         "skip_download": True,
         "outtmpl": "/tmp/%(id)s.%(ext)s",
         "extractor_args": extractor_args,
@@ -782,6 +785,7 @@ def run_extraction(
     request_source_audit: list[dict[str, Any]] | None = None,
     ctx: RequestContext | None = None,
     remove_watermark: bool = False,
+    preferred_quality: str | None = None,
 ) -> dict[str, Any]:
     """Run the full extraction pipeline and return a yt-dlp info dict.
 
@@ -918,6 +922,7 @@ def run_extraction(
         page_url, http_headers, cookie_file,
         audio_only=audio_only, subtitles=subtitles, sub_langs=sub_langs,
         concurrent_fragments=concurrent_fragments, proxy=proxy, referer=referer,
+        preferred_quality=preferred_quality,
     )
 
     is_yt = profile.is_youtube

@@ -68,6 +68,31 @@ FORMAT_SPEC: str = (
     "b"
 )
 
+# Per-quality format specs keyed by the client's preferredQuality setting.
+# "best" and any unknown value fall through to FORMAT_SPEC.
+QUALITY_FORMAT_SPECS: dict[str, str] = {
+    "2160p": (
+        "bv*[height<=2160][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/"
+        "bv*[height<=2160][ext=mp4]+ba[ext=m4a]/"
+        "bv*[height<=2160]+ba/b"
+    ),
+    "1080p": FORMAT_SPEC,
+    "720p": (
+        "bv*[height<=720][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/"
+        "bv*[height<=720][ext=mp4]+ba[ext=m4a]/"
+        "bv*[height<=720]+ba/"
+        "b[ext=mp4][height<=720]/"
+        "b[height<=720]/b"
+    ),
+    "480p": (
+        "bv*[height<=480][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/"
+        "bv*[height<=480][ext=mp4]+ba[ext=m4a]/"
+        "bv*[height<=480]+ba/"
+        "b[ext=mp4][height<=480]/"
+        "b[height<=480]/b"
+    ),
+}
+
 # Server-side stream proxy format spec.  Prefer pre-muxed files (single
 # download, no FFmpeg merge) so the temp-file download on the 512 MB Fly VM
 # finishes faster.  Format 18 = YouTube legacy 360p pre-muxed MP4.

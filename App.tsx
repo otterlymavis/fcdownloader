@@ -32,7 +32,7 @@ import { useBookmarks } from './src/hooks/useBookmarks';
 import { useSettings } from './src/hooks/useSettings';
 import { DetectedMedia, DownloadTask } from './src/types';
 import { extractionManager } from './src/lib/extractionManager';
-import { ServerExtractOptions, setRemoveWatermark } from './src/lib/serverExtractor';
+import { ServerExtractOptions, setRemoveWatermark, setPreferredQuality } from './src/lib/serverExtractor';
 import {
   BOTTOM_PAD,
   IS_ANDROID,
@@ -137,14 +137,17 @@ export default function App() {
     language,
     resolvedLanguage,
     removeWatermark,
+    preferredQuality,
     setTheme,
     setFontSize,
     setLanguage,
     setRemoveWatermark: saveRemoveWatermark,
+    setPreferredQuality: savePreferredQuality,
   } = useSettings();
 
-  // Keep the serverExtractor module-level flag in sync with the setting.
+  // Keep the serverExtractor module-level flags in sync with settings.
   useEffect(() => { setRemoveWatermark(removeWatermark); }, [removeWatermark]);
+  useEffect(() => { setPreferredQuality(preferredQuality); }, [preferredQuality]);
   const t = useTheme(theme === 'system' ? undefined : theme === 'dark');
   const isDark = t.dark;
   const fs = (base: number) => base * fontScale;
@@ -1323,6 +1326,8 @@ export default function App() {
           onLanguageChange={setLanguage}
           removeWatermark={removeWatermark}
           onRemoveWatermarkChange={saveRemoveWatermark}
+          preferredQuality={preferredQuality}
+          onQualityChange={savePreferredQuality}
           resolvedLanguage={resolvedLanguage}
           t={t}
         />

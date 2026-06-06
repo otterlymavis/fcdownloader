@@ -1361,6 +1361,7 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
                 request_source_audit=req.sourceAudit,
                 ctx=ctx,
                 remove_watermark=req.removeWatermark,
+                preferred_quality=req.preferredQuality,
             )
     except HTTPException:
         ctx.emit(status="error")

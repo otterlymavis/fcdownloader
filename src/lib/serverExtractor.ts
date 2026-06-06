@@ -68,6 +68,11 @@ export function setRemoveWatermark(value: boolean): void {
   _removeWatermark = value;
 }
 
+let _preferredQuality = 'best';
+export function setPreferredQuality(value: string): void {
+  _preferredQuality = value;
+}
+
 function normaliseUrl(raw: string): string {
   let s = raw.trim().replace(/\/+$/, '');
   if (!/^https?:\/\//i.test(s)) s = `http://${s}`;
@@ -167,6 +172,7 @@ export async function extractViaServer(pageUrl: string, options: ServerExtractOp
     if (options.mediaHints?.length) body.mediaHints = options.mediaHints.slice(0, 120);
     if (options.sourceAudit?.length) body.sourceAudit = options.sourceAudit.slice(0, 120);
     if (_removeWatermark) body.removeWatermark = true;
+    if (_preferredQuality && _preferredQuality !== 'best') body.preferredQuality = _preferredQuality;
 
     const fullUrl = `${base}/extract`;
     debugLog('[serverExtractor] POST', fullUrl, 'token?', !!token, 'cookies?', cookies.length, 'chars');

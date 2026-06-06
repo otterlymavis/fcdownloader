@@ -72,6 +72,7 @@ class ExtractRequest(BaseModel):
     subtitles: bool = False
     subLangs: str = "en"
     removeWatermark: bool = False
+    preferredQuality: str | None = None
 
     @field_validator("pageUrl", mode="before")
     @classmethod

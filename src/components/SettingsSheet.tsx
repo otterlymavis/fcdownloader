@@ -9,7 +9,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { ThemePref, FontSizePref, LanguagePref, FONT_SCALE } from '../hooks/useSettings';
+import { ThemePref, FontSizePref, LanguagePref, QualityPref, FONT_SCALE } from '../hooks/useSettings';
 import { translate, TranslationKey } from '../constants/translations';
 import { CommonLanguageCode } from '../lib/languageProfiles';
 
@@ -35,6 +35,8 @@ interface Props {
   onLanguageChange: (v: LanguagePref) => void;
   removeWatermark: boolean;
   onRemoveWatermarkChange: (v: boolean) => void;
+  preferredQuality: QualityPref;
+  onQualityChange: (v: QualityPref) => void;
   resolvedLanguage: CommonLanguageCode;
   t: ThemeColors;
   inline?: boolean;
@@ -60,6 +62,14 @@ const FONT_OPTIONS: { value: FontSizePref; labelKey: TranslationKey; preview: st
 const REMOVE_WATERMARK_NOTE =
   'Tries a clean source link first, then snapwc.com on supported sites. ' +
   'Leave this off to keep original media. Static image watermarks may remain.';
+
+const QUALITY_OPTIONS: { value: QualityPref; label: string }[] = [
+  { value: 'best',  label: 'Best' },
+  { value: '2160p', label: '4K'   },
+  { value: '1080p', label: '1080p' },
+  { value: '720p',  label: '720p'  },
+  { value: '480p',  label: '480p'  },
+];
 
 const LANGUAGE_OPTIONS: { value: LanguagePref; label: string; key?: TranslationKey }[] = [
   { value: 'system', label: 'Auto', key: 'auto' },
@@ -89,6 +99,8 @@ export default function SettingsSheet({
   onLanguageChange,
   removeWatermark,
   onRemoveWatermarkChange,
+  preferredQuality,
+  onQualityChange,
   resolvedLanguage,
   t,
   inline = false,
@@ -200,6 +212,31 @@ export default function SettingsSheet({
           DOWNLOADS
         </Text>
         <View style={[styles.card, { backgroundColor: t.card }]}>
+
+          {/* Quality */}
+          <Text style={[styles.rowLabel, { color: t.ink, textAlign: isRTL ? 'right' : 'left' }]}>
+            Max Quality
+          </Text>
+          <View style={[styles.segmentRow, isRTL && { flexDirection: 'row-reverse' }]}>
+            {QUALITY_OPTIONS.map(({ value, label }) => {
+              const active = preferredQuality === value;
+              return (
+                <Pressable
+                  key={value}
+                  onPress={() => onQualityChange(value)}
+                  style={[styles.segment, { backgroundColor: active ? BLUE : t.card2 }]}
+                >
+                  <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.ink2 }]}>
+                    {label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <View style={[styles.separator, { backgroundColor: t.sep }]} />
+
+          {/* Remove Watermark */}
           <View style={[styles.toggleRow, isRTL && { flexDirection: 'row-reverse' }]}>
             <View style={styles.toggleText}>
               <Text style={[styles.rowLabel, { color: t.ink }]}>
@@ -326,6 +363,10 @@ const styles = StyleSheet.create({
   langChipLabel: {
     fontSize: 13,
     fontWeight: '600',
+  },
+  separator: {
+    height: StyleSheet.hairlineWidth,
+    marginVertical: S.xs,
   },
   toggleRow: {
     flexDirection: 'row',
