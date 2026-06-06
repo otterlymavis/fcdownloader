@@ -58,6 +58,11 @@ thumbnails.
 - Hochi, Sponichi, Nikkan Sports, Sanspo
 - Mainichi, Asahi, Yomiuri, Sankei, Tokyo Shimbun, Kyodo, 47News, Jiji
 - ITmedia, Impress/Watch, Mynavi News, ASCII, Gigazine
+- TRILL / trilltrill.jp — article photo galleries (reads embedded JS data)
+- note.com — article image galleries and video via public REST API
+- LINE Blog (lineblog.me)
+- Hatena Blog / Hatena Diary
+- FC2 Blog (blog.fc2.com)
 
 The backend prefers yt-dlp first, then falls back to HLS/DASH, Open Graph media,
 generic media URL scanning, and embedded player detection. Japanese sites get an
