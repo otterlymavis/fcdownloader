@@ -303,21 +303,48 @@ async function extractReddit(pageUrl: string): Promise<DetectedMedia[]> {
 // ── Twitter / X ───────────────────────────────────────────────────
 async function extractTwitter(pageUrl: string): Promise<DetectedMedia[]> {
   try {
+    const m = pageUrl.match(/\/status\/(\d+)/);
+    if (m) {
+      // vxtwitter community API — returns JSON with direct media URLs, no auth needed
+      const apiUrl = `https://api.vxtwitter.com/twitter/status/${m[1]}`;
+      const res = await fetch(apiUrl, {
+        headers: { 'User-Agent': DESKTOP_UA, Accept: 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json() as {
+          media_extended?: Array<{ url: string; type: string; thumbnail_url?: string; size?: { width: number; height: number } }>;
+          mediaURLs?: string[];
+          user_name?: string;
+          text?: string;
+        };
+        if (data.media_extended && data.media_extended.length > 0) {
+          const results: DetectedMedia[] = [];
+          data.media_extended.forEach(item => {
+            const ext = item.type === 'video' ? 'mp4' : item.type === 'gif' ? 'mp4' : 'jpg';
+            results.push(makeItem(item.url, pageUrl, item.type === 'photo' ? 'Image' : undefined, undefined, 0.9));
+            if (results[results.length - 1]) {
+              const last = results[results.length - 1];
+              if (item.thumbnail_url) last.thumbnailUrl = item.thumbnail_url;
+              if (item.size) { last.width = item.size.width; last.height = item.size.height; }
+              void ext;
+            }
+          });
+          return results;
+        }
+      }
+    }
+
+    // Fallback: scan SSR HTML for escaped video.twimg.com CDN URLs
     const html = await fetchHtml(pageUrl);
     const results: DetectedMedia[] = [];
-
-    // video.twimg.com CDN — MP4 and HLS (.m3u8) URLs in SSR JSON blobs
-    const twimpRe = /https?:\\\/\\\/video\.twimg\.com\\\/[^"\\]+?\.(?:mp4|m3u8)[^"\\]*/g;
-    extractUrls(html, twimpRe).forEach(u => pushUnique(results, makeItem(u, pageUrl)));
-
-    // OG / Twitter card meta-tags as fallback
+    extractUrls(html, /https?:\\\/\\\/video\.twimg\.com\\\/[^"\\]+?\.(?:mp4|m3u8)[^"\\]*/g)
+      .forEach(u => pushUnique(results, makeItem(u, pageUrl)));
     extractUrls(
       html,
       /<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream|og:image(?::secure_url)?|twitter:image)["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
     )
       .filter(u => u.startsWith('http'))
       .forEach(u => pushUnique(results, makeItem(u, pageUrl)));
-
     return results;
   } catch { return []; }
 }

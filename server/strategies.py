@@ -294,6 +294,12 @@ def _strategy_platform_extractors(
                 return _result(name, True, media=info)
             return _result(name, False, reason="TikTok extractor found no media")
 
+        if any(h in page_url for h in ("twitter.com", "x.com", "t.co")):
+            info = extractors.extract_twitter(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            return _result(name, False, reason="Twitter extractor found no media")
+
         if any(h in page_url for h in ("reddit.com", "redd.it")):
             info = extractors.extract_reddit(page_url, cookies)
             if info:
@@ -329,123 +335,6 @@ def _strategy_platform_extractors(
             )
 
         return _result(name, False, reason="no matching platform extractor")
-    except Exception as exc:  # noqa: BLE001
-        return _result(name, False, reason=safe_text(exc)[:400])
-
-
-def _strategy_html_detector(
-    page_url: str,
-    http_headers: dict[str, str],
-    cookies: str | None,
-    mode: str,
-) -> dict[str, Any]:
-    """HTML media scanner — HLS / DASH / OG-tag / generic URL scraper."""
-    name = {
-        "hls":     "HLS manifest detector",
-        "dash":    "DASH manifest detector",
-        "og":      "OG/meta tag extractor",
-        "generic": "generic media detector",
-    }.get(mode, "HTML media detector")
-
-    import html as html_mod
-    import urllib.error
-    import urllib.request
-
-    def _info_from_url(media_url: str, title: str | None = None) -> dict[str, Any]:
-        url = normalize_url(html_mod.unescape(media_url))
-        ext = guess_ext_from_url(url) or (
-            "m3u8" if ".m3u8" in url.lower() else
-            "mpd" if ".mpd" in url.lower() else "mp4"
-        )
-        return {
-            "url": url,
-            "http_headers": safe_headers({
-                **http_headers,
-                "Referer": http_headers.get("Referer") or page_url,
-            }),
-            "title": title,
-            "thumbnail": None,
-            "duration": None,
-            "ext": ext,
-            "protocol": (
-                "m3u8_native" if ext == "m3u8" else
-                "http_dash_segments" if ext == "mpd" else "https"
-            ),
-            "id": cache_key(url),
-        }
-
-    try:
-        if mode == "hls" and ".m3u8" in page_url.lower():
-            return _result(name, True, media=_info_from_url(page_url))
-        if mode == "dash" and ".mpd" in page_url.lower():
-            return _result(name, True, media=_info_from_url(page_url))
-
-        req_headers = safe_headers({
-            "User-Agent": http_headers.get("User-Agent") or MOBILE_UA,
-            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-            "Accept-Language": (
-                http_headers.get("Accept-Language")
-                or languages.accept_language_for_url(page_url, "en-US,en;q=0.9")
-            ),
-            **({"Referer": http_headers["Referer"]} if http_headers.get("Referer") else {}),
-            **({"Origin": http_headers["Origin"]} if http_headers.get("Origin") else {}),
-            **({"Cookie": cookies} if cookies else {}),
-        })
-        req = urllib.request.Request(page_url, headers=req_headers)
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            html_text = resp.read().decode("utf-8", errors="replace")
-
-        title = _html_title(html_text)
-        urls = _scan_media_urls(html_text, mode)
-        if not urls:
-            return _result(name, False, reason=f"{mode} detector found no media")
-
-        candidates = [urllib.parse.urljoin(page_url, u) for u in urls]
-        media_url = candidates[0]
-        audit = [
-            source_audit.audit_entry(
-                strategy=name,
-                source="html-scan",
-                url=u,
-                selected=(u == media_url),
-                rejected_reason=None if u == media_url else "lower ranked than first matching HTML candidate",
-                headers=req_headers,
-            )
-            for u in candidates[:80]
-        ]
-
-        # For generic mode with multiple candidates, check for distinct videos vs quality variants.
-        # Two URLs share a "stem" if they have the same domain + path minus quality markers — if
-        # stems all match, they're the same video at different qualities; take just the first.
-        # If stems differ, the page has multiple distinct videos → return all as a gallery.
-        if mode == "generic" and len(candidates) >= 2:
-            import re as _re
-            _QUALITY_STRIP = _re.compile(
-                r'[_-](?:\d{3,4}p|\d+x\d+|hd|sd|low|high|mid|med|\d+k)(?=[_.-]|$)',
-                _re.IGNORECASE,
-            )
-
-            def _stem(u: str) -> str:
-                p = urllib.parse.urlparse(u)
-                path_stem = _QUALITY_STRIP.sub('', p.path)
-                path_stem = _re.sub(r'\.\w{2,5}$', '', path_stem)
-                return p.netloc + path_stem
-
-            stems = list(dict.fromkeys(_stem(u) for u in candidates))
-            if len(stems) >= 2:
-                entries = [_info_from_url(u, title) for u in candidates[:20]]
-                playlist = {"_type": "playlist", "entries": entries, "title": title}
-                source_audit.add_audit(playlist, audit)
-                return _result(name, True, media=playlist)
-
-        info = _info_from_url(media_url, title)
-        source_audit.add_audit(info, audit)
-        return _result(name, True, media=info)
-
-    except urllib.error.URLError as exc:
-        return _result(name, False, reason=f"network error: {safe_text(exc)[:300]}")
-    except TimeoutError as exc:
-        return _result(name, False, reason=f"timeout: {safe_text(exc)[:300]}")
     except Exception as exc:  # noqa: BLE001
         return _result(name, False, reason=safe_text(exc)[:400])
 
@@ -1324,6 +1213,7 @@ def run_extraction(
             "xiaohongshu.com", "rednote.com", "xhslink.com", "xhscdn.com",
             "tiktok.com", "vm.tiktok.com",
             "reddit.com", "redd.it",
+            "twitter.com", "x.com", "t.co",
         ))
         platform_strategy = ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies))
         ytdlp_strategy = ("yt-dlp", lambda: _strategy_ydl(page_url, ydl_opts, False))

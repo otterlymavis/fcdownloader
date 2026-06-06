@@ -2694,6 +2694,7 @@ from new_extractors import (  # noqa: E402
     extract_bilibili,
     extract_tiktok,
     extract_reddit,
+    extract_twitter,
     extract_via_snapwc,
     extract_watermark_free_source,
 )

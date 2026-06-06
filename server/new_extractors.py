@@ -1171,3 +1171,80 @@ def extract_via_snapwc(page_url: str) -> dict[str, Any] | None:
     except Exception as exc:
         print(f"[snapwc] failed for {page_url}: {str(exc)[:200]}")
         return None
+
+
+# ── Twitter / X ───────────────────────────────────────────────────────────────
+
+_DESKTOP_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+)
+
+
+def extract_twitter(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """Extract Twitter/X media via the vxtwitter community API (no auth needed).
+
+    vxtwitter mirrors tweet data including direct video.twimg.com URLs,
+    bypassing Twitter's API auth wall. Falls back to HTML scan for edge cases.
+
+    API: https://api.vxtwitter.com/twitter/status/{id}
+    """
+    m = re.search(r"/status/(\d+)", page_url)
+    if not m:
+        return None
+    tweet_id = m.group(1)
+
+    api_url = f"https://api.vxtwitter.com/twitter/status/{tweet_id}"
+    hdrs = safe_headers({
+        "User-Agent": _DESKTOP_UA,
+        "Accept": "application/json",
+    })
+    body, status = fetch_with_retry(api_url, hdrs, timeout=10, max_retries=1)
+    if not body or status not in (200, 201):
+        print(f"[twitter] vxtwitter API returned {status} for {tweet_id}")
+        return None
+
+    try:
+        data = json.loads(body)
+    except Exception:
+        return None
+
+    media_items: list[dict[str, Any]] = data.get("media_extended") or []
+    if not media_items:
+        return None
+
+    title = data.get("text") or f"Tweet by @{data.get('user_screen_name', 'unknown')}"
+    author = data.get("user_name") or data.get("user_screen_name") or "unknown"
+    thumbnail = data.get("user_profile_image_url")
+
+    entries: list[dict[str, Any]] = []
+    for item in media_items:
+        url = item.get("url") or ""
+        if not url.startswith("http"):
+            continue
+        media_type = item.get("type", "video")
+        ext = guess_ext_from_url(url) or ("mp4" if media_type in ("video", "gif") else "jpg")
+        thumb = item.get("thumbnail_url") or thumbnail
+        entries.append({
+            "id":        cache_key(url),
+            "url":       url,
+            "ext":       ext,
+            "title":     title,
+            "uploader":  author,
+            "thumbnail": thumb,
+            "protocol":  "m3u8_native" if ext == "m3u8" else "https",
+            "http_headers": safe_headers({"Referer": "https://twitter.com/"}),
+        })
+
+    if not entries:
+        return None
+
+    print(f"[twitter] vxtwitter: {len(entries)} item(s) for tweet {tweet_id}")
+    if len(entries) == 1:
+        return entries[0]
+    return {
+        "_type":   "playlist",
+        "id":      tweet_id,
+        "title":   title,
+        "entries": entries,
+    }
