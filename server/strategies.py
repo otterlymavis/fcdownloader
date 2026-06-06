@@ -449,6 +449,123 @@ def _strategy_html_detector(
         return _result(name, False, reason=safe_text(exc)[:400])
 
 
+def _strategy_html_scan_combined(
+    page_url: str,
+    http_headers: dict[str, str],
+    cookies: str | None,
+) -> dict[str, Any]:
+    """Fetch the page once and run all HTML scan modes (HLS→DASH→OG→generic).
+
+    Replaces four separate _strategy_html_detector calls (each of which fetches
+    the page independently) with a single HTTP request, saving 3 round-trips for
+    every page that reaches the HTML-scan stage of the pipeline.
+    """
+    import html as html_mod
+    import urllib.error
+    import urllib.request
+
+    name = "HTML media scanner"
+
+    if ".m3u8" in page_url.lower():
+        url = normalize_url(page_url)
+        ext = "m3u8"
+        return _result(name, True, media={
+            "url": url, "ext": ext, "protocol": "m3u8_native",
+            "id": cache_key(url), "title": None,
+            "http_headers": safe_headers({**http_headers, "Referer": http_headers.get("Referer") or page_url}),
+        })
+    if ".mpd" in page_url.lower():
+        url = normalize_url(page_url)
+        ext = "mpd"
+        return _result(name, True, media={
+            "url": url, "ext": ext, "protocol": "http_dash_segments",
+            "id": cache_key(url), "title": None,
+            "http_headers": safe_headers({**http_headers, "Referer": http_headers.get("Referer") or page_url}),
+        })
+
+    req_headers = safe_headers({
+        "User-Agent": http_headers.get("User-Agent") or MOBILE_UA,
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Language": (
+            http_headers.get("Accept-Language")
+            or languages.accept_language_for_url(page_url, "en-US,en;q=0.9")
+        ),
+        **({"Referer": http_headers["Referer"]} if http_headers.get("Referer") else {}),
+        **({"Origin": http_headers["Origin"]} if http_headers.get("Origin") else {}),
+        **({"Cookie": cookies} if cookies else {}),
+    })
+    try:
+        req = urllib.request.Request(page_url, headers=req_headers)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            html_text = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as exc:
+        return _result(name, False, reason=f"network error: {safe_text(exc)[:300]}")
+    except TimeoutError as exc:
+        return _result(name, False, reason=f"timeout: {safe_text(exc)[:300]}")
+    except Exception as exc:  # noqa: BLE001
+        return _result(name, False, reason=safe_text(exc)[:400])
+
+    title = _html_title(html_text)
+
+    def _info_from_url(media_url: str) -> dict[str, Any]:
+        url = normalize_url(html_mod.unescape(media_url))
+        ext = guess_ext_from_url(url) or (
+            "m3u8" if ".m3u8" in url.lower() else
+            "mpd"  if ".mpd"  in url.lower() else "mp4"
+        )
+        return {
+            "url": url,
+            "http_headers": safe_headers({**req_headers, "Referer": req_headers.get("Referer") or page_url}),
+            "title": title, "thumbnail": None, "duration": None,
+            "ext": ext,
+            "protocol": (
+                "m3u8_native"        if ext == "m3u8" else
+                "http_dash_segments" if ext == "mpd"  else "https"
+            ),
+            "id": cache_key(url),
+        }
+
+    import re as _re
+    _QUALITY_STRIP = _re.compile(
+        r'[_-](?:\d{3,4}p|\d+x\d+|hd|sd|low|high|mid|med|\d+k)(?=[_.-]|$)',
+        _re.IGNORECASE,
+    )
+
+    def _stem(u: str) -> str:
+        p = urllib.parse.urlparse(u)
+        path_stem = _QUALITY_STRIP.sub('', p.path)
+        path_stem = _re.sub(r'\.\w{2,5}$', '', path_stem)
+        return p.netloc + path_stem
+
+    for mode in ("hls", "dash", "og", "generic"):
+        urls = _scan_media_urls(html_text, mode)
+        if not urls:
+            continue
+        candidates = [urllib.parse.urljoin(page_url, u) for u in urls]
+        media_url = candidates[0]
+        audit = [
+            source_audit.audit_entry(
+                strategy=name, source=f"html-scan/{mode}", url=u,
+                selected=(u == media_url),
+                rejected_reason=None if u == media_url else "lower ranked candidate",
+                headers=req_headers,
+            )
+            for u in candidates[:80]
+        ]
+        if mode == "generic" and len(candidates) >= 2:
+            stems = list(dict.fromkeys(_stem(u) for u in candidates))
+            if len(stems) >= 2:
+                entries = [_info_from_url(u) for u in candidates[:20]]
+                playlist = {"_type": "playlist", "entries": entries, "title": title}
+                source_audit.add_audit(playlist, audit)
+                return _result(name, True, media=playlist)
+        info = _info_from_url(media_url)
+        source_audit.add_audit(info, audit)
+        return _result(name, True, media=info)
+
+    return _result(name, False, reason="no media found in page HTML (hls/dash/og/generic modes)")
+
+
 def _strategy_ytdl_stream_url(
     page_url: str,
     ydl_opts: dict[str, Any],
@@ -1224,10 +1341,9 @@ def run_extraction(
                 "WebView/runtime interception",
                 "browser runtime is client-side only",
             )),
-            ("HLS manifest detector",    lambda: _strategy_html_detector(page_url, http_headers, cookies, "hls")),
-            ("DASH manifest detector",   lambda: _strategy_html_detector(page_url, http_headers, cookies, "dash")),
-            ("OG/meta tag extractor",    lambda: _strategy_html_detector(page_url, http_headers, cookies, "og")),
-            ("generic media detector",   lambda: _strategy_html_detector(page_url, http_headers, cookies, "generic")),
+            # Combined HTML scan: fetches the page once and tries HLS→DASH→OG→generic
+            # in priority order, saving 3 redundant HTTP requests vs separate strategies.
+            ("HTML media scanner",       lambda: _strategy_html_scan_combined(page_url, http_headers, cookies)),
             ("embedded player detector", lambda: _strategy_page_embeds(page_url, http_headers, cookies, ydl_opts)),
             ("generic yt-dlp extractor", lambda: _strategy_ydl(page_url, ydl_opts, True)),
             *(
