@@ -36,6 +36,7 @@ from config import COOKIES_FILE, FORMAT_SPEC, QUALITY_FORMAT_SPECS, SERVER_BASE_
 from telemetry import RequestContext
 from utils import (
     cache_key,
+    fetch_with_retry,
     normalize_url,
     safe_headers,
     safe_text,
@@ -466,8 +467,6 @@ def _strategy_html_scan_combined(
     it without a second HTTP request.
     """
     import html as html_mod
-    import urllib.error
-    import urllib.request
 
     name = "HTML media scanner"
 
@@ -499,16 +498,10 @@ def _strategy_html_scan_combined(
         **({"Origin": http_headers["Origin"]} if http_headers.get("Origin") else {}),
         **({"Cookie": cookies} if cookies else {}),
     })
-    try:
-        req = urllib.request.Request(page_url, headers=req_headers)
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            html_text = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.URLError as exc:
-        return _result(name, False, reason=f"network error: {safe_text(exc)[:300]}")
-    except TimeoutError as exc:
-        return _result(name, False, reason=f"timeout: {safe_text(exc)[:300]}")
-    except Exception as exc:  # noqa: BLE001
-        return _result(name, False, reason=safe_text(exc)[:400])
+    body, status = fetch_with_retry(page_url, req_headers, timeout=20, max_retries=1)
+    if not body:
+        return _result(name, False, reason=f"fetch failed (HTTP {status})")
+    html_text = body.decode("utf-8", errors="replace")
 
     if _html_cache is not None:
         _html_cache[page_url] = html_text
