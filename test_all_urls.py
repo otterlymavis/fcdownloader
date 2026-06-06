@@ -90,7 +90,7 @@ URLS = {
     "note.com":      ("https://note.com/noteinc/n/n58bf1e2a7b5f", "article with images — update key if 404"),
     "LINE Blog":     ("https://lineblog.me/yoshizawakahoru/archives/20060421.html", "image blog"),
     "Hatena Blog":   ("https://staff.hatenablog.com/entry/2026/06/05/145729", "official Hatena blog with images"),
-    "FC2 Blog":      ("https://blog.fc2.com/", "homepage — update to real article URL"),
+    "FC2 Blog":      ("https://ameblog.blog.fc2.com/blog-entry-1.html", "user blog article page"),
     "Gyazo":         ("https://gyazo.com/5593f3bbe109c38ebf07c16dd25dc4c4", "public screenshot"),
     "Ameblo":        ("https://ameblo.jp/chunta-2011/", ""),
     "Kstyle":        ("https://kstyle.com/topicNews.ksn?topicNo=1107", ""),

@@ -137,8 +137,7 @@ function extractUrls(text: string, re: RegExp): string[] {
   return results;
 }
 
-async function extractHtmlMedia(pageUrl: string, mode: 'hls' | 'dash' | 'generic'): Promise<DetectedMedia[]> {
-  const html = await fetchHtml(pageUrl);
+function _scanHtml(html: string, pageUrl: string, mode: 'hls' | 'dash' | 'generic'): DetectedMedia[] {
   const results: DetectedMedia[] = [];
   const patterns =
     mode === 'hls' ? [/(https?:\/\/[^"'\\<>\s]+?\.m3u8[^"'\\<>\s]*)/gi]
@@ -153,6 +152,22 @@ async function extractHtmlMedia(pageUrl: string, mode: 'hls' | 'dash' | 'generic
       .forEach((u) => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.65)));
   });
   return results;
+}
+
+async function extractHtmlMedia(pageUrl: string, mode: 'hls' | 'dash' | 'generic'): Promise<DetectedMedia[]> {
+  const html = await fetchHtml(pageUrl);
+  return _scanHtml(html, pageUrl, mode);
+}
+
+// Fetch the page once and scan in HLS→DASH→generic priority order.
+// Avoids 2 redundant HTTP fetches vs calling extractHtmlMedia 3 times separately.
+async function extractHtmlMediaAll(pageUrl: string): Promise<DetectedMedia[]> {
+  const html = await fetchHtml(pageUrl);
+  for (const mode of ['hls', 'dash', 'generic'] as const) {
+    const found = _scanHtml(html, pageUrl, mode);
+    if (found.length > 0) return found;
+  }
+  return [];
 }
 
 function isLikelyNonContentMediaUrl(url: string): boolean {
@@ -941,10 +956,9 @@ export async function extractFromSocialUrl(pageUrl: string): Promise<DetectedMed
       ? [['Japanese generic extractor', () => extractJapaneseGeneric(pageUrl)] as [string, () => Promise<DetectedMedia[]>]]
       : []),
     ['WebView/runtime interception', () => Promise.resolve([])],
-    ['HLS manifest detection', () => extractHtmlMedia(pageUrl, 'hls')],
-    ['DASH manifest detection', () => extractHtmlMedia(pageUrl, 'dash')],
+    // Single page fetch; scans HLS→DASH→generic in priority order.
+    ['HTML media scan', () => extractHtmlMediaAll(pageUrl)],
     ['OG/meta tag extraction', () => extractOgVideo(pageUrl)],
-    ['generic media detection', () => extractHtmlMedia(pageUrl, 'generic')],
     ['browser playback fallback', () => Promise.resolve([])],
   ];
 
