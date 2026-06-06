@@ -467,6 +467,8 @@ async function extractFacebook(pageUrl: string): Promise<DetectedMedia[]> {
     const results: DetectedMedia[] = [];
 
     for (const re of [
+      /"playable_url_quality_hd"\s*:\s*"(https?:\/\/[^"]+)"/g,
+      /"playable_url"\s*:\s*"(https?:\/\/[^"]+)"/g,
       /"hd_src"\s*:\s*"(https?:\/\/[^"]+)"/g,
       /"sd_src"\s*:\s*"(https?:\/\/[^"]+)"/g,
       /"browser_native_hd_url"\s*:\s*"(https?:\/\/[^"]+)"/g,
