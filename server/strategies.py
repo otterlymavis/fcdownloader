@@ -774,6 +774,24 @@ def _strategy_page_embeds(
             except Exception:
                 pass
 
+    # ── Flowplayer data-clip / data-config JSON on div.flowplayer ────────────────
+    # Flowplayer stores clip sources in a JSON blob attached to the container div.
+    # Both v5/v6 (data-clip) and v7+ (data-options / data-config) patterns are covered.
+    _fp_json_patterns = [
+        r"""<(?:div|section|figure)\b[^>]*?data-(?:clip|options|config|player)='(\{[^']{0,3000}\})'""",
+        r'<(?:div|section|figure)\b[^>]*?data-(?:clip|options|config|player)="(\{[^"]{0,3000}\})"',
+    ]
+    for _fp_pat in _fp_json_patterns:
+        for fp_m in re.finditer(_fp_pat, html_text, re.IGNORECASE | re.DOTALL):
+            try:
+                fp_cfg = _json.loads(html_mod.unescape(fp_m.group(1)))
+                for src_obj in (fp_cfg.get("sources") or fp_cfg.get("clip", {}).get("sources") or []):
+                    src = src_obj.get("src") if isinstance(src_obj, dict) else None
+                    if src and src.startswith("http") and src not in embed_urls:
+                        embed_urls.append(src)
+            except Exception:
+                pass
+
     # ── Kaltura entry from page JS (kWidget.embed / flashvars) ──────────────────
     kw_partner = re.search(r'kWidget\.embed\s*\([^)]{0,800}?wid\s*[=:]\s*["\']_?(\d{4,})["\']', html_text)
     kw_entry   = re.search(r'kWidget\.embed\s*[^)]{0,800}?entry_?[Ii]d\s*[=:]\s*["\']([0-9_a-zA-Z-]{4,})["\']', html_text)
