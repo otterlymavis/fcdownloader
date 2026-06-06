@@ -50,6 +50,7 @@ URLS = {
     "Instagram":     ("https://www.instagram.com/reel/C7VgIvhsKgR/", "LOGIN-GATED: only public images without IG cookies"),
     "Threads":       ("https://www.threads.com/@zuck/post/C7VgIvhsKgR", "LOGIN-GATED: Threads requires auth from datacenter IPs"),
     "Twitter/X":     ("https://x.com/NASA/status/1902118174591521056", "vxtwitter API → direct video.twimg.com URL"),
+    "Bluesky":       ("https://bsky.app/profile/pfrazee.com/post/3jxwzcom3cs2b", "public AT Protocol API → video/images"),
     "Facebook":      ("https://www.facebook.com/watch/?v=10153231379946729", ""),
     "Reddit":        ("https://www.reddit.com/r/shiba/s/nC3HbrECzI", "server IP often blocked -> on-device path"),
     "Pinterest":     ("https://www.pinterest.com/pin/84301824269690044/", ""),

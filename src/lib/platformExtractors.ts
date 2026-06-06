@@ -955,11 +955,93 @@ async function extractRedgifs(pageUrl: string): Promise<DetectedMedia[]> {
   } catch { return []; }
 }
 
+async function extractBluesky(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const m = pageUrl.match(/\/profile\/([^/?#]+)\/post\/([A-Za-z0-9]+)/);
+    if (!m) return [];
+    const actor = m[1];
+    const rkey = m[2];
+
+    const hdrs = { 'User-Agent': DESKTOP_UA, Accept: 'application/json' };
+
+    // Resolve handle → DID (skip if actor is already a DID)
+    let did = actor.startsWith('did:') ? actor : '';
+    if (!did) {
+      const resolveRes = await fetch(
+        `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(actor)}`,
+        { headers: hdrs },
+      );
+      if (!resolveRes.ok) return [];
+      const resolved = await resolveRes.json() as { did?: string };
+      did = resolved.did ?? '';
+      if (!did) return [];
+    }
+
+    const atUri = encodeURIComponent(`at://${did}/app.bsky.feed.post/${rkey}`);
+    const threadRes = await fetch(
+      `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=${atUri}&depth=0&parentHeight=0`,
+      { headers: hdrs },
+    );
+    if (!threadRes.ok) return [];
+
+    const data = await threadRes.json() as {
+      thread?: {
+        post?: {
+          record?: { text?: string };
+          embed?: {
+            $type?: string;
+            playlist?: string;
+            thumbnail?: string;
+            aspectRatio?: { width: number; height: number };
+            images?: Array<{
+              fullsize?: string;
+              thumb?: string;
+              alt?: string;
+              aspectRatio?: { width: number; height: number };
+            }>;
+          };
+        };
+      };
+    };
+
+    const post = data.thread?.post;
+    if (!post) return [];
+    const embed = post.embed;
+    const embedType = embed?.['$type'] ?? '';
+    const title = (post.record?.text ?? '').slice(0, 200) || `Bluesky post ${rkey}`;
+
+    // Video
+    if (embedType.includes('video') && embed?.playlist?.startsWith('http')) {
+      const entry = makeItem(embed.playlist, pageUrl, undefined, 'social-extractor', 0.92);
+      if (embed.thumbnail) entry.thumbnailUrl = embed.thumbnail;
+      if (embed.aspectRatio) { entry.width = embed.aspectRatio.width; entry.height = embed.aspectRatio.height; }
+      return [entry];
+    }
+
+    // Images
+    if (embedType.includes('images') && embed?.images?.length) {
+      const results: DetectedMedia[] = [];
+      for (const img of embed.images) {
+        const url = img.fullsize ?? '';
+        if (!url.startsWith('http')) continue;
+        const entry = makeItem(url, pageUrl, 'Image', 'social-extractor', 0.9);
+        if (img.thumb) entry.thumbnailUrl = img.thumb;
+        if (img.aspectRatio) { entry.width = img.aspectRatio.width; entry.height = img.aspectRatio.height; }
+        results.push(entry);
+      }
+      return results;
+    }
+
+    return [];
+  } catch { return []; }
+}
+
 // ── Platform registry ─────────────────────────────────────────────
 const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[]> }> = [
   { re: /tiktok\.com\/@[^/]+\/(?:video|photo|item)\/\d+|tiktok\.com\/(?:t|v)\/[A-Za-z0-9]+|vm\.tiktok\.com\/[A-Za-z0-9]+/, fn: extractTikTok },
   { re: /(?:twitter|x)\.com\/[^/]+\/status\/\d+/,                                  fn: extractTwitter     },
   { re: /redgifs\.com\/(?:watch|ifr|gif)\/[A-Za-z0-9]+/i,                          fn: extractRedgifs     },
+  { re: /bsky\.app\/profile\/[^/?#]+\/post\/[A-Za-z0-9]+/,                         fn: extractBluesky     },
   { re: /instagram\.com\/(?:(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+|share\/(?:p|reel)\/[A-Za-z0-9_-]+)/, fn: extractInstagram   },
   { re: /threads\.net\/@[^/]+\/post\/[A-Za-z0-9_-]+/,                              fn: extractInstagram   },
   { re: /dailymotion\.com\/video\/[A-Za-z0-9]+/,                                    fn: extractDailymotion },

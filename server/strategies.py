@@ -300,6 +300,12 @@ def _strategy_platform_extractors(
                 return _result(name, True, media=info)
             return _result(name, False, reason="Redgifs extractor found no media")
 
+        if any(h in page_url for h in ("bsky.app",)):
+            info = extractors.extract_bluesky(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            return _result(name, False, reason="Bluesky extractor found no media")
+
         if any(h in page_url for h in ("twitter.com", "x.com", "t.co")):
             tw_url = page_url
             if "t.co" in page_url:
@@ -1244,6 +1250,7 @@ def run_extraction(
             "reddit.com", "redd.it",
             "twitter.com", "x.com", "t.co",
             "redgifs.com",
+            "bsky.app",
         ))
         platform_strategy = ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies))
         ytdlp_strategy = ("yt-dlp", lambda: _strategy_ydl(page_url, ydl_opts, False))

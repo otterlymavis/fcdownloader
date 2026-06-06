@@ -1324,3 +1324,112 @@ def extract_redgifs(page_url: str, cookies: str | None) -> dict[str, Any] | None
             "Authorization": f"Bearer {token}",
         }),
     }
+
+
+def extract_bluesky(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """
+    Extract media from Bluesky posts via the public AT Protocol AppView API.
+    Handles video posts (HLS) and image posts (CDN fullsize).
+    No auth required — uses public.api.bsky.app.
+    """
+    m = re.search(r"/profile/([^/?#]+)/post/([A-Za-z0-9]+)", page_url)
+    if not m:
+        return None
+    actor = m.group(1)
+    rkey = m.group(2)
+
+    hdrs = safe_headers({"User-Agent": _DESKTOP_UA, "Accept": "application/json"})
+
+    # Resolve handle → DID (skip if actor is already a DID)
+    if actor.startswith("did:"):
+        did = actor
+    else:
+        resolve_url = (
+            f"https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle"
+            f"?handle={urllib.parse.quote(actor, safe='')}"
+        )
+        body, status = fetch_with_retry(resolve_url, hdrs, timeout=10, max_retries=2)
+        if not body or status != 200:
+            print(f"[bluesky] handle resolve failed {status} for {actor!r}")
+            return None
+        try:
+            did = json.loads(body).get("did", "")
+        except Exception:
+            return None
+        if not did:
+            return None
+
+    at_uri = urllib.parse.quote(f"at://{did}/app.bsky.feed.post/{rkey}", safe="")
+    thread_url = (
+        f"https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread"
+        f"?uri={at_uri}&depth=0&parentHeight=0"
+    )
+    body, status = fetch_with_retry(thread_url, hdrs, timeout=12, max_retries=2)
+    if not body or status != 200:
+        print(f"[bluesky] thread fetch failed {status} for {rkey!r}")
+        return None
+
+    try:
+        data = json.loads(body)
+    except Exception:
+        return None
+
+    post = (data.get("thread") or {}).get("post") or {}
+    record = post.get("record") or {}
+    embed = post.get("embed") or {}
+    embed_type = embed.get("$type", "")
+    text = (record.get("text") or "").strip()
+    title = text[:200] if text else f"Bluesky post {rkey}"
+
+    # --- Video ---
+    if "video" in embed_type:
+        playlist = embed.get("playlist", "")
+        if playlist and playlist.startswith("http"):
+            result: dict[str, Any] = {
+                "id": rkey,
+                "url": playlist,
+                "ext": "mp4",
+                "title": title,
+                "protocol": "m3u8",
+            }
+            thumb = embed.get("thumbnail", "")
+            if thumb and thumb.startswith("http"):
+                result["thumbnail"] = thumb
+            aspect = embed.get("aspectRatio") or {}
+            if aspect.get("width") and aspect.get("height"):
+                result["width"] = aspect["width"]
+                result["height"] = aspect["height"]
+            print(f"[bluesky] video {rkey}: {playlist[:80]}")
+            return result
+
+    # --- Images ---
+    if "images" in embed_type:
+        images = embed.get("images") or []
+        entries: list[dict[str, Any]] = []
+        for i, img in enumerate(images):
+            fullsize = img.get("fullsize", "")
+            if not fullsize or not fullsize.startswith("http"):
+                continue
+            aspect = img.get("aspectRatio") or {}
+            entry: dict[str, Any] = {
+                "id": f"{rkey}_{i}",
+                "url": fullsize,
+                "ext": "jpg",
+                "title": img.get("alt") or title,
+            }
+            if aspect.get("width") and aspect.get("height"):
+                entry["width"] = aspect["width"]
+                entry["height"] = aspect["height"]
+            thumb = img.get("thumb", "")
+            if thumb and thumb.startswith("http"):
+                entry["thumbnail"] = thumb
+            entries.append(entry)
+        if not entries:
+            return None
+        print(f"[bluesky] images {rkey}: {len(entries)} item(s)")
+        if len(entries) == 1:
+            return entries[0]
+        return {"_type": "playlist", "id": rkey, "title": title, "entries": entries}
+
+    print(f"[bluesky] no media found for {rkey!r} (embed type: {embed_type!r})")
+    return None
