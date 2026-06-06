@@ -215,7 +215,7 @@ export default function SettingsSheet({
 
           {/* Quality */}
           <Text style={[styles.rowLabel, { color: t.ink, textAlign: isRTL ? 'right' : 'left' }]}>
-            Max Quality
+            {translate('quality', resolvedLanguage)}
           </Text>
           <View style={[styles.segmentRow, isRTL && { flexDirection: 'row-reverse' }]}>
             {QUALITY_OPTIONS.map(({ value, label }) => {
