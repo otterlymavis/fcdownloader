@@ -803,8 +803,6 @@ def _strategy_page_embeds(
     """
     import html as html_mod
     import re
-    import urllib.error
-    import urllib.request
 
     name = "embedded player detector"
 
@@ -822,14 +820,10 @@ def _strategy_page_embeds(
     if _html_cache is not None and page_url in _html_cache:
         html_text = _html_cache[page_url]
     else:
-        try:
-            req = urllib.request.Request(page_url, headers=req_headers)
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                html_text = resp.read().decode("utf-8", errors="replace")
-        except urllib.error.URLError as exc:
-            return _result(name, False, reason=f"fetch: {safe_text(exc)[:200]}")
-        except Exception as exc:  # noqa: BLE001
-            return _result(name, False, reason=safe_text(exc)[:300])
+        body, status = fetch_with_retry(page_url, req_headers, timeout=20, max_retries=1)
+        if not body:
+            return _result(name, False, reason=f"fetch failed (HTTP {status})")
+        html_text = body.decode("utf-8", errors="replace")
 
     embed_urls: list[str] = []
 

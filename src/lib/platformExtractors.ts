@@ -143,7 +143,7 @@ function _scanHtml(html: string, pageUrl: string, mode: 'hls' | 'dash' | 'generi
     mode === 'hls' ? [/(https?:\/\/[^"'\\<>\s]+?\.m3u8[^"'\\<>\s]*)/gi]
     : mode === 'dash' ? [/(https?:\/\/[^"'\\<>\s]+?\.mpd[^"'\\<>\s]*)/gi]
     : [
-        /(https?:\/\/[^"'\\<>\s]+?\.(?:m3u8|mpd|mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif)[^"'\\<>\s]*)/gi,
+        /(https?:\/\/[^"'\\<>\s]+?\.(?:m3u8|mpd|mp4|m4v|webm|mov|mp3|m4a|ogg|opus|aac|flac|wav|jpe?g|png|webp|gif|avif)[^"'\\<>\s]*)/gi,
         /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.(?:com|cn)|weibocdn\.com|xhscdn\.com|ci\.xiaohongshu\.com|biliimg\.com|hdslb\.com|pximg\.net|yimg\.jp|kakaocdn\.net)[^"'\\<>\s]*)/gi,
       ];
   patterns.forEach((re) => {
@@ -866,7 +866,8 @@ async function extractJapaneseGeneric(pageUrl: string): Promise<DetectedMedia[]>
     const patterns: RegExp[] = [
       /(https?:\/\/[^"'\\<>\s]+?\.m3u8[^"'\\<>\s]*)/gi,
       /(https?:\/\/[^"'\\<>\s]+?\.mpd[^"'\\<>\s]*)/gi,
-      /(https?:\/\/[^"'\\<>\s]+?\.mp4[^"'\\<>\s]*)/gi,
+      /(https?:\/\/[^"'\\<>\s]+?\.(?:mp4|m4v|webm|mov)[^"'\\<>\s]*)/gi,
+      /(https?:\/\/[^"'\\<>\s]+?\.(?:mp3|m4a|ogg|opus|aac)[^"'\\<>\s]*)/gi,
       /(https?:\/\/[^"'\\<>\s]+?\.(?:jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/gi,
       /(https?:\/\/[^"'\\<>\s]*(?:contents\.oricon\.co\.jp|img-mdpr\.freetls\.fastly\.net|mdpr\.jp\/photo|ogre\.natalie\.mu|img\.thetv\.jp|img\.mantan-web\.jp|img\.cinematoday\.jp)[^"'\\<>\s]*)/gi,
     ];
