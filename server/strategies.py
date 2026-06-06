@@ -412,6 +412,31 @@ def _strategy_html_detector(
             )
             for u in candidates[:80]
         ]
+
+        # For generic mode with multiple candidates, check for distinct videos vs quality variants.
+        # Two URLs share a "stem" if they have the same domain + path minus quality markers — if
+        # stems all match, they're the same video at different qualities; take just the first.
+        # If stems differ, the page has multiple distinct videos → return all as a gallery.
+        if mode == "generic" and len(candidates) >= 2:
+            import re as _re
+            _QUALITY_STRIP = _re.compile(
+                r'[_-](?:\d{3,4}p|\d+x\d+|hd|sd|low|high|mid|med|\d+k)(?=[_.-]|$)',
+                _re.IGNORECASE,
+            )
+
+            def _stem(u: str) -> str:
+                p = urllib.parse.urlparse(u)
+                path_stem = _QUALITY_STRIP.sub('', p.path)
+                path_stem = _re.sub(r'\.\w{2,5}$', '', path_stem)
+                return p.netloc + path_stem
+
+            stems = list(dict.fromkeys(_stem(u) for u in candidates))
+            if len(stems) >= 2:
+                entries = [_info_from_url(u, title) for u in candidates[:20]]
+                playlist = {"_type": "playlist", "entries": entries, "title": title}
+                source_audit.add_audit(playlist, audit)
+                return _result(name, True, media=playlist)
+
         info = _info_from_url(media_url, title)
         source_audit.add_audit(info, audit)
         return _result(name, True, media=info)
@@ -696,7 +721,8 @@ def _strategy_page_embeds(
         if fu.startswith(("http://", "https://")):
             embed_urls.append(fu)
 
-    # ── iframe embeds: YouTube, Vimeo, Brightcove, Dailymotion, Kaltura, Wistia ─
+    # ── iframe embeds: YouTube, Vimeo, Brightcove, Dailymotion, Kaltura, Wistia,
+    #    SoundCloud, Spreaker, Buzzsprout, Podbean, Anchor/Spotify, Rumble ────────
     for m in re.finditer(
         r'<iframe\b[^>]+?src=["\']'
         r'((?:https?:)?//(?:www\.)?'
@@ -707,7 +733,16 @@ def _strategy_page_embeds(
         r'|[a-z0-9-]+\.kaltura\.com/p/'
         r'|fast\.wistia\.(?:net|com)/embed/'
         r'|play\.vidyard\.com/'
-        r'|embed\.vidyard\.com/)[^"\']{4,})["\']',
+        r'|embed\.vidyard\.com/'
+        r'|w\.soundcloud\.com/player/'
+        r'|www\.spreaker\.com/widget/'
+        r'|www\.buzzsprout\.com/[0-9]+/episodes/'
+        r'|www\.podbean\.com/media/player/'
+        r'|anchor\.fm/[^"\']+/embed/'
+        r'|rumble\.com/embed/'
+        r'|player\.twitch\.tv/'
+        r'|clips\.twitch\.tv/embed'
+        r'|odysee\.com/\$/embed/)[^"\']{4,})["\']',
         html_text, re.IGNORECASE,
     ):
         u = html_mod.unescape(m.group(1))
@@ -768,20 +803,29 @@ def _strategy_page_embeds(
     # ── Video/audio URL keys in inline <script> JSON blobs ───────────────────────
     # Many video platforms (news, education, corporate) store the stream URL in a
     # JS variable with a predictable key name.  Scan every script block for those.
+    # Bare "src"/"source" keys are excluded — they are used for images throughout
+    # React/Next.js hydration data and have a very high false-positive rate.
     _VIDEO_KEY_RE = re.compile(
-        r'"(?:video|audio|media|stream|play|file|download|source|src)(?:Url|_url|URL|Src|_src|File|_file|Path|_path|Link)?"\s*:\s*"(https?://[^"]{10,})"',
+        r'"(?:video|audio|media|stream|play|file|download)(?:Url|_url|URL|Src|_src|File|_file|Path|_path|Link)?"\s*:\s*"(https?://[^"]{10,})"'
+        r'|"(?:source|src)(?:Url|_url|URL|Src|_src|File|_file|Path|_path|Link)+"\s*:\s*"(https?://[^"]{10,})"',
         re.IGNORECASE,
     )
+    # Skip URLs that are obviously images: known image extensions or image-serving CDN paths.
+    _IMG_EXT_RE = re.compile(r'\.(jpe?g|png|gif|webp|svg|avif|bmp|ico|tiff?)(?:[?#][^"]*)?$', re.IGNORECASE)
+    _IMG_PATH_RE = re.compile(r'/(?:thumbnails?|thumbs?|avatars?|photos?|images?|imgs?|icons?|logos?|banners?|posters?)/', re.IGNORECASE)
     for scr_m in re.finditer(r"<script\b[^>]*>(.*?)</script>", html_text, re.DOTALL | re.IGNORECASE):
         for key_m in _VIDEO_KEY_RE.finditer(scr_m.group(1)):
-            u = html_mod.unescape(key_m.group(1).replace("\\/", "/"))
+            raw = key_m.group(1) or key_m.group(2) or ""
+            u = html_mod.unescape(raw.replace("\\/", "/"))
+            if _IMG_EXT_RE.search(u) or _IMG_PATH_RE.search(u):
+                continue
             if u not in _direct_urls and u not in embed_urls:
                 _direct_urls.append(u)
 
     if _direct_urls:
         import html as _html_mod2
-        import urllib.parse as _urlparse
-        def _mk_info(u: str) -> dict[str, Any]:
+        page_title = _html_title(html_text)
+        def _mk_entry(u: str) -> dict[str, Any]:
             u = _html_mod2.unescape(u)
             ext = guess_ext_from_url(u) or (
                 "m3u8" if ".m3u8" in u.lower() else
@@ -789,21 +833,31 @@ def _strategy_page_embeds(
             )
             return {
                 "url": u, "ext": ext, "id": cache_key(u),
-                "title": _html_title(html_text),
+                "title": page_title,
                 "http_headers": req_headers,
                 "protocol": "m3u8_native" if ext == "m3u8" else "https",
             }
-        best = _direct_urls[0]
-        info = source_audit.add_audit(_mk_info(best), [
+        audit_entries = [
             source_audit.audit_entry(
                 strategy=name, source="rss-or-json-key", url=u,
-                selected=(u == best),
-                rejected_reason=None if u == best else "lower-ranked direct URL",
+                selected=(i == 0),
+                rejected_reason=None if i == 0 else "additional direct URL",
                 headers=req_headers,
             )
-            for u in _direct_urls[:20]
-        ])
-        return _result(name, True, media=info)
+            for i, u in enumerate(_direct_urls[:20])
+        ]
+        if len(_direct_urls) == 1:
+            info = source_audit.add_audit(_mk_entry(_direct_urls[0]), audit_entries)
+            return _result(name, True, media=info)
+        # Multiple direct URLs — return as a playlist so the client shows all items.
+        entries = [_mk_entry(u) for u in _direct_urls[:40]]
+        playlist = {
+            "_type": "playlist",
+            "entries": entries,
+            "title": page_title,
+        }
+        source_audit.add_audit(playlist, audit_entries)
+        return _result(name, True, media=playlist)
 
     if not embed_urls:
         return _result(name, False, reason="no embedded player signatures found in page HTML")
