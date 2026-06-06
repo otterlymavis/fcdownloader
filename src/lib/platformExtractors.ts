@@ -320,14 +320,10 @@ async function extractTwitter(pageUrl: string): Promise<DetectedMedia[]> {
         if (data.media_extended && data.media_extended.length > 0) {
           const results: DetectedMedia[] = [];
           data.media_extended.forEach(item => {
-            const ext = item.type === 'video' ? 'mp4' : item.type === 'gif' ? 'mp4' : 'jpg';
-            results.push(makeItem(item.url, pageUrl, item.type === 'photo' ? 'Image' : undefined, undefined, 0.9));
-            if (results[results.length - 1]) {
-              const last = results[results.length - 1];
-              if (item.thumbnail_url) last.thumbnailUrl = item.thumbnail_url;
-              if (item.size) { last.width = item.size.width; last.height = item.size.height; }
-              void ext;
-            }
+            const entry = makeItem(item.url, pageUrl, item.type === 'photo' ? 'Image' : undefined, undefined, 0.9);
+            if (item.thumbnail_url) entry.thumbnailUrl = item.thumbnail_url;
+            if (item.size) { entry.width = item.size.width; entry.height = item.size.height; }
+            results.push(entry);
           });
           return results;
         }

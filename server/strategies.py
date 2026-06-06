@@ -295,7 +295,19 @@ def _strategy_platform_extractors(
             return _result(name, False, reason="TikTok extractor found no media")
 
         if any(h in page_url for h in ("twitter.com", "x.com", "t.co")):
-            info = extractors.extract_twitter(page_url, cookies)
+            tw_url = page_url
+            if "t.co" in page_url:
+                # t.co is Twitter's own link shortener — follow the redirect to the
+                # real tweet URL before passing to the extractor.
+                try:
+                    import urllib.request as _ur
+                    req = _ur.Request(page_url, headers={"User-Agent": MOBILE_UA}, method="HEAD")
+                    with _ur.urlopen(req, timeout=8) as r:
+                        if r.url and r.url != page_url:
+                            tw_url = r.url
+                except Exception:
+                    pass
+            info = extractors.extract_twitter(tw_url, cookies)
             if info:
                 return _result(name, True, media=info)
             return _result(name, False, reason="Twitter extractor found no media")
