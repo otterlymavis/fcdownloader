@@ -622,10 +622,14 @@ _API_PROBE_TEMPLATES = (
     "/api/v2/{resource}/{id}",
     "/api/v1/{resource}/{id}",
     "/api/{resource}/{id}",
+    "/api/v1/{resource}/{id}.json",
+    "/{resource}/{id}.json",
+    "/wp-json/wp/v2/{resource}/{id}",
 )
 _API_RESOURCE_NAMES = ("notes", "articles", "posts", "items", "contents", "media", "entry")
 _API_MEDIA_KEY_RE = re.compile(
-    r'"(?:image|photo|thumbnail|cover|src|video|media)(?:_url|_src|Link|Url|Src|Path)?"\s*:\s*"(https?://[^"]{10,})"',
+    r'"(?:image|photo|thumbnail|cover|src|video|media|file|download|attachment|original)'
+    r'(?:_url|_src|Link|Url|Src|Path|File|Download)?"\s*:\s*"(https?://[^"]{10,})"',
     re.IGNORECASE,
 )
 _API_SKIP_TOKENS = ("icon", "logo", "avatar", "sprite", "favicon", "placeholder", "/assets/", "/static/")
