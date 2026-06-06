@@ -10,6 +10,9 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# Force yt-dlp upgrade on every build to avoid stale Docker-layer caches.
+# requirements.txt pins to master but pip skips reinstall if the layer is cached.
+RUN pip install --no-cache-dir --upgrade yt-dlp
 
 # Copy all server modules (main.py + service layers)
 COPY main.py config.py models.py registry.py classifier.py auth.py \

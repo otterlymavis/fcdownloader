@@ -150,6 +150,21 @@ app.add_middleware(
     expose_headers=["Content-Disposition", "Content-Length", "X-Request-ID"],
 )
 
+# ── Startup version log ───────────────────────────────────────────────────────
+
+def _log_startup_versions() -> None:
+    try:
+        import subprocess as _sp
+        ffmpeg_line = _sp.check_output(
+            ["ffmpeg", "-version"], text=True, stderr=_sp.DEVNULL
+        ).split("\n")[0]
+    except Exception:
+        ffmpeg_line = "not found"
+    print(f"[startup] yt-dlp={YT_DLP_VERSION} | {ffmpeg_line}", flush=True)
+
+_log_startup_versions()
+
+
 # ── Cache ─────────────────────────────────────────────────────────────────────
 
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}

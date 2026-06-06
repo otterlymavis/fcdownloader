@@ -299,7 +299,17 @@ def _strategy_platform_extractors(
                 return _result(name, True, media=info)
             return _result(name, False, reason="Reddit extractor found no media")
 
+        if "note.com" in page_url:
+            info = extractors.extract_note(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            return _result(name, False, reason="note.com extractor found no media")
+
         info = extractors.extract_curated_site(page_url, cookies)
+        if info:
+            return _result(name, True, media=info)
+
+        info = extractors.extract_api_probe(page_url, cookies)
         if info:
             return _result(name, True, media=info)
 

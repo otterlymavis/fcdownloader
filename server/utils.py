@@ -10,8 +10,11 @@ import hashlib
 import os
 import re
 import sys
+import time as _time
 import unicodedata
+import urllib.error
 import urllib.parse
+import urllib.request
 
 
 # ── UTF-8 runtime setup ───────────────────────────────────────────────────────
@@ -186,6 +189,40 @@ def content_disposition_any(filename: str, fallback: str = "download") -> str:
 
 
 # ── Media type helpers ────────────────────────────────────────────────────────
+
+
+def fetch_with_retry(
+    url: str,
+    headers: dict[str, str],
+    timeout: int = 15,
+    max_retries: int = 2,
+    backoff: float = 1.0,
+) -> tuple[bytes | None, int]:
+    """Fetch *url* with exponential back-off on 429/503 and transient errors.
+
+    Returns ``(body_bytes, http_status)``.  On success status is 200 (or whatever
+    the server returned).  On unrecoverable failure returns ``(None, error_code)``
+    where *error_code* is the HTTP status (4xx/5xx) or 0 for network errors.
+
+    Never retries on 404 (gallery-end signal) or other 4xx errors — only on
+    rate-limit / server-overload (429, 503) and transient network failures.
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read(), resp.status
+        except urllib.error.HTTPError as exc:
+            if exc.code in (429, 503) and attempt < max_retries:
+                _time.sleep(backoff * (2 ** attempt))
+                continue
+            return None, exc.code
+        except (urllib.error.URLError, TimeoutError, OSError):
+            if attempt < max_retries:
+                _time.sleep(backoff * (2 ** attempt))
+                continue
+            return None, 0
+    return None, 0
 
 
 def looks_like_hls(url: str, protocol: str | None) -> bool:

@@ -30,6 +30,7 @@ import languages
 from config import MOBILE_UA
 from utils import (
     cache_key,
+    fetch_with_retry,
     normalize_url,
     safe_headers,
     safe_text,
@@ -213,6 +214,34 @@ _CURATED_SITE_PROFILES: tuple[dict[str, Any], ...] = (
             "res.cloudinary.com", "webaccel.jp", "ismcdn.jp", "img.cf.47news.jp",
         ),
     },
+    {
+        "label": "LINE Blog",
+        "hosts": ("lineblog.me",),
+        "referer": "https://lineblog.me/",
+        "language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("obs.line-scdn.net", "lineblog.me", "obs-beta.line-scdn.net"),
+    },
+    {
+        "label": "Hatena Blog",
+        "hosts": ("hatenablog.com", "hatenablog.jp", "hatenadiary.com", "hatenadiary.jp", "hatena.ne.jp"),
+        "referer": "https://hatenablog.com/",
+        "language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("cdn-ak.f.st-hatena.com", "cdn.hatena.ne.jp", "st-hatena.com", "hatena.ne.jp"),
+    },
+    {
+        "label": "FC2 Blog",
+        "hosts": ("blog.fc2.com",),
+        "referer": "https://fc2.com/",
+        "language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("blog-imgs", "fc2.com"),
+    },
+    {
+        "label": "Gyazo",
+        "hosts": ("gyazo.com",),
+        "referer": "https://gyazo.com/",
+        "language": "en-US,en;q=0.9",
+        "cdn": ("i.gyazo.com", "gyazo.com"),
+    },
 )
 
 
@@ -386,29 +415,25 @@ def extract_modelpress(page_url: str, cookies: str | None) -> dict[str, Any] | N
     page_url = normalize_url(page_url)
 
     def _fetch_html(url: str) -> str | None:
-        try:
-            req = urllib.request.Request(
-                url,
-                headers=safe_headers({
-                    "User-Agent": _WEIBO_DESKTOP_UA,
-                    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-                    "Accept-Language": languages.accept_language_for_url(
-                        url,
-                        "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
-                    ),
-                    "Referer": _MODELPRESS_REFERER,
-                    **({"Cookie": cookies} if cookies else {}),
-                }),
-            )
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                body = resp.read()
-                if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
-                    import gzip
-                    body = gzip.decompress(body)
-                return _decode_html_body(body, resp.headers)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[modelpress] fetch failed for {url}: {str(exc)[:200]}")
+        body, status = fetch_with_retry(
+            url,
+            safe_headers({
+                "User-Agent": _WEIBO_DESKTOP_UA,
+                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                "Accept-Language": languages.accept_language_for_url(
+                    url, "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+                ),
+                "Referer": _MODELPRESS_REFERER,
+                **({"Cookie": cookies} if cookies else {}),
+            }),
+        )
+        if not body:
+            print(f"[modelpress] fetch failed for {url}: HTTP {status}")
             return None
+        if body[:2] == b"\x1f\x8b":
+            import gzip
+            body = gzip.decompress(body)
+        return _decode_html_body(body, None)
 
     html_text = _fetch_html(page_url)
     if not html_text:
@@ -576,6 +601,215 @@ def extract_modelpress(page_url: str, cookies: str | None) -> dict[str, Any] | N
         "extractor": "modelpress",
     }
 
+# ── Generic API probe (SPA / JS-rendered sites) ──────────────────────────────
+
+_API_PROBE_TEMPLATES = (
+    "/api/v3/{resource}/{id}",
+    "/api/v2/{resource}/{id}",
+    "/api/v1/{resource}/{id}",
+    "/api/{resource}/{id}",
+)
+_API_RESOURCE_NAMES = ("notes", "articles", "posts", "items", "contents", "media", "entry")
+_API_MEDIA_KEY_RE = re.compile(
+    r'"(?:image|photo|thumbnail|cover|src|video|media)(?:_url|_src|Link|Url|Src|Path)?"\s*:\s*"(https?://[^"]{10,})"',
+    re.IGNORECASE,
+)
+_API_SKIP_TOKENS = ("icon", "logo", "avatar", "sprite", "favicon", "placeholder", "/assets/", "/static/")
+
+
+def extract_api_probe(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """Probe a site's own REST API for media when the page is JS-rendered.
+
+    Extracts a numeric or short-slug ID from the URL path, then tries common
+    API path patterns (``/api/v1/{resource}/{id}``, etc.).  Returns the first
+    successful hit that contains a usable image or video URL.
+
+    Capped at 6 probe attempts with a 5 s timeout each to stay fast.
+    """
+    page_url = normalize_url(page_url)
+    parsed = urllib.parse.urlsplit(page_url)
+    path_parts = [p for p in parsed.path.split("/") if p]
+    if not path_parts:
+        return None
+
+    # Extract candidate (resource, id) pairs from the URL path
+    # e.g. /articles/12345 → ("articles", "12345"); /n/abc123 → ("n", "abc123")
+    candidates: list[tuple[str, str]] = []
+    for i, part in enumerate(path_parts):
+        if re.fullmatch(r"[a-z0-9_-]{3,80}", part, re.IGNORECASE) and i > 0:
+            candidates.append((path_parts[i - 1], part))
+    if not candidates:
+        last = path_parts[-1]
+        if re.fullmatch(r"[a-z0-9_-]{3,80}", last, re.IGNORECASE):
+            candidates.append(("items", last))
+
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    hdrs = safe_headers({
+        "User-Agent": _WEIBO_DESKTOP_UA,
+        "Accept": "application/json, */*;q=0.8",
+        "Referer": origin + "/",
+        **({"Cookie": cookies} if cookies else {}),
+    })
+
+    probes_tried = 0
+    for resource, item_id in candidates:
+        for template in _API_PROBE_TEMPLATES:
+            if probes_tried >= 6:
+                break
+            api_path = template.format(resource=resource, id=item_id)
+            api_url = origin + api_path
+            probes_tried += 1
+
+            body, status = fetch_with_retry(api_url, hdrs, timeout=5, max_retries=0)
+            if not body or status not in (200, 201):
+                continue
+            try:
+                text = body.decode("utf-8", errors="replace")
+                # Must look like JSON
+                stripped = text.lstrip()
+                if not stripped.startswith(("{", "[")):
+                    continue
+            except Exception:
+                continue
+
+            found_urls: list[str] = []
+            for mm in _API_MEDIA_KEY_RE.finditer(text):
+                url = html.unescape(mm.group(1).replace("\\/", "/"))
+                if any(t in url.lower() for t in _API_SKIP_TOKENS):
+                    continue
+                if url not in found_urls:
+                    found_urls.append(url)
+
+            if not found_urls:
+                continue
+
+            # Try to extract a title from the JSON
+            title_m = re.search(r'"(?:title|name|subject)"\s*:\s*"([^"]{2,200})"', text)
+            title = html.unescape(title_m.group(1)) if title_m else parsed.netloc
+
+            print(f"[api-probe] {api_url} → {len(found_urls)} URL(s)")
+            h = {"User-Agent": _WEIBO_DESKTOP_UA, "Referer": page_url}
+            entries = []
+            for idx, url in enumerate(found_urls[:40]):
+                ext = guess_ext_from_url(url) or "jpg"
+                entries.append({
+                    "id": cache_key(url),
+                    "url": url,
+                    "ext": ext,
+                    "protocol": "https",
+                    "http_headers": h,
+                    "title": f"{title} #{idx + 1}" if len(found_urls) > 1 else title,
+                    "thumbnail": url if ext not in ("mp4", "m3u8", "mpd") else None,
+                    "extractor": "api-probe",
+                })
+            if len(entries) == 1:
+                return {**entries[0], "title": title}
+            return {
+                "_type": "playlist",
+                "entries": entries,
+                "title": title,
+                "thumbnail": found_urls[0],
+                "id": cache_key(page_url),
+                "extractor": "api-probe",
+            }
+
+    return None
+
+
+# ── note.com ─────────────────────────────────────────────────────────────────
+
+
+def extract_note(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """Extract images/video from note.com articles via the public REST API.
+
+    note.com exposes ``GET /api/v3/notes/<key>`` which returns structured JSON
+    even for public articles without authentication.  The note key is the last
+    path segment of the article URL (e.g. ``n1234abcd``).
+    """
+    page_url = normalize_url(page_url)
+    m = re.search(r"/n/([A-Za-z0-9_-]{5,40})(?:[/?#]|$)", page_url)
+    if not m:
+        return None
+    key = m.group(1)
+    parsed = urllib.parse.urlsplit(page_url)
+    api_url = f"https://note.com/api/v3/notes/{key}"
+
+    body, status = fetch_with_retry(
+        api_url,
+        safe_headers({
+            "User-Agent": _WEIBO_DESKTOP_UA,
+            "Accept": "application/json",
+            "Referer": f"{parsed.scheme}://{parsed.netloc}/",
+            **({"Cookie": cookies} if cookies else {}),
+        }),
+        timeout=10,
+    )
+    if not body or status not in (200, 201):
+        return None
+
+    try:
+        data = json.loads(body.decode("utf-8", errors="replace"))
+    except Exception:
+        return None
+
+    note = data.get("data", {})
+    title = note.get("name") or note.get("title") or "note"
+    headers = {"User-Agent": _WEIBO_DESKTOP_UA, "Referer": page_url}
+    entries: list[dict[str, Any]] = []
+
+    # Image gallery: body.pictures[]
+    pictures = note.get("body", {}).get("pictures") or []
+    for idx, pic in enumerate(pictures):
+        url = pic.get("url") or pic.get("src") or ""
+        if not url or not url.startswith("http"):
+            continue
+        ext = guess_ext_from_url(url) or "jpg"
+        entries.append({
+            "id": cache_key(url),
+            "url": url,
+            "ext": ext,
+            "protocol": "https",
+            "http_headers": headers,
+            "title": f"{title} #{idx + 1}" if len(pictures) > 1 else title,
+            "thumbnail": url,
+            "extractor": "note",
+        })
+
+    # Embedded video
+    if not entries:
+        embed = note.get("body", {}).get("videos") or []
+        for vid in embed:
+            url = vid.get("url") or vid.get("src") or ""
+            if url and url.startswith("http"):
+                ext = guess_ext_from_url(url) or "mp4"
+                entries.append({
+                    "id": cache_key(url),
+                    "url": url,
+                    "ext": ext,
+                    "protocol": "https",
+                    "http_headers": headers,
+                    "title": title,
+                    "thumbnail": note.get("eyecatch_image_url"),
+                    "extractor": "note",
+                })
+                break
+
+    if not entries:
+        return None
+
+    print(f"[note] {len(entries)} media item(s) for key={key}")
+    if len(entries) == 1:
+        return {**entries[0], "title": title}
+    return {
+        "_type": "playlist",
+        "entries": entries,
+        "title": title,
+        "thumbnail": entries[0].get("thumbnail"),
+        "id": cache_key(page_url),
+        "extractor": "note",
+    }
+
+
 # ── Trilltrill ────────────────────────────────────────────────────────────────
 
 
@@ -594,28 +828,22 @@ def extract_trilltrill(page_url: str, cookies: str | None) -> dict[str, Any] | N
     start_photo = int(m.group(2)) if m.group(2) else 1
 
     def _fetch(url: str) -> tuple[str | None, int]:
-        try:
-            req = urllib.request.Request(
-                url,
-                headers=safe_headers({
-                    "User-Agent": _WEIBO_DESKTOP_UA,
-                    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-                    "Accept-Language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
-                    "Referer": "https://trilltrill.jp/",
-                    **({"Cookie": cookies} if cookies else {}),
-                }),
-            )
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                body = resp.read()
-                if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
-                    import gzip
-                    body = gzip.decompress(body)
-                return _decode_html_body(body, resp.headers), 200
-        except urllib.error.HTTPError as exc:
-            return None, exc.code
-        except Exception as exc:  # noqa: BLE001
-            print(f"[trilltrill] fetch failed for {url}: {str(exc)[:200]}")
-            return None, 0
+        body, status = fetch_with_retry(
+            url,
+            safe_headers({
+                "User-Agent": _WEIBO_DESKTOP_UA,
+                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                "Accept-Language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+                "Referer": "https://trilltrill.jp/",
+                **({"Cookie": cookies} if cookies else {}),
+            }),
+        )
+        if not body:
+            return None, status
+        if body[:2] == b"\x1f\x8b":
+            import gzip
+            body = gzip.decompress(body)
+        return _decode_html_body(body, None), 200
 
     def _photo_link(html_text: str) -> str | None:
         m2 = re.search(r"page_view_content\s*=\s*(\{[^;]+\})", html_text)
@@ -751,30 +979,24 @@ def extract_article_photo_gallery(page_url: str, cookies: str | None) -> dict[st
         return not any(t in lowered for t in _SKIP_TOKENS)
 
     def _fetch_html(url: str) -> tuple[str | None, int]:
-        try:
-            req = urllib.request.Request(
-                url,
-                headers=safe_headers({
-                    "User-Agent": _WEIBO_DESKTOP_UA,
-                    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-                    "Accept-Language": languages.accept_language_for_url(
-                        url, "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5"
-                    ),
-                    "Referer": origin,
-                    **({"Cookie": cookies} if cookies else {}),
-                }),
-            )
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                body = resp.read()
-                if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
-                    import gzip
-                    body = gzip.decompress(body)
-                return _decode_html_body(body, resp.headers), 200
-        except urllib.error.HTTPError as exc:
-            return None, exc.code
-        except Exception as exc:  # noqa: BLE001
-            print(f"[article-photo-gallery] fetch failed for {url}: {str(exc)[:200]}")
-            return None, 0
+        body, status = fetch_with_retry(
+            url,
+            safe_headers({
+                "User-Agent": _WEIBO_DESKTOP_UA,
+                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                "Accept-Language": languages.accept_language_for_url(
+                    url, "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5"
+                ),
+                "Referer": origin,
+                **({"Cookie": cookies} if cookies else {}),
+            }),
+        )
+        if not body:
+            return None, status
+        if body[:2] == b"\x1f\x8b":
+            import gzip
+            body = gzip.decompress(body)
+        return _decode_html_body(body, None), 200
 
     def _best_image(html_text: str) -> str | None:
         # 1. Named JS keys: *_photo, *_image, *_picture, *_img, *_link
@@ -881,11 +1103,34 @@ def extract_article_photo_gallery(page_url: str, cookies: str | None) -> dict[st
     if not first_html or status == 404:
         return None
 
+    def _collect_images(html_text: str) -> list[str]:
+        """Return all article images found in *html_text* (deduplicated)."""
+        imgs: list[str] = []
+        # Reuse _best_image logic but collect all, not just the first
+        for script_m in re.finditer(
+            r"<script[^>]*>(.*?)</script>", html_text, re.DOTALL | re.IGNORECASE
+        ):
+            script = script_m.group(1)
+            if not re.search(r"photo|image|picture", script, re.IGNORECASE):
+                continue
+            for key_m in re.finditer(
+                r'"(?:[a-z_]*(?:photo|image|picture|img|link)[a-z_]*)"\s*:\s*"(https?://[^"]{10,})"',
+                script, re.IGNORECASE,
+            ):
+                url = html.unescape(key_m.group(1).replace("\\/", "/"))
+                if _ok(url) and url not in imgs:
+                    imgs.append(url)
+        if not imgs:
+            single = _best_image(html_text)
+            if single:
+                imgs.append(single)
+        return imgs
+
     title = _page_title(first_html)
     found: list[str] = []
-    first_img = _best_image(first_html)
-    if first_img:
-        found.append(first_img)
+    for img in _collect_images(first_html):
+        if img not in found:
+            found.append(img)
 
     photo_idx = start_idx + 1
     consecutive_fails = 0
@@ -897,10 +1142,25 @@ def extract_article_photo_gallery(page_url: str, cookies: str | None) -> dict[st
             photo_idx += 1
             continue
         consecutive_fails = 0
-        img = _best_image(html_text)
-        if img and img not in found:
-            found.append(img)
+        for img in _collect_images(html_text):
+            if img not in found:
+                found.append(img)
         photo_idx += 1
+
+    # Query-param pagination fallback — probe ?page=2, ?page=3, etc.
+    if len(found) <= 1:
+        for param in ("page", "page_idx", "p"):
+            for page_num in range(2, 6):
+                probe_url = base_url + f"?{param}={page_num}"
+                html_text, status = _fetch_html(probe_url)
+                if status == 404 or not html_text:
+                    break
+                new_imgs = [u for u in _collect_images(html_text) if u not in found]
+                if not new_imgs:
+                    break
+                found.extend(new_imgs)
+            if len(found) > 1:
+                break
 
     if not found:
         return None
@@ -945,12 +1205,15 @@ def extract_generic_media_images(page_url: str, cookies: str | None) -> dict[str
     parsed = urllib.parse.urlsplit(page_url)
     path = parsed.path
 
-    # Only activate for content pages with a recognisable article/post path
-    if not re.search(
+    # Only activate for content pages — keyword path, bare numeric ID, or short slug
+    _GENERIC_CONTENT_RE = re.compile(
         r"/(?:articles?|posts?|news|stories?|entries?|photos?|gallery|"
-        r"pictures?|blog|content|media|topic|item|detail)/[a-z0-9]",
-        path, re.IGNORECASE,
-    ):
+        r"pictures?|blog|content|media|topic|item|detail|p)/[a-z0-9]"
+        r"|/\d{4,}(?:/|$)"
+        r"|/[a-z][a-z0-9_-]{3,60}(?:/|$)(?!(?:api|static|assets|cdn|wp-content|images|css|js|fonts)/)",
+        re.IGNORECASE,
+    )
+    if not _GENERIC_CONTENT_RE.search(path):
         return None
 
     # Skip URLs already handled by extract_article_photo_gallery
@@ -985,28 +1248,24 @@ def extract_generic_media_images(page_url: str, cookies: str | None) -> dict[str
     origin = parsed.scheme + "://" + host + "/"
 
     def _fetch_html(url: str) -> str | None:
-        try:
-            req = urllib.request.Request(
-                url,
-                headers=safe_headers({
-                    "User-Agent": _WEIBO_DESKTOP_UA,
-                    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-                    "Accept-Language": languages.accept_language_for_url(
-                        url, "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5"
-                    ),
-                    "Referer": origin,
-                    **({"Cookie": cookies} if cookies else {}),
-                }),
-            )
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                body = resp.read()
-                if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
-                    import gzip
-                    body = gzip.decompress(body)
-                return _decode_html_body(body, resp.headers)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[generic-media-images] fetch failed for {url}: {str(exc)[:200]}")
+        body, status = fetch_with_retry(
+            url,
+            safe_headers({
+                "User-Agent": _WEIBO_DESKTOP_UA,
+                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                "Accept-Language": languages.accept_language_for_url(
+                    url, "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5"
+                ),
+                "Referer": origin,
+                **({"Cookie": cookies} if cookies else {}),
+            }),
+        )
+        if not body:
             return None
+        if body[:2] == b"\x1f\x8b":
+            import gzip
+            body = gzip.decompress(body)
+        return _decode_html_body(body, None)
 
     html_text = _fetch_html(page_url)
     if not html_text:
@@ -1158,29 +1417,26 @@ def extract_naver_blog(page_url: str, cookies: str | None) -> dict[str, Any] | N
         )
 
     def _fetch_html(url: str, referer: str = _NAVER_BLOG_REFERER) -> str | None:
-        try:
-            req = urllib.request.Request(
-                url,
-                headers=safe_headers({
-                    "User-Agent": _WEIBO_DESKTOP_UA,
-                    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-                    "Accept-Language": languages.accept_language_for_url(
-                        url,
-                        "ko-KR,ko;q=0.9,en-US;q=0.6,en;q=0.5",
-                    ),
-                    "Referer": referer,
-                    **({"Cookie": cookies} if cookies else {}),
-                }),
-            )
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                body = resp.read()
-                if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
-                    import gzip
-                    body = gzip.decompress(body)
-                return _decode_html_body(body, resp.headers)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[naver-blog] fetch failed for {url}: {str(exc)[:200]}")
+        body, status = fetch_with_retry(
+            url,
+            safe_headers({
+                "User-Agent": _WEIBO_DESKTOP_UA,
+                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                "Accept-Language": languages.accept_language_for_url(
+                    url, "ko-KR,ko;q=0.9,en-US;q=0.6,en;q=0.5",
+                ),
+                "Referer": referer,
+                **({"Cookie": cookies} if cookies else {}),
+            }),
+            timeout=20,
+        )
+        if not body:
+            print(f"[naver-blog] fetch failed for {url}: HTTP {status}")
             return None
+        if body[:2] == b"\x1f\x8b":
+            import gzip
+            body = gzip.decompress(body)
+        return _decode_html_body(body, None)
 
     def _postview_url(html_text: str) -> str | None:
         m = re.search(
@@ -1540,26 +1796,24 @@ def extract_curated_site(
                 url,
                 flags=re.I,
             )
-        try:
-            req = urllib.request.Request(
-                fetch_url,
-                headers=safe_headers({
-                    "User-Agent": _WEIBO_DESKTOP_UA,
-                    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-                    "Accept-Language": languages.accept_language_for_url(url, profile["language"]),
-                    "Referer": referer,
-                    **({"Cookie": cookies} if cookies else {}),
-                }),
-            )
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                body = resp.read()
-                if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
-                    import gzip
-                    body = gzip.decompress(body)
-                return _decode_html_body(body, resp.headers)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[curated-site] fetch failed for {fetch_url}: {str(exc)[:200]}")
+        body, status = fetch_with_retry(
+            fetch_url,
+            safe_headers({
+                "User-Agent": _WEIBO_DESKTOP_UA,
+                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                "Accept-Language": languages.accept_language_for_url(url, profile["language"]),
+                "Referer": referer,
+                **({"Cookie": cookies} if cookies else {}),
+            }),
+            timeout=20,
+        )
+        if not body:
+            print(f"[curated-site] fetch failed for {fetch_url}: HTTP {status}")
             return None
+        if body[:2] == b"\x1f\x8b":
+            import gzip
+            body = gzip.decompress(body)
+        return _decode_html_body(body, None)
 
     if page_html and profile["label"] == "Oricon":
         info = _extract_oricon_gallery(page_url, cookies, _fetch_html, page_html)
@@ -1609,6 +1863,13 @@ def extract_curated_site(
         re.IGNORECASE,
     )
 
+    cdn_tokens = tuple(token.lower() for token in profile["cdn"])
+    # Extensionless CDN URLs (Fastly Image Optimizer, Cloudflare Images, etc.)
+    extensionless_re = re.compile(
+        r"https?://(?:" + "|".join(re.escape(t) for t in cdn_tokens) + r")[^\"'<>\s\\]{10,}",
+        re.IGNORECASE,
+    ) if cdn_tokens else None
+
     candidates: list[str] = []
     for text in (scan_text, _decode(scan_text)):
         for m in media_re.finditer(text):
@@ -1624,11 +1885,18 @@ def extract_curated_site(
                 candidates.append(raw)
             elif re.search(r"\.(?:jpg|jpeg|png|webp|gif|avif|mp4|m3u8|mpd)(?:[?#]|$)", raw, re.IGNORECASE):
                 candidates.append(raw)
+        # Second pass: extensionless CDN URLs
+        if extensionless_re:
+            for m in extensionless_re.finditer(text):
+                url = _decode(m.group(0)).strip().strip('"\'(),;')
+                if (re.search(r"\.(?:jpg|jpeg|png|webp|gif|avif)(?:[?#]|$)", url, re.I)
+                        or re.search(r"[?&](?:format|f|ext)=(?:jpg|jpeg|png|webp|gif|avif)", url, re.I)
+                        or re.search(r"/(?:image|photo|img|media|picture)/", url, re.I)):
+                    candidates.append(url)
 
     if thumb:
         candidates.insert(0, _decode(thumb))
 
-    cdn_tokens = tuple(token.lower() for token in profile["cdn"])
     found: list[str] = []
     seen: set[str] = set()
     for candidate in candidates:
