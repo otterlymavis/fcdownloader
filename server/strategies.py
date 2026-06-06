@@ -596,6 +596,7 @@ def _scan_media_urls(html_text: str, mode: str) -> list[str]:
         patterns.append(r'https?:\\?/\\?/[^"\'<>\s\\]+?\.mpd[^"\'<>\s\\]*')
     if mode in {"generic"}:
         patterns.append(r'https?:\\?/\\?/[^"\'<>\s\\]+?\.(?:mp4|m4v|webm|mov)[^"\'<>\s\\]*')
+        patterns.append(r'https?:\\?/\\?/[^"\'<>\s\\]+?\.(?:mp3|m4a|aac|ogg|flac|opus)[^"\'<>\s\\]*')
         # HTML5 <video src="...">, <source src="...">, <audio src="..."> — captures the
         # URL even when it lacks a file extension (common with signed CDN URLs).
         patterns.append(
@@ -608,7 +609,7 @@ def _scan_media_urls(html_text: str, mode: str) -> list[str]:
             r'(https?://[^"\'<>\s]{10,})["\']'
         )
     if mode == "og":
-        _vt = r'(?:og:video(?::url)?|og:video:secure_url|twitter:player:stream)'
+        _vt = r'(?:og:video(?::url)?|og:video:secure_url|twitter:player:stream|og:audio(?::url)?)'
         # property=… then content=… (most common ordering)
         patterns.append(
             r'<meta\s[^>]*?(?:property|name)\s*=\s*["\']' + _vt + r'["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']'
@@ -751,6 +752,58 @@ def _strategy_page_embeds(
             f"https://cdnapisec.kaltura.com/p/{pid}/sp/{pid}00/"
             f"embedIframeJs/uiconf_id/0/partner_id/{pid}?iframeembed=true&entry_id={eid}"
         )
+
+    # ── RSS/Podcast: <enclosure> and <media:content> direct audio/video URLs ─────
+    # Covers podcast episode pages that embed or return RSS-format markup, and
+    # podcast feed URLs (.rss / .xml) pasted directly.
+    _direct_urls: list[str] = []
+    for enc_m in re.finditer(
+        r'<(?:enclosure|media:content)\b[^>]*?\burl=["\']([^"\']{10,})["\']',
+        html_text, re.IGNORECASE,
+    ):
+        u = html_mod.unescape(enc_m.group(1))
+        if u.startswith("http") and u not in _direct_urls:
+            _direct_urls.append(u)
+
+    # ── Video/audio URL keys in inline <script> JSON blobs ───────────────────────
+    # Many video platforms (news, education, corporate) store the stream URL in a
+    # JS variable with a predictable key name.  Scan every script block for those.
+    _VIDEO_KEY_RE = re.compile(
+        r'"(?:video|audio|media|stream|play|file|download|source|src)(?:Url|_url|URL|Src|_src|File|_file|Path|_path|Link)?"\s*:\s*"(https?://[^"]{10,})"',
+        re.IGNORECASE,
+    )
+    for scr_m in re.finditer(r"<script\b[^>]*>(.*?)</script>", html_text, re.DOTALL | re.IGNORECASE):
+        for key_m in _VIDEO_KEY_RE.finditer(scr_m.group(1)):
+            u = html_mod.unescape(key_m.group(1).replace("\\/", "/"))
+            if u not in _direct_urls and u not in embed_urls:
+                _direct_urls.append(u)
+
+    if _direct_urls:
+        import html as _html_mod2
+        import urllib.parse as _urlparse
+        def _mk_info(u: str) -> dict[str, Any]:
+            u = _html_mod2.unescape(u)
+            ext = guess_ext_from_url(u) or (
+                "m3u8" if ".m3u8" in u.lower() else
+                "mp3"  if any(x in u.lower() for x in (".mp3", "/mp3", "audio/mpeg")) else "mp4"
+            )
+            return {
+                "url": u, "ext": ext, "id": cache_key(u),
+                "title": _html_title(html_text),
+                "http_headers": req_headers,
+                "protocol": "m3u8_native" if ext == "m3u8" else "https",
+            }
+        best = _direct_urls[0]
+        info = source_audit.add_audit(_mk_info(best), [
+            source_audit.audit_entry(
+                strategy=name, source="rss-or-json-key", url=u,
+                selected=(u == best),
+                rejected_reason=None if u == best else "lower-ranked direct URL",
+                headers=req_headers,
+            )
+            for u in _direct_urls[:20]
+        ])
+        return _result(name, True, media=info)
 
     if not embed_urls:
         return _result(name, False, reason="no embedded player signatures found in page HTML")
