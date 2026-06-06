@@ -1435,6 +1435,110 @@ def extract_bluesky(page_url: str, cookies: str | None) -> dict[str, Any] | None
     return None
 
 
+def extract_tumblr(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """
+    Extract media from Tumblr photo/video/animated posts via the public
+    /api/read/json endpoint — no API key required for public posts.
+    """
+    parsed = urllib.parse.urlsplit(page_url)
+    # Tumblr post URL: {blogname}.tumblr.com/post/{id}[/slug]
+    m = re.search(r"/post/(\d+)", parsed.path)
+    if not m:
+        return None
+    post_id = m.group(1)
+    # The blog may be on a custom domain; build the API URL from the request host
+    host = parsed.netloc
+    api_url = f"https://{host}/api/read/json?id={post_id}"
+
+    hdrs = safe_headers({
+        "User-Agent": _DESKTOP_UA,
+        "Accept": "application/json, text/javascript, */*",
+        "Referer": f"https://{host}/",
+    })
+    body, status_code = fetch_with_retry(api_url, hdrs, timeout=10, max_retries=1)
+    if not body or status_code != 200:
+        print(f"[tumblr] API returned {status_code} for post {post_id}")
+        return None
+
+    # Response is JSONP: `var tumblr_api_read = {...};` — strip the variable wrapper
+    raw = body.decode("utf-8", errors="replace").strip()
+    if raw.startswith("var tumblr_api_read"):
+        raw = re.sub(r"^var\s+tumblr_api_read\s*=\s*", "", raw, count=1)
+        raw = raw.rstrip(";").strip()
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+
+    posts = data.get("posts") or []
+    if not posts:
+        return None
+    post = posts[0]
+    post_type = post.get("type", "")
+
+    # ── Video ──────────────────────────────────────────────────────────────────
+    if post_type == "video":
+        # `video-source` may contain a direct URL to the original MP4
+        video_src = post.get("video-source", "")
+        if video_src and video_src.startswith("http") and any(
+            ext in video_src.lower() for ext in (".mp4", ".mov", ".webm")
+        ):
+            ext = guess_ext_from_url(video_src) or "mp4"
+            result: dict[str, Any] = {
+                "id": post_id,
+                "url": video_src,
+                "ext": ext,
+                "title": post.get("slug") or f"Tumblr post {post_id}",
+                "protocol": "https",
+            }
+            thumb = post.get("thumbnail-url", "")
+            if thumb and thumb.startswith("http"):
+                result["thumbnail"] = thumb
+            print(f"[tumblr] video {post_id}: {video_src[:80]}")
+            return result
+        # Fall through to HTML scan for embedded videos
+
+    # ── Photo / GIF ────────────────────────────────────────────────────────────
+    if post_type in ("photo", "panorama", "link"):
+        photos = post.get("photos") or []
+        if not photos:
+            # Single-photo post: highest-res URL is at photo-url-1280
+            for size in (1280, 500, 400):
+                url = post.get(f"photo-url-{size}", "")
+                if url and url.startswith("http"):
+                    photos = [{"photo-url-1280": url}]
+                    break
+        if not photos:
+            return None
+
+        title = post.get("slug") or f"Tumblr post {post_id}"
+        entries: list[dict[str, Any]] = []
+        for i, photo in enumerate(photos):
+            url = photo.get("photo-url-1280") or photo.get("photo-url-500") or ""
+            if not url or not url.startswith("http"):
+                continue
+            ext = guess_ext_from_url(url) or "jpg"
+            entries.append({
+                "id": f"{post_id}_{i}",
+                "url": url,
+                "ext": ext,
+                "title": f"{title} #{i + 1}" if len(photos) > 1 else title,
+                "http_headers": safe_headers({
+                    "Referer": f"https://{host}/",
+                    "User-Agent": _DESKTOP_UA,
+                }),
+            })
+        if not entries:
+            return None
+        print(f"[tumblr] photo {post_id}: {len(entries)} image(s)")
+        if len(entries) == 1:
+            return entries[0]
+        return {"_type": "playlist", "id": post_id, "title": title, "entries": entries}
+
+    return None
+
+
 def extract_mastodon(page_url: str, cookies: str | None) -> dict[str, Any] | None:
     """
     Extract media from any Mastodon instance via the public REST API.

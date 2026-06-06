@@ -345,6 +345,12 @@ def _strategy_platform_extractors(
                 return _result(name, True, media=info)
             return _result(name, False, reason="Reddit extractor found no media")
 
+        if ".tumblr.com/post/" in page_url:
+            info = extractors.extract_tumblr(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            # Don't hard-stop — fall through to yt-dlp for video embeds
+
         if "note.com" in page_url:
             info = extractors.extract_note(page_url, cookies)
             if info:
@@ -1274,6 +1280,7 @@ def run_extraction(
             "twitter.com", "x.com", "t.co",
             "redgifs.com",
             "bsky.app",
+            "tumblr.com",
         ))
         platform_strategy = ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies))
         ytdlp_strategy = ("yt-dlp", lambda: _strategy_ydl(page_url, ydl_opts, False))

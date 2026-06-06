@@ -1048,6 +1048,73 @@ async function extractBluesky(pageUrl: string): Promise<DetectedMedia[]> {
   } catch { return []; }
 }
 
+async function extractTumblr(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const parsed = new URL(pageUrl);
+    const m = parsed.pathname.match(/\/post\/(\d+)/);
+    if (!m) return [];
+    const postId = m[1];
+    const host = parsed.host;
+
+    const apiUrl = `https://${host}/api/read/json?id=${postId}`;
+    const res = await fetch(apiUrl, {
+      headers: { 'User-Agent': DESKTOP_UA, Accept: 'application/json, text/javascript, */*', Referer: `https://${host}/` },
+    });
+    if (!res.ok) return [];
+
+    // Response is JSONP: `var tumblr_api_read = {...};` — strip wrapper
+    let text = await res.text();
+    text = text.replace(/^var\s+tumblr_api_read\s*=\s*/, '').replace(/;\s*$/, '').trim();
+    const data = JSON.parse(text) as {
+      posts?: Array<{
+        type?: string; slug?: string;
+        'photo-url-1280'?: string; 'photo-url-500'?: string;
+        photos?: Array<{ 'photo-url-1280'?: string; 'photo-url-500'?: string }>;
+        'video-source'?: string; 'thumbnail-url'?: string;
+      }>;
+    };
+
+    const posts = data.posts ?? [];
+    if (!posts.length) return [];
+    const post = posts[0];
+    const postType = post.type ?? '';
+    const title = post.slug || `Tumblr post ${postId}`;
+
+    // Video
+    if (postType === 'video') {
+      const videoSrc = post['video-source'] ?? '';
+      if (videoSrc.startsWith('http') && /\.(mp4|mov|webm)/i.test(videoSrc)) {
+        const entry = makeItem(videoSrc, pageUrl, undefined, 'social-extractor', 0.9);
+        const thumb = post['thumbnail-url'];
+        if (thumb) entry.thumbnailUrl = thumb;
+        return [entry];
+      }
+      return [];
+    }
+
+    // Photo / GIF / animated
+    if (postType === 'photo' || postType === 'panorama') {
+      const photos = post.photos ?? [];
+      const urls: string[] = [];
+      if (photos.length) {
+        for (const p of photos) {
+          const u = p['photo-url-1280'] ?? p['photo-url-500'] ?? '';
+          if (u.startsWith('http')) urls.push(u);
+        }
+      } else {
+        const u = post['photo-url-1280'] ?? post['photo-url-500'] ?? '';
+        if (u.startsWith('http')) urls.push(u);
+      }
+      if (!urls.length) return [];
+      return urls.map((u, i) =>
+        makeItem(u, pageUrl, 'Image', 'social-extractor', 0.9),
+      );
+    }
+
+    return [];
+  } catch { return []; }
+}
+
 async function extractMastodon(pageUrl: string): Promise<DetectedMedia[]> {
   try {
     const parsed = new URL(pageUrl);
@@ -1097,6 +1164,7 @@ const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[
   { re: /(?:twitter|x)\.com\/[^/]+\/status\/\d+/,                                  fn: extractTwitter     },
   { re: /redgifs\.com\/(?:watch|ifr|gif)\/[A-Za-z0-9]+/i,                          fn: extractRedgifs     },
   { re: /bsky\.app\/profile\/[^/?#]+\/post\/[A-Za-z0-9]+/,                         fn: extractBluesky     },
+  { re: /\.tumblr\.com\/post\/\d+/,                                                fn: extractTumblr      },
   // Mastodon: detect by snowflake ID in path — works across all fediverse instances
   { re: /\/(?:@[^/?#]+|users\/[^/?#]+\/statuses)\/\d{17,20}(?:[/?#]|$)/,          fn: extractMastodon    },
   { re: /instagram\.com\/(?:(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+|share\/(?:p|reel)\/[A-Za-z0-9_-]+)/, fn: extractInstagram   },
