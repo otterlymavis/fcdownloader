@@ -813,10 +813,51 @@ def _strategy_page_embeds(
             f"embedIframeJs/uiconf_id/0/partner_id/{pid}?iframeembed=true&entry_id={eid}"
         )
 
+    # ── JSON-LD VideoObject: contentUrl / embedUrl / associatedMedia ─────────────
+    # News sites and video platforms often include structured metadata for SEO.
+    # Schema.org VideoObject.contentUrl is a direct media URL; embedUrl is an
+    # iframe player we can pass to yt-dlp; associatedMedia.contentUrl covers
+    # articles that embed video.
+    _direct_urls: list[str] = []
+    for ld_m in re.finditer(
+        r'<script\b[^>]*?\btype=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html_text, re.DOTALL | re.IGNORECASE,
+    ):
+        try:
+            ld = _json.loads(html_mod.unescape(ld_m.group(1)))
+        except Exception:
+            continue
+        items = ld if isinstance(ld, list) else [ld]
+        for obj in items:
+            obj_type = (obj.get("@type") or "").lower() if isinstance(obj, dict) else ""
+            if "video" not in obj_type and "mediaobject" not in obj_type:
+                # Also check associatedMedia
+                assoc = obj.get("associatedMedia") if isinstance(obj, dict) else None
+                if isinstance(assoc, dict):
+                    obj = assoc
+                    obj_type = (obj.get("@type") or "").lower()
+                elif isinstance(assoc, list):
+                    for sub in assoc:
+                        if isinstance(sub, dict):
+                            cu = html_mod.unescape(sub.get("contentUrl") or "")
+                            if cu.startswith("http") and cu not in _direct_urls:
+                                _direct_urls.append(cu)
+                    continue
+                else:
+                    continue
+            # contentUrl → direct media file
+            content_url = html_mod.unescape(obj.get("contentUrl") or "") if isinstance(obj, dict) else ""
+            if content_url.startswith("http") and content_url not in _direct_urls:
+                _direct_urls.append(content_url)
+            # embedUrl → oembed/player URL
+            embed_url = html_mod.unescape(obj.get("embedUrl") or "") if isinstance(obj, dict) else ""
+            if embed_url.startswith("http") and embed_url not in embed_urls:
+                embed_urls.append(embed_url)
+
     # ── RSS/Podcast: <enclosure> and <media:content> direct audio/video URLs ─────
     # Covers podcast episode pages that embed or return RSS-format markup, and
     # podcast feed URLs (.rss / .xml) pasted directly.
-    _direct_urls: list[str] = []
+
     for enc_m in re.finditer(
         r'<(?:enclosure|media:content)\b[^>]*?\burl=["\']([^"\']{10,})["\']',
         html_text, re.IGNORECASE,
