@@ -357,6 +357,14 @@ def _strategy_platform_extractors(
                 return _result(name, True, media=info)
             return _result(name, False, reason="note.com extractor found no media")
 
+        if "pixiv.net" in page_url and (
+            re.search(r"/artworks?/\d+", page_url) or "illust_id=" in page_url
+        ):
+            info = extractors.extract_pixiv(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            # Fall through to curated-site CDN scan as fallback
+
         info = extractors.extract_curated_site(page_url, cookies)
         if info:
             return _result(name, True, media=info)

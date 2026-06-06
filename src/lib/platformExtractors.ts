@@ -896,6 +896,46 @@ async function extractAmeba(pageUrl: string): Promise<DetectedMedia[]> {
   } catch { return []; }
 }
 
+// ── Pixiv ─────────────────────────────────────────────────────────────────────
+async function extractPixiv(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const m = pageUrl.match(/\/artworks?\/(\d+)/) ?? pageUrl.match(/illust_id=(\d+)/);
+    if (!m) return [];
+    const illustId = m[1];
+
+    const itemHeaders = { 'User-Agent': DESKTOP_UA, Referer: 'https://www.pixiv.net/' };
+    const ajaxHeaders = { ...itemHeaders, Accept: 'application/json' };
+
+    // Fetch all page URLs
+    const pagesRes = await fetch(`https://www.pixiv.net/ajax/illust/${illustId}/pages`, { headers: ajaxHeaders });
+    if (!pagesRes.ok) return [];
+    const pagesData = await pagesRes.json() as { body?: Array<{ urls?: { original?: string; regular?: string } }> };
+    const pages = pagesData.body ?? [];
+    if (!pages.length) return [];
+
+    // Fetch illustration title (best-effort)
+    let title = `Pixiv ${illustId}`;
+    try {
+      const metaRes = await fetch(`https://www.pixiv.net/ajax/illust/${illustId}`, { headers: ajaxHeaders });
+      if (metaRes.ok) {
+        const metaData = await metaRes.json() as { body?: { illustTitle?: string } };
+        title = metaData.body?.illustTitle || title;
+      }
+    } catch {}
+
+    const results: DetectedMedia[] = [];
+    for (const page of pages) {
+      const url = page.urls?.original ?? page.urls?.regular ?? '';
+      if (!url.startsWith('http')) continue;
+      const entry = makeItem(url, pageUrl, 'Image', 'social-extractor', 0.92);
+      if (!entry.httpHeaders) entry.httpHeaders = {};
+      Object.assign(entry.httpHeaders, itemHeaders);
+      results.push(entry);
+    }
+    return results;
+  } catch { return []; }
+}
+
 // ── Generic Japanese site ─────────────────────────────────────────────────────
 /**
  * Generic fallback for Japanese streaming sites not covered by a dedicated
@@ -1184,7 +1224,8 @@ const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[
   { re: /(?:tv\.naver\.com\/v\/\d+|now\.naver\.com\/|blog\.naver\.com\/|m\.blog\.naver\.com\/|news\.naver\.com\/|n\.news\.naver\.com\/|m\.news\.naver\.com\/|entertain\.naver\.com\/|m\.entertain\.naver\.com\/|sports\.news\.naver\.com\/|m\.sports\.naver\.com\/|naver\.me\/[A-Za-z0-9]+)/, fn: extractNaver },
   { re: /(?:mdpr\.jp\/|modelpress\.jp\/)/,                                         fn: extractModelpress  },
   { re: /(?:ameba\.jp\/[^/]+\/entry\/\d+|ameblo\.jp\/[^/]+\/entry-\d+)/,           fn: extractAmeba       },
-  { re: /(?:natalie\.mu|oricon\.co\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net|trilltrill\.jp|note\.com|lineblog\.me|hatenablog\.(?:com|jp)|hatenadiary\.(?:com|jp)|hatena\.ne\.jp|blog\.fc2\.com|gyazo\.com|seiga\.nicovideo\.jp|story\.kakao\.com)/i, fn: extractCuratedArticle },
+  { re: /pixiv\.net\/(?:en\/)?artworks?\/\d+|pixiv\.net\/.*illust_id=\d+/,         fn: extractPixiv       },
+  { re: /(?:natalie\.mu|oricon\.co\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net|trilltrill\.jp|note\.com|lineblog\.me|hatenablog\.(?:com|jp)|hatenadiary\.(?:com|jp)|hatena\.ne\.jp|blog\.fc2\.com|gyazo\.com|seiga\.nicovideo\.jp|story\.kakao\.com)/i, fn: extractCuratedArticle },
 ];
 
 /** Returns true if the URL looks like a social-media post page (not a CDN media URL). */

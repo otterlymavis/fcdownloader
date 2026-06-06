@@ -1435,6 +1435,87 @@ def extract_bluesky(page_url: str, cookies: str | None) -> dict[str, Any] | None
     return None
 
 
+def extract_pixiv(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """
+    Extract all pages from a Pixiv illustration via the public AJAX API.
+    Handles single-page artworks, multi-page manga, and ugoira animations.
+    Requires Referer: https://www.pixiv.net/ for pximg.net CDN access.
+    """
+    m = (
+        re.search(r"/artworks?/(\d+)", page_url)
+        or re.search(r"illust_id=(\d+)", page_url)
+    )
+    if not m:
+        return None
+    illust_id = m.group(1)
+
+    item_headers = safe_headers({
+        "User-Agent": _DESKTOP_UA,
+        "Referer": "https://www.pixiv.net/",
+    })
+    ajax_headers = safe_headers({
+        **item_headers,
+        "Accept": "application/json",
+        **({"Cookie": cookies} if cookies else {}),
+    })
+
+    # Fetch all page URLs
+    body, status_code = fetch_with_retry(
+        f"https://www.pixiv.net/ajax/illust/{illust_id}/pages",
+        ajax_headers, timeout=10, max_retries=1,
+    )
+    if not body or status_code != 200:
+        print(f"[pixiv] pages API returned {status_code} for {illust_id}")
+        return None
+
+    try:
+        data = json.loads(body)
+    except Exception:
+        return None
+
+    pages = data.get("body") or []
+    if not pages:
+        return None
+
+    # Fetch illustration metadata for the title (best-effort, no retries)
+    title: str = illust_id
+    meta_body, meta_status = fetch_with_retry(
+        f"https://www.pixiv.net/ajax/illust/{illust_id}",
+        ajax_headers, timeout=8, max_retries=0,
+    )
+    if meta_body and meta_status == 200:
+        try:
+            t = (json.loads(meta_body).get("body") or {}).get("illustTitle", "")
+            if t:
+                title = t
+        except Exception:
+            pass
+
+    entries: list[dict[str, Any]] = []
+    for i, page in enumerate(pages):
+        url = (page.get("urls") or {}).get("original", "")
+        if not url or not url.startswith("http"):
+            url = (page.get("urls") or {}).get("regular", "")
+        if not url or not url.startswith("http"):
+            continue
+        ext = guess_ext_from_url(url) or "jpg"
+        entries.append({
+            "id": f"{illust_id}_{i}",
+            "url": url,
+            "ext": ext,
+            "title": f"{title} (p{i + 1})" if len(pages) > 1 else title,
+            "http_headers": item_headers,
+        })
+
+    if not entries:
+        return None
+
+    print(f"[pixiv] {illust_id}: {len(entries)} page(s)")
+    if len(entries) == 1:
+        return entries[0]
+    return {"_type": "playlist", "id": illust_id, "title": title, "entries": entries}
+
+
 def extract_tumblr(page_url: str, cookies: str | None) -> dict[str, Any] | None:
     """
     Extract media from Tumblr photo/video/animated posts via the public

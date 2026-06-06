@@ -2715,6 +2715,7 @@ from new_extractors import (  # noqa: E402
     extract_bluesky,
     extract_mastodon,
     extract_tumblr,
+    extract_pixiv,
     extract_via_snapwc,
     extract_watermark_free_source,
 )
