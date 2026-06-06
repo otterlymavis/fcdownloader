@@ -1,7 +1,7 @@
 const api = globalThis.browser || globalThis.chrome;
 
 const MEDIA_RE = /\.(?:m3u8|mpd|mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i;
-const CDN_RE = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|threadscdn\.com\/|tiktokcdn\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|fbcdn\.net\/|pinimg\.com\/(?:videos|originals|736x|1200x|564x)\/|dmcdn\.net\/|vimeocdn\.com\/|bilivideo\.com\/|weibocdn\.com\/|sinaimg\.cn\/|xhscdn\.com\/|pstatic\.net\/)/i;
+const CDN_RE = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|threadscdn\.com\/|tiktokcdn\.com\/|v\d+-webapp\.tiktok\.com\/|(?:v|i|preview)\.redd\.it\/|fbcdn\.net\/|pinimg\.com\/(?:videos|originals|736x|1200x|564x)\/|dmcdn\.net\/|vimeocdn\.com\/|bilivideo\.(?:com|cn)\/|weibocdn\.com\/|sinaimg\.cn\/|xhscdn\.com\/|ci\.xiaohongshu\.com\/|pstatic\.net\/|media\.trilltrill\.jp\/|obs\.line-scdn\.net\/|fashionsnap-assets\.com\/|i\.gyazo\.com\/)/i;
 
 function absolutize(url) {
   try {
