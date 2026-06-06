@@ -453,12 +453,17 @@ def _strategy_html_scan_combined(
     page_url: str,
     http_headers: dict[str, str],
     cookies: str | None,
+    _html_cache: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Fetch the page once and run all HTML scan modes (HLS→DASH→OG→generic).
 
     Replaces four separate _strategy_html_detector calls (each of which fetches
     the page independently) with a single HTTP request, saving 3 round-trips for
     every page that reaches the HTML-scan stage of the pipeline.
+
+    If _html_cache is provided (a dict keyed by URL), the fetched HTML is stored
+    there so that a subsequent _strategy_page_embeds call on the same URL can reuse
+    it without a second HTTP request.
     """
     import html as html_mod
     import urllib.error
@@ -504,6 +509,9 @@ def _strategy_html_scan_combined(
         return _result(name, False, reason=f"timeout: {safe_text(exc)[:300]}")
     except Exception as exc:  # noqa: BLE001
         return _result(name, False, reason=safe_text(exc)[:400])
+
+    if _html_cache is not None:
+        _html_cache[page_url] = html_text
 
     title = _html_title(html_text)
 
@@ -787,6 +795,7 @@ def _strategy_page_embeds(
     http_headers: dict[str, str],
     cookies: str | None,
     ydl_opts: dict[str, Any],
+    _html_cache: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Detect embedded video players (Brightcove, JW Player, iframe) in page HTML.
 
@@ -794,6 +803,10 @@ def _strategy_page_embeds(
     embed parameters — Brightcove data-account/data-video-id attributes, a
     jwplayer().setup({file:…}) call, or an <iframe> pointing to a supported
     player.  This strategy extracts those and passes them directly to yt-dlp.
+
+    If _html_cache contains a pre-fetched HTML string for this URL (from the
+    preceding _strategy_html_scan_combined call), it is reused to avoid a
+    redundant HTTP request.
     """
     import html as html_mod
     import re
@@ -802,24 +815,27 @@ def _strategy_page_embeds(
 
     name = "embedded player detector"
 
-    req_headers = safe_headers({
-        "User-Agent": http_headers.get("User-Agent") or MOBILE_UA,
-        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-        "Accept-Language": (
-            http_headers.get("Accept-Language")
-            or languages.accept_language_for_url(page_url, "en-US,en;q=0.9")
-        ),
-        **({"Referer": http_headers["Referer"]} if http_headers.get("Referer") else {}),
-        **({"Cookie": cookies} if cookies else {}),
-    })
-    try:
-        req = urllib.request.Request(page_url, headers=req_headers)
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            html_text = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.URLError as exc:
-        return _result(name, False, reason=f"fetch: {safe_text(exc)[:200]}")
-    except Exception as exc:  # noqa: BLE001
-        return _result(name, False, reason=safe_text(exc)[:300])
+    if _html_cache is not None and page_url in _html_cache:
+        html_text = _html_cache[page_url]
+    else:
+        req_headers = safe_headers({
+            "User-Agent": http_headers.get("User-Agent") or MOBILE_UA,
+            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+            "Accept-Language": (
+                http_headers.get("Accept-Language")
+                or languages.accept_language_for_url(page_url, "en-US,en;q=0.9")
+            ),
+            **({"Referer": http_headers["Referer"]} if http_headers.get("Referer") else {}),
+            **({"Cookie": cookies} if cookies else {}),
+        })
+        try:
+            req = urllib.request.Request(page_url, headers=req_headers)
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                html_text = resp.read().decode("utf-8", errors="replace")
+        except urllib.error.URLError as exc:
+            return _result(name, False, reason=f"fetch: {safe_text(exc)[:200]}")
+        except Exception as exc:  # noqa: BLE001
+            return _result(name, False, reason=safe_text(exc)[:300])
 
     embed_urls: list[str] = []
 
@@ -1272,6 +1288,10 @@ def run_extraction(
             raise HTTPException(400, str(exc))
 
     # ── Strategy list ─────────────────────────────────────────────────────────
+    # Shared HTML cache: _strategy_html_scan_combined stores the fetched page HTML
+    # so _strategy_page_embeds can reuse it without a second HTTP request.
+    _html_cache: dict[str, str] = {}
+
     ydl_opts = build_ydl_opts(
         page_url, http_headers, cookie_file,
         audio_only=audio_only, subtitles=subtitles, sub_langs=sub_langs,
@@ -1342,9 +1362,10 @@ def run_extraction(
                 "browser runtime is client-side only",
             )),
             # Combined HTML scan: fetches the page once and tries HLS→DASH→OG→generic
-            # in priority order, saving 3 redundant HTTP requests vs separate strategies.
-            ("HTML media scanner",       lambda: _strategy_html_scan_combined(page_url, http_headers, cookies)),
-            ("embedded player detector", lambda: _strategy_page_embeds(page_url, http_headers, cookies, ydl_opts)),
+            # in priority order. The fetched HTML is cached in _html_cache so the
+            # subsequent embed-detector strategy reuses it without a second HTTP request.
+            ("HTML media scanner",       lambda: _strategy_html_scan_combined(page_url, http_headers, cookies, _html_cache)),
+            ("embedded player detector", lambda: _strategy_page_embeds(page_url, http_headers, cookies, ydl_opts, _html_cache)),
             ("generic yt-dlp extractor", lambda: _strategy_ydl(page_url, ydl_opts, True)),
             *(
                 []
