@@ -710,16 +710,23 @@ def _strategy_page_embeds(
             f"/{pid}_default/index.html?videoId={bc_vid.group(1)}"
         )
 
-    # ── JW Player: jwplayer().setup({ file: "URL" }) ──────────────────────────
+    # ── JW Player: jwplayer().setup({file/sources/playlist}) ─────────────────
+    # Three common config layouts:
+    #   1. Direct file:   .setup({file: "URL"})
+    #   2. Sources array: .setup({sources: [{file: "URL"}]})
+    #   3. Playlist:      .setup({playlist: [{file: "URL"}]})
     jw = re.search(
-        r'jwplayer\s*\([^)]*\)\s*\.setup\s*\(\s*\{'
-        r'[^}]{0,1200}?["\']file["\']\s*:\s*["\']([^"\']{10,})["\']',
-        html_text, re.IGNORECASE | re.DOTALL,
+        r'jwplayer\s*\([^)]*\)\s*\.setup\s*\(\s*\{',
+        html_text, re.IGNORECASE,
     )
     if jw:
-        fu = html_mod.unescape(jw.group(1).replace("\\/", "/"))
-        if fu.startswith(("http://", "https://")):
-            embed_urls.append(fu)
+        # Extract the first 2000 chars of the setup object to avoid runaway matches
+        setup_text = html_text[jw.end():jw.end() + 2000]
+        # JS objects use both quoted ("file") and unquoted (file) keys.
+        for jw_file_m in re.finditer(r'(?:["\']file["\']|file)\s*:\s*["\']([^"\']{10,})["\']', setup_text, re.IGNORECASE):
+            fu = html_mod.unescape(jw_file_m.group(1).replace("\\/", "/"))
+            if fu.startswith(("http://", "https://")) and fu not in embed_urls:
+                embed_urls.append(fu)
 
     # ── iframe embeds: YouTube, Vimeo, Brightcove, Dailymotion, Kaltura, Wistia,
     #    SoundCloud, Spreaker, Buzzsprout, Podbean, Anchor/Spotify, Rumble ────────
