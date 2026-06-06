@@ -510,6 +510,7 @@ async function extractPinterest(pageUrl: string): Promise<DetectedMedia[]> {
     const html = await fetchHtml(pageUrl);
     const results: DetectedMedia[] = [];
 
+    // Video: HLS manifest or direct MP4
     extractUrls(html, /"v_hlsUrl"\s*:\s*"(https?:\/\/[^"]+)"/g).forEach(u =>
       results.push(makeItem(u, pageUrl)),
     );
@@ -517,6 +518,15 @@ async function extractPinterest(pageUrl: string): Promise<DetectedMedia[]> {
       extractUrls(html, /"v_url"\s*:\s*"(https?:\/\/[^"]+\.(?:mp4|m3u8)[^"]*)"/g).forEach(u =>
         results.push(makeItem(u, pageUrl)),
       );
+    }
+
+    // Image pin: original full-res image from i.pinimg.com/originals/
+    if (results.length === 0) {
+      const seen = new Set<string>();
+      extractUrls(html, /"url"\s*:\s*"(https:\/\/i\.pinimg\.com\/originals\/[^"]+)"/g)
+        .forEach(u => {
+          if (!seen.has(u)) { seen.add(u); results.push(makeItem(u, pageUrl, 'Image', 'social-extractor', 0.85)); }
+        });
     }
 
     return results;
