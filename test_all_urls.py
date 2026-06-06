@@ -81,6 +81,7 @@ URLS = {
     # ── Japanese / Korean News, Magazines, Blogs & Galleries ─────────────
     "Oricon":        ("https://www.oricon.co.jp/news/2452025/photo/1/", "photo gallery"),
     "Modelpress":    ("https://mdpr.jp/photo/detail/20095233", "photo gallery"),
+    "TRILL":         ("https://trilltrill.jp/articles/4750322/photos/1", "article photo gallery"),
     "Natalie":       ("https://natalie.mu/music/news/670767", ""),
     "Naver Blog":    ("https://blog.naver.com/jalee3228/224297926556", ""),
     "Naver News":    ("https://news.naver.com/election/region2026", ""),

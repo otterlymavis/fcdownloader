@@ -95,3 +95,23 @@ desktop-companion/build/pyinstaller-spec/
 CLAUDE.md
 
 .vercel
+
+# Root-level build and run logs
+*.log
+metro-server.log
+metro.log
+
+# Root-level screenshots and test images
+screenshot_*.png
+fc_v3_*.png
+ios-*.log
+physical-ios-build.log
+pip-install.log
+verify-*.log
+build-test.log
+
+# Ad-hoc test / inspection scripts (not part of the test suite)
+test_find_frame.py
+test_inspect_mockup_tabbar.py
+test_mockup_pixels.py
+scripts/generate_ios_report.py
