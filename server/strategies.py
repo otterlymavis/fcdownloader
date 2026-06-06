@@ -758,7 +758,8 @@ def _strategy_page_embeds(
                 embed_urls.append(fu)
 
     # ── iframe embeds: YouTube, Vimeo, Brightcove, Dailymotion, Kaltura, Wistia,
-    #    SoundCloud, Spreaker, Buzzsprout, Podbean, Anchor/Spotify, Rumble ────────
+    #    SoundCloud, Spreaker, Buzzsprout, Podbean, Anchor/Spotify, Rumble,
+    #    Bunny.net Stream, Cloudflare Stream ────────────────────────────────────
     for m in re.finditer(
         r'<iframe\b[^>]+?src=["\']'
         r'((?:https?:)?//(?:www\.)?'
@@ -778,7 +779,11 @@ def _strategy_page_embeds(
         r'|rumble\.com/embed/'
         r'|player\.twitch\.tv/'
         r'|clips\.twitch\.tv/embed'
-        r'|odysee\.com/\$/embed/)[^"\']{4,})["\']',
+        r'|odysee\.com/\$/embed/'
+        r'|iframe\.mediadelivery\.net/embed/'
+        r'|videodelivery\.net/'
+        r'|cloudflarestream\.com/[a-f0-9]+/iframe'
+        r'|iframe\.bunny\.net/embed/)[^"\']{4,})["\']',
         html_text, re.IGNORECASE,
     ):
         u = html_mod.unescape(m.group(1))
