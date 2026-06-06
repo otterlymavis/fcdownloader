@@ -141,24 +141,35 @@ async function downloadSegment(
 ): Promise<void> {
   if (signal?.aborted) throw new Error('Cancelled');
   debugLog('[downloadSegment] starting:', url.split('?')[0].split('/').pop(), 'range:', headers['Range']);
-  try {
-    const result = await FileSystem.downloadAsync(url, destPath, { headers });
-    if (signal?.aborted) {
-      try { await FileSystem.deleteAsync(destPath, { idempotent: true }); } catch {}
-      throw new Error('Cancelled');
+  let lastErr: Error = new Error('Segment download failed');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (signal?.aborted) throw new Error('Cancelled');
+    try {
+      const result = await FileSystem.downloadAsync(url, destPath, { headers });
+      if (signal?.aborted) {
+        try { await FileSystem.deleteAsync(destPath, { idempotent: true }); } catch {}
+        throw new Error('Cancelled');
+      }
+      if (!result || result.status < 200 || result.status >= 300) {
+        throw new Error(`HTTP ${result?.status ?? 'unknown'} downloading segment`);
+      }
+      const info = await FileSystem.getInfoAsync(destPath);
+      if (!info.exists || (info.size ?? 0) === 0) {
+        throw new Error(`Empty segment - ${url.split('?')[0].split('/').pop()}`);
+      }
+      debugLog('[downloadSegment] success:', destPath.split('/').pop(), 'size:', info.size);
+      return;
+    } catch (err: any) {
+      lastErr = err as Error;
+      if (signal?.aborted || lastErr.message === 'Cancelled') throw lastErr;
+      if (attempt < 2) {
+        debugLog('[downloadSegment] retrying after error:', lastErr.message);
+        await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
+      }
     }
-    if (!result || result.status < 200 || result.status >= 300) {
-      throw new Error(`HTTP ${result?.status ?? 'unknown'} downloading segment`);
-    }
-    const info = await FileSystem.getInfoAsync(destPath);
-    if (!info.exists || (info.size ?? 0) === 0) {
-      throw new Error(`Empty segment - ${url.split('?')[0].split('/').pop()}`);
-    }
-    debugLog('[downloadSegment] success:', destPath.split('/').pop(), 'size:', info.size);
-  } catch (err: any) {
-    console.error('[downloadSegment] failed:', (err as Error).message);
-    throw err;
   }
+  console.error('[downloadSegment] failed after 3 attempts:', lastErr.message);
+  throw lastErr;
 }
 
 async function muxSegments(

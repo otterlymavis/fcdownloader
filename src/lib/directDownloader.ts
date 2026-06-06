@@ -103,41 +103,53 @@ export async function downloadDirect(
   onStatus?.('downloading');
   onProgress?.(0, 1);
 
-  const res = await expoFetch(media.url, { headers, signal });
-  if (signal?.aborted) throw new Error('Cancelled');
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} — server rejected the request`);
-  }
-  if (!res.body) throw new Error('Download returned an empty body');
-
-  const ct = (res.headers.get('content-type') ?? '').toLowerCase();
-  if (!contentTypeLooksLikeMedia(ct, media)) {
-    throw new Error('Server returned a page or non-media response instead of downloadable media');
-  }
-
-  const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
-  onProgress?.(0, contentLength || 1);
-
-  const file = new File(filePath);
-  file.create({ intermediates: true, overwrite: true });
-  const handle = file.open();
-
-  try {
-    const reader = res.body.getReader();
-    let written = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+  const MAX_ATTEMPTS = 3;
+  let lastErr: Error = new Error('Download failed');
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (signal?.aborted) throw new Error('Cancelled');
+    try {
+      const res = await expoFetch(media.url, { headers, signal });
       if (signal?.aborted) throw new Error('Cancelled');
-      handle.writeBytes(value);
-      written += value.byteLength;
-      onProgress?.(written, contentLength || Math.max(written, 1));
-    }
-  } finally {
-    handle.close();
-  }
+      if (!res.ok) throw new Error(`HTTP ${res.status} — server rejected the request`);
+      if (!res.body) throw new Error('Download returned an empty body');
 
-  if (file.size === 0) throw new Error('Downloaded file is empty — the URL may require a login or has expired');
+      const ct = (res.headers.get('content-type') ?? '').toLowerCase();
+      if (!contentTypeLooksLikeMedia(ct, media)) {
+        throw new Error('Server returned a page or non-media response instead of downloadable media');
+      }
+
+      const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
+      onProgress?.(0, contentLength || 1);
+
+      const file = new File(filePath);
+      file.create({ intermediates: true, overwrite: true });
+      const handle = file.open();
+      try {
+        const reader = res.body.getReader();
+        let written = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (signal?.aborted) throw new Error('Cancelled');
+          handle.writeBytes(value);
+          written += value.byteLength;
+          onProgress?.(written, contentLength || Math.max(written, 1));
+        }
+      } finally {
+        handle.close();
+      }
+
+      if (file.size === 0) throw new Error('Downloaded file is empty — the URL may require a login or has expired');
+      break; // success — exit retry loop
+    } catch (err) {
+      lastErr = err as Error;
+      if (signal?.aborted || lastErr.message === 'Cancelled') throw lastErr;
+      // Only retry on network / 5xx errors, not on auth or content-type errors
+      const isRetryable = !/HTTP [234]\d\d|non-media|login|expired/.test(lastErr.message);
+      if (!isRetryable || attempt === MAX_ATTEMPTS - 1) throw lastErr;
+      await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+    }
+  }
 
   onProgress?.(1, 1);
   onStatus?.('assembling');

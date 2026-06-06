@@ -456,10 +456,24 @@ export const INJECTED_SCRIPT = `
             try { _blobLineageResp.set(res, url); } catch(_) {}
           }
           res.clone().text().then(function (text) {
+            if (!text || text.length > 1048576) return; // skip >1 MB
             var head = (text || '').trimStart().slice(0, 40);
             if (head.indexOf('#EXTM3U') === 0) emit(url, 'application/x-mpegurl', 'manifest-parser', 0.92);
             else if (head.indexOf('<?xml') === 0 && text.indexOf('<MPD ') !== -1) emit(url, 'application/dash+xml', 'manifest-parser', 0.92);
             scanText(text);
+            // JSON API body parsing — catch image_url / video_url fields
+            // that scanText's URL regex misses (e.g. extensionless CDN paths)
+            var ct = res.headers && res.headers.get('Content-Type');
+            var isApi = (ct && ct.indexOf('application/json') !== -1) ||
+                        /\/api\/|\/v[123]\//.test(url.split('?')[0]);
+            if (isApi && (head.startsWith('{') || head.startsWith('['))) {
+              var jsonRe = /"(?:video_url|playable_url|browser_native_hd_url|hd_src|sd_src|download_url|play_url|stream_url|media_url|image_url|photo_url|thumbnail_url|cover_url|src_url|original_url|article_photo_link)"\s*:\s*"(https?:\\?\/\\?\/[^"]{10,})"/gi;
+              var jm;
+              while ((jm = jsonRe.exec(text))) {
+                var jurl = jm[1].replace(/\\u002F/gi, '/').replace(/\\/g, '');
+                if (jurl.startsWith('http')) { emit(jurl, null, 'json-api', 0.75); }
+              }
+            }
           }).catch(function () {});
         }
       } catch (_) {}
@@ -495,10 +509,22 @@ export const INJECTED_SCRIPT = `
         var isSegment = /\\.(ts|m4s|aac|m4a)$/i.test(base.split('/').pop() || '');
         if (!isSegment && (this.responseType === '' || this.responseType === 'text')) {
           var text = this.responseText || '';
+          if (text.length > 1048576) return;
           var head = text.trimStart().slice(0, 40);
           if (head.indexOf('#EXTM3U') === 0) emit(xurl, 'application/x-mpegurl', 'manifest-parser', 0.92);
           else if (head.indexOf('<?xml') === 0 && text.indexOf('<MPD ') !== -1) emit(xurl, 'application/dash+xml', 'manifest-parser', 0.92);
           scanText(text);
+          var xct = this.getResponseHeader('Content-Type') || '';
+          var xIsApi = (xct.indexOf('application/json') !== -1) ||
+                       /\/api\/|\/v[123]\//.test(base);
+          if (xIsApi && (head.startsWith('{') || head.startsWith('['))) {
+            var xjsonRe = /"(?:video_url|playable_url|browser_native_hd_url|hd_src|sd_src|download_url|play_url|stream_url|media_url|image_url|photo_url|thumbnail_url|cover_url|src_url|original_url|article_photo_link)"\s*:\s*"(https?:\\?\/\\?\/[^"]{10,})"/gi;
+            var xjm;
+            while ((xjm = xjsonRe.exec(text))) {
+              var xjurl = xjm[1].replace(/\\u002F/gi, '/').replace(/\\/g, '');
+              if (xjurl.startsWith('http')) { emit(xjurl, null, 'json-api', 0.75); }
+            }
+          }
         }
       } catch (_) {}
     });
