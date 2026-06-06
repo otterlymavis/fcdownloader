@@ -1248,3 +1248,79 @@ def extract_twitter(page_url: str, cookies: str | None) -> dict[str, Any] | None
         "title":   title,
         "entries": entries,
     }
+
+
+# ── Redgifs ───────────────────────────────────────────────────────────────────
+
+def extract_redgifs(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """Extract Redgifs video via the public temporary-auth API.
+
+    Redgifs provides unauthenticated temporary tokens at /v2/auth/temporary that
+    are bound to the requesting IP and user agent.  The token is then used to
+    fetch the gif's HD/SD video URLs from /v2/gifs/{id}.
+    """
+    m = re.search(r"/(?:watch|ifr|gif)/([A-Za-z0-9]+)", page_url, re.IGNORECASE)
+    if not m:
+        return None
+    gif_id = m.group(1).lower()
+
+    ua = _DESKTOP_UA
+    hdrs_base = safe_headers({"User-Agent": ua, "Accept": "application/json"})
+
+    # Step 1: fetch temporary token (bound to our IP + UA)
+    token_body, token_status = fetch_with_retry(
+        "https://api.redgifs.com/v2/auth/temporary",
+        hdrs_base, timeout=8, max_retries=1,
+    )
+    if not token_body or token_status not in (200, 201):
+        print(f"[redgifs] failed to get temp token: HTTP {token_status}")
+        return None
+    try:
+        token = json.loads(token_body).get("token", "")
+    except Exception:
+        return None
+    if not token:
+        return None
+
+    # Step 2: fetch gif metadata with the auth token
+    hdrs_auth = safe_headers({
+        "User-Agent": ua,
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+    })
+    gif_body, gif_status = fetch_with_retry(
+        f"https://api.redgifs.com/v2/gifs/{gif_id}",
+        hdrs_auth, timeout=8, max_retries=0,
+    )
+    if not gif_body or gif_status not in (200, 201):
+        print(f"[redgifs] API returned {gif_status} for {gif_id}")
+        return None
+    try:
+        data = json.loads(gif_body)
+    except Exception:
+        return None
+
+    gif = data.get("gif") or {}
+    urls = gif.get("urls") or {}
+    hd = urls.get("hd") or ""
+    sd = urls.get("sd") or ""
+    video_url = hd if hd.startswith("http") else (sd if sd.startswith("http") else "")
+    if not video_url:
+        return None
+
+    title = gif.get("title") or gif.get("id") or gif_id
+    thumb = (gif.get("thumbnail") or gif.get("poster") or "")
+    print(f"[redgifs] {gif_id}: {video_url[:80]}")
+    return {
+        "id":      gif_id,
+        "url":     video_url,
+        "ext":     "mp4",
+        "title":   title,
+        "thumbnail": thumb if thumb.startswith("http") else None,
+        "protocol": "https",
+        "http_headers": safe_headers({
+            "User-Agent": ua,
+            "Referer": "https://www.redgifs.com/",
+            "Authorization": f"Bearer {token}",
+        }),
+    }

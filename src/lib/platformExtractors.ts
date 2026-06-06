@@ -915,10 +915,41 @@ async function extractJapaneseGeneric(pageUrl: string): Promise<DetectedMedia[]>
   } catch { return []; }
 }
 
+// ── Redgifs ───────────────────────────────────────────────────────────────────
+async function extractRedgifs(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const m = pageUrl.match(/\/(?:watch|ifr|gif)\/([A-Za-z0-9]+)/i);
+    if (!m) return [];
+    const gifId = m[1].toLowerCase();
+
+    // Fetch temporary auth token (bound to device IP + UA)
+    const tokenRes = await fetch('https://api.redgifs.com/v2/auth/temporary', {
+      headers: { 'User-Agent': DESKTOP_UA, Accept: 'application/json' },
+    });
+    if (!tokenRes.ok) return [];
+    const { token } = await tokenRes.json() as { token?: string };
+    if (!token) return [];
+
+    const gifRes = await fetch(`https://api.redgifs.com/v2/gifs/${gifId}`, {
+      headers: { 'User-Agent': DESKTOP_UA, Accept: 'application/json', Authorization: `Bearer ${token}` },
+    });
+    if (!gifRes.ok) return [];
+    const data = await gifRes.json() as { gif?: { urls?: { hd?: string; sd?: string }; title?: string; thumbnail?: string } };
+    const gif = data.gif;
+    const url = gif?.urls?.hd ?? gif?.urls?.sd ?? '';
+    if (!url.startsWith('http')) return [];
+
+    const entry = makeItem(url, pageUrl, undefined, 'social-extractor', 0.92);
+    if (gif?.thumbnail) entry.thumbnailUrl = gif.thumbnail;
+    return [entry];
+  } catch { return []; }
+}
+
 // ── Platform registry ─────────────────────────────────────────────
 const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[]> }> = [
   { re: /tiktok\.com\/@[^/]+\/(?:video|photo|item)\/\d+|tiktok\.com\/(?:t|v)\/[A-Za-z0-9]+|vm\.tiktok\.com\/[A-Za-z0-9]+/, fn: extractTikTok },
   { re: /(?:twitter|x)\.com\/[^/]+\/status\/\d+/,                                  fn: extractTwitter     },
+  { re: /redgifs\.com\/(?:watch|ifr|gif)\/[A-Za-z0-9]+/i,                          fn: extractRedgifs     },
   { re: /instagram\.com\/(?:(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+|share\/(?:p|reel)\/[A-Za-z0-9_-]+)/, fn: extractInstagram   },
   { re: /threads\.net\/@[^/]+\/post\/[A-Za-z0-9_-]+/,                              fn: extractInstagram   },
   { re: /dailymotion\.com\/video\/[A-Za-z0-9]+/,                                    fn: extractDailymotion },
