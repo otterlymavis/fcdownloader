@@ -242,6 +242,20 @@ _CURATED_SITE_PROFILES: tuple[dict[str, Any], ...] = (
         "language": "en-US,en;q=0.9",
         "cdn": ("i.gyazo.com", "gyazo.com"),
     },
+    {
+        "label": "Nico Seiga",
+        "hosts": ("seiga.nicovideo.jp",),
+        "referer": "https://seiga.nicovideo.jp/",
+        "language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("lohas.nicoseiga.jp", "seiga.nicovideo.jp"),
+    },
+    {
+        "label": "KakaoStory",
+        "hosts": ("story.kakao.com",),
+        "referer": "https://story.kakao.com/",
+        "language": "ko-KR,ko;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("kakaocdn.net", "kakao.com", "story.kakao.com"),
+    },
 )
 
 
