@@ -165,6 +165,21 @@ func TestMediaProgressDoesNotMoveBackward(t *testing.T) {
 	}
 }
 
+func TestCurrentMediaPercentUsesLatestProgress(t *testing.T) {
+	mediaProgressMu.Lock()
+	mediaDownloads = make(map[string]*mediaProgress)
+	mediaProgressMu.Unlock()
+
+	const rawURL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+	if got := currentMediaPercent(rawURL); got != 0 {
+		t.Fatalf("missing progress percent = %v, want 0", got)
+	}
+	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 44, Status: "downloading"})
+	if got := currentMediaPercent(rawURL); got != 44 {
+		t.Fatalf("current progress percent = %v, want 44", got)
+	}
+}
+
 func TestCachedToolValidRemovesChecksumMismatch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tool")

@@ -271,11 +271,18 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		logf("failed to open downloaded file: %v", err)
+		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
 		return
 	}
 	defer file.Close()
 
-	io.Copy(w, file)
+	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 99, Status: "serving"})
+	if _, err := io.Copy(w, file); err != nil {
+		logf("failed to serve downloaded file: %v", err)
+		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
+		return
+	}
+	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 100, Status: "complete"})
 }
 
 func runYtDlpJSON(ctx context.Context, rawURL string) (map[string]interface{}, error) {
@@ -387,6 +394,7 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (strin
 		stableErr := fmt.Errorf("%s", tail(out))
 		if shouldRetryWithNightly(rawURL, stableErr.Error()) {
 			logf("stable yt-dlp failed for YouTube download; retrying with nightly: %v", stableErr)
+			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: currentMediaPercent(rawURL), Status: "retrying"})
 			nightly, nightlyErr := ytDlpNightlyPath(ctx)
 			if nightlyErr != nil {
 				return "", nil, fmt.Errorf("%v; nightly fallback unavailable: %w", stableErr, nightlyErr)
@@ -1071,7 +1079,7 @@ type mediaProgress struct {
 	Percent    float64 `json:"percent"`
 	Speed      string  `json:"speed"`
 	ETA        string  `json:"eta"`
-	Status     string  `json:"status"` // "starting", "downloading", "merging", "complete", "error"
+	Status     string  `json:"status"`
 	Downloaded string  `json:"downloaded"`
 	Total      string  `json:"total"`
 }
@@ -1108,6 +1116,15 @@ func getMediaProgress(url string) *mediaProgress {
 	mediaProgressMu.Lock()
 	defer mediaProgressMu.Unlock()
 	return mediaDownloads[url]
+}
+
+func currentMediaPercent(url string) float64 {
+	mediaProgressMu.Lock()
+	defer mediaProgressMu.Unlock()
+	if current := mediaDownloads[url]; current != nil {
+		return current.Percent
+	}
+	return 0
 }
 
 func handleDownloadProgress(w http.ResponseWriter, r *http.Request) {
@@ -1195,8 +1212,8 @@ func runYtDlpWithProgress(ctx context.Context, ytDlp string, args []string, rawU
 
 	setMediaProgress(rawURL, &mediaProgress{
 		URL:     rawURL,
-		Percent: 100,
-		Status:  "complete",
+		Percent: 98,
+		Status:  "ready",
 	})
 	return outputBuf.Bytes(), nil
 }

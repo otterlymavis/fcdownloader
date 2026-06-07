@@ -143,6 +143,15 @@ function startProgressPolling(mediaUrl) {
       } else if (data.status === "merging") {
         progressFloor = Math.max(progressFloor, 98);
         setProgress(progressFloor, "Companion is merging formats...");
+      } else if (data.status === "retrying") {
+        progressFloor = Math.max(progressFloor, Math.min(Number(data.percent) || progressFloor, 95));
+        setProgress(progressFloor, "Companion is retrying with updated YouTube support...");
+      } else if (data.status === "ready") {
+        progressFloor = Math.max(progressFloor, 98);
+        setProgress(progressFloor, "Preparing browser download...");
+      } else if (data.status === "serving") {
+        progressFloor = Math.max(progressFloor, 99);
+        setProgress(progressFloor, "Sending video to browser...");
       } else if (data.status === "complete") {
         progressFloor = 100;
         setProgress(100, "Download complete!");
