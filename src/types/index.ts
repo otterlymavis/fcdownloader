@@ -1,4 +1,5 @@
 export type MediaType = 'hls' | 'dash' | 'direct' | 'mse';
+export type MediaKind = 'video' | 'image' | 'audio';
 
 export type DownloadStatus =
   | 'pending'
@@ -9,9 +10,39 @@ export type DownloadStatus =
   | 'failed'
   | 'cancelled';
 
-export type DownloadStrategy = 'hls-segments' | 'direct' | 'dash' | 'vimeo-json' | 'ffmpeg' | 'yt-dlp';
+export type DownloadStrategy = 'hls-segments' | 'direct' | 'dash' | 'vimeo-json' | 'ffmpeg' | 'yt-dlp' | 'server-download';
 
-export type ManifestType = 'hls' | 'dash' | 'direct' | 'mse' | 'vimeo-json';
+export interface FormatOption {
+  id: string;
+  label?: string;
+  ext?: string;
+  protocol?: string;
+  width?: number;
+  height?: number;
+  resolution?: string;
+  fps?: number;
+  vcodec?: string;
+  acodec?: string;
+  filesize?: number;
+  filesizeApprox?: number;
+}
+
+export interface SourceAuditEntry {
+  strategy: string;
+  source: string;
+  url?: string;
+  selected?: boolean;
+  rejectedReason?: string;
+  fieldPath?: string;
+  mimeType?: string;
+  width?: number;
+  height?: number;
+  bitrate?: number;
+  contentLength?: number;
+  status?: number;
+  headersNeeded?: Record<string, string>;
+  notes?: string;
+}
 
 /** Where the URL was first observed. Ordered from highest to lowest signal strength. */
 export type Provenance =
@@ -29,33 +60,6 @@ export type Provenance =
   | 'manifest-parser'       // content-based: #EXTM3U or <MPD detected in response body
   | 'manual';               // user typed/pasted the URL
 
-/** Unified schema for all detected media streams. */
-export interface StreamVariant {
-  id: string;
-  url: string;
-  manifestType: ManifestType;
-  container?: string;       // mp4 | webm | ts | fmp4
-  codecs?: string;          // e.g. "avc1.640028,mp4a.40.2"
-  bitrate?: number;         // bits/sec
-  width?: number;
-  height?: number;
-  fps?: number;
-  hasAudio: boolean;
-  hasVideo: boolean;
-  duration?: number;        // seconds
-  provenance: Provenance;
-  confidence: number;       // 0–1
-  segmentStrategy?: DownloadStrategy;
-  audioTrackUrl?: string;   // separate audio track URL (Bilibili DASH, etc.)
-  audioTrackCodecs?: string;
-  label?: string;
-  platform?: string;
-  pageUrl?: string;
-  userAgent?: string;
-  mimeType?: string;
-  timestamp?: number;
-}
-
 export interface DetectedMedia {
   id: string;
   url: string;
@@ -64,6 +68,7 @@ export interface DetectedMedia {
   timestamp: number;
   mimeType?: string;
   mediaType: MediaType;
+  mediaKind?: MediaKind;
   label?: string;
   confidence?: number;         // 0–1
   provenance?: Provenance;
@@ -75,6 +80,18 @@ export interface DetectedMedia {
   codecs?: string;
   hasAudio?: boolean;
   hasVideo?: boolean;
+  sourcePageUrl?: string;
+  sourceTitle?: string;
+  thumbnailUrl?: string;
+  duration?: number;
+  extractor?: string;
+  formatId?: string;
+  availableFormats?: FormatOption[];
+  sourceAudit?: SourceAuditEntry[];
+  forceServerDownload?: boolean;
+  audioOnly?: boolean;
+  subtitles?: boolean;
+  subLangs?: string;
   /** Exact HTTP headers to replay for all download requests (set by extractors). When present, downloaders must use these verbatim instead of building their own. */
   httpHeaders?: Record<string, string>;
 }
@@ -89,6 +106,7 @@ export interface DownloadTask {
   downloadedSegments: number;
   localPlaylistPath?: string;
   error?: string;
+  errorCode?: string;
   createdAt: number;
   completedAt?: number;
 }

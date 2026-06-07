@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DetectedMedia, DownloadStatus, DownloadStrategy, DownloadTask } from '../types';
 import { deleteDownload } from '../lib/hlsDownloader';
 import { DRMProtectedError, pickStrategy, runDownload } from '../lib/downloadStrategies';
+import { ServerExtractionError } from '../lib/serverExtractor';
 
 const STORAGE_KEY = '@fcdownloader/tasks_v1';
 
@@ -59,10 +60,16 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
     dispatch({ type: 'UPDATE', id, patch });
   }, []);
 
-  // ── Core runner — shared by enqueue and retry ────────────────
   const _run = useCallback(
     async (task: DownloadTask): Promise<void> => {
-      const { id, media, strategy } = task;
+      const { id, strategy } = task;
+      const media = { ...task.media };
+      if (media.url.startsWith('http://') && !media.url.includes('localhost') && !media.url.includes('127.0.0.1')) {
+        media.url = media.url.replace('http://', 'https://');
+      }
+      if (media.audioTrackUrl && media.audioTrackUrl.startsWith('http://') && !media.audioTrackUrl.includes('localhost') && !media.audioTrackUrl.includes('127.0.0.1')) {
+        media.audioTrackUrl = media.audioTrackUrl.replace('http://', 'https://');
+      }
       const controller = new AbortController();
       controllers.current.set(id, controller);
 
@@ -94,14 +101,19 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
         });
         optionsRef.current.onComplete?.(completedTask);
       } catch (err) {
+        console.error('[useDownloadManager] Download failed:', err);
         const isDRM = err instanceof DRMProtectedError;
         const isCancelled = (err as Error).message === 'Cancelled';
+        const errorCode = err instanceof ServerExtractionError ? err.code : undefined;
         const errorMsg = isDRM
           ? 'DRM-protected — cannot download'
           : (err as Error).message;
 
-        const failedTask: DownloadTask = { ...task, status: isCancelled ? 'cancelled' : 'failed', error: errorMsg };
-        update(id, { status: failedTask.status, error: errorMsg });
+        const failedTask: DownloadTask = {
+          ...task, status: isCancelled ? 'cancelled' : 'failed',
+          error: errorMsg, errorCode,
+        };
+        update(id, { status: failedTask.status, error: errorMsg, errorCode });
 
         if (!isDRM && !isCancelled) {
           await deleteDownload(id);
@@ -131,7 +143,11 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
         createdAt: Date.now(),
       };
       dispatch({ type: 'ADD', task });
-      await _run(task);
+      // Fire-and-forget: the download runs in the background and reports
+      // progress via task status (shown in the In-Progress list). Awaiting it
+      // here would block the caller — keeping the Home "Finding…" button stuck
+      // for the whole download and serializing galleries. _run never throws.
+      void _run(task);
     },
     [_run],
   );
@@ -155,7 +171,7 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
         completedAt: undefined,
       };
       update(taskId, task);
-      await _run(task);
+      void _run(task);
     },
     [tasks, _run, update],
   );

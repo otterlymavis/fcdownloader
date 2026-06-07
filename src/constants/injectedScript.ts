@@ -64,12 +64,12 @@ export const INJECTED_SCRIPT = `
     if (u.indexOf('.m3u8') !== -1) return 'hls';
     if (u.indexOf('.mpd')  !== -1) return 'dash';
     if (/\\.(ts|m4s|aac|m4a)$/.test(u)) return null;
-    if (/\\.(mp4|webm|mov|avi|m4v)$/.test(u)) return 'hls';
+    if (/\\.(mp4|webm|mov|avi|m4v|jpe?g|png|webp|gif|avif|heic|mp3|wav|ogg|opus|flac)$/.test(u)) return 'direct';
     if (mime) {
       var m = String(mime).toLowerCase();
       if (m.indexOf('mpegurl') !== -1 || m.indexOf('m3u8') !== -1) return 'hls';
       if (m.indexOf('dash') !== -1  || m.indexOf('mpd')  !== -1) return 'dash';
-      if (m.indexOf('mp4')  !== -1  || m.indexOf('video/') !== -1) return 'hls';
+      if (m.indexOf('mp4')  !== -1  || m.indexOf('video/') !== -1 || m.indexOf('image/') !== -1 || m.indexOf('audio/') !== -1) return 'direct';
     }
     // Known video CDN domains that serve media without file extensions
     if (/\\bvideo\\.twimg\\.com\\//.test(url))                      return 'hls';
@@ -77,27 +77,100 @@ export const INJECTED_SCRIPT = `
     if (/\\btiktokcdn-us\\.com\\//.test(url))                       return 'hls';
     if (/\\bv\\d+-webapp\\.tiktok\\.com\\//.test(url))             return 'hls';
     if (/\\btiktok\\.com\\/video\\//.test(url))                     return 'hls';
-    if (/\\bcdninstagram\\.com\\//.test(url))                       return 'hls';
-    if (/\\bscontent[-\\w]*\\.cdninstagram\\.com\\//.test(url))    return 'hls';
-    if (/\\binstagram\\.com\\/.*\\bvideo\\b/.test(url))             return 'hls';
+    if (/\\bcdninstagram\\.com\\//.test(url))                       return 'direct';
+    if (/\\bscontent[-\\w]*\\.cdninstagram\\.com\\//.test(url))    return 'direct';
+    if (/\\binstagram\\.com\\/.*\\bvideo\\b/.test(url))             return 'direct';
     if (/\\bv\\.redd\\.it\\//.test(url))                            return 'hls';
     if (/\\bfbcdn\\.net\\/.*\\bvideo/.test(url))                    return 'hls';
-    if (/\\bfbcdn\\.net\\/.*\\.mp4/.test(url))                      return 'hls';
+    if (/\\bvod\\.pstatic\\.net\\//.test(url))                      return 'hls';
+    if (/\\bfbcdn\\.net\\/.*\\.mp4/.test(url))                      return 'direct';
     if (/\\bdailymotion\\.com\\/cdn/.test(url))                     return 'hls';
     if (/\\bdmcdn\\.net\\//.test(url))                              return 'hls';
     if (/\\bgooglevideo\\.com\\/videoplayback/.test(url))           return 'hls';
     if (/\\bmanifest\\.googlevideo\\.com\\/api\\/manifest\\/dash/.test(url)) return 'dash';
     if (/\\bpinimg\\.com\\/videos\\//.test(url))                    return 'hls';
     if (/\\busher\\.twitch\\.tv\\//.test(url))                      return 'hls';
-    if (/\\bbilivideo\\.com\\//.test(url))                          return 'hls';
+    if (/\\bbilivideo\\.com\\//.test(url))                          return 'direct';
+    if (/\\bweibocdn\\.com\\//.test(url))                            return 'direct';
+    if (/\\bxhscdn\\.com\\//.test(url))                              return 'direct';
     // Generic path heuristics
     if (/\\/(master|playlist|manifest|stream|hls|dash)(\\.|\\?|\\/|$)/i.test(url) &&
         !/\\.(html?|js|css|woff|png|jpe?g|gif|svg)(\\?|$)/i.test(url)) return 'hls';
     return null;
   }
 
+  function detectKind(url, mime) {
+    var u = String(url || '').split('?')[0].toLowerCase();
+    var m = String(mime || '').toLowerCase();
+    if (m.indexOf('image/') === 0 || /\\.(jpe?g|png|webp|gif|avif|heic)$/.test(u)) return 'image';
+    if (m.indexOf('audio/') === 0 || /\\.(mp3|m4a|aac|wav|ogg|opus|flac)$/.test(u)) return 'audio';
+    return 'video';
+  }
+
+  function isSkippableImage(url) {
+    var u = String(url || '').toLowerCase();
+    return /(?:favicon|apple-touch-icon|sprite|logo|placeholder|blank|pixel|tracking|tracker|beacon|counter|spacer|button|banner|ads?)/.test(u) ||
+      /\\/(?:icons?|assets?)\\//.test(u) && !/(?:cdninstagram|fbcdn|threadscdn|pinimg|sinaimg|xhscdn|pstatic)/.test(u);
+  }
+
+  function srcsetUrls(value) {
+    if (!value || typeof value !== 'string') return [];
+    return value.split(',').map(function (part) {
+      return part.trim().split(/\\s+/)[0];
+    }).filter(Boolean);
+  }
+
+  function emitElementMedia(el) {
+    if (!el) return;
+    var tag = String(el.tagName || '').toUpperCase();
+    if (tag === 'IMG' && Math.max(el.naturalWidth || 0, el.naturalHeight || 0) < 160) return;
+    var type = el.type || null;
+    var urls = [
+      el.currentSrc,
+      el.src,
+      el.getAttribute && el.getAttribute('src'),
+      el.getAttribute && el.getAttribute('data-src'),
+      el.getAttribute && el.getAttribute('data-original'),
+      el.getAttribute && el.getAttribute('data-lazy-src'),
+      el.getAttribute && el.getAttribute('data-url'),
+      el.getAttribute && el.getAttribute('data-image'),
+      el.getAttribute && el.getAttribute('data-img'),
+    ].filter(Boolean);
+    if (el.srcset) urls = urls.concat(srcsetUrls(el.srcset));
+    if (el.getAttribute) {
+      urls = urls.concat(srcsetUrls(el.getAttribute('srcset')));
+      urls = urls.concat(srcsetUrls(el.getAttribute('data-srcset')));
+    }
+    urls.forEach(function (url) { emit(url, type); log(url); });
+  }
+
+  function scanBackgroundImages(root) {
+    try {
+      (root || document).querySelectorAll('[style]').forEach(function (el) {
+        var style = el.getAttribute('style') || '';
+        var re = /url\\((['"]?)(https?:\\/\\/[^'")]+)\\1\\)/gi;
+        var m;
+        while ((m = re.exec(style))) {
+          emit(m[2], null, 'mutation-observer', 0.45);
+          log(m[2]);
+        }
+      });
+    } catch (_) {}
+  }
+
+  function isNonContentUrl(url, mime) {
+    var u = String(url || '').toLowerCase();
+    var m = String(mime || '').toLowerCase();
+    if (/\\.(?:html?|php|aspx?)(?:[?#]|$)/i.test(u)) return true;
+    if (m.indexOf('text/html') !== -1 || m.indexOf('application/xhtml') !== -1 || m.indexOf('application/json') !== -1) return true;
+    if (/(?:doubleclick|googlesyndication|google-analytics|analytics|adservice|scorecardresearch|outbrain|taboola|treasuredata|bidswitch)/i.test(u)) return true;
+    if (/(?:^|[\\/_.-])(?:ad|ads|banner|beacon|tracking|tracker|counter|spacer|sprite|logo|icon|button|common|header|footer|gnb|nav|placeholder|blank|pixel)(?:[\\/_.-]|$)/i.test(u)) return true;
+    if (/\\.gif(?:[?#]|$)/i.test(u) && !/(?:article|photo|gallery|image|upimg|contents|media|original|large)/i.test(u)) return true;
+    return false;
+  }
+
   var LOG_SEEN = new Set();
-  var SKIP_EXT = /\\.(png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot|otf|css|js|map)(\\?|$)/i;
+  var SKIP_EXT = /\\.(svg|ico|woff2?|ttf|eot|otf|css|js|map)(\\?|$)/i;
 
   // Assign a confidence score based on URL/mime heuristics
   function confForUrl(url, mime, base) {
@@ -118,8 +191,11 @@ export const INJECTED_SCRIPT = `
     if (!url || typeof url !== 'string') return;
     url = url.trim();
     if (!url || url.startsWith('blob:') || url.startsWith('data:') || url.length < 8) return;
+    try { url = new URL(url, location.href).href; } catch (_) {}
+    if (isNonContentUrl(url, mime)) return;
     var type = detectType(url, mime);
     if (!type) return;
+    if (detectKind(url, mime) === 'image' && isSkippableImage(url)) return;
     // Allow re-emit when a concrete mime type arrives for an already-seen URL:
     // the first emit uses URL heuristics (may be wrong); the body-read emit
     // has the real Content-Type and should correct the mediaType on the app side.
@@ -128,7 +204,7 @@ export const INJECTED_SCRIPT = `
     var conf = confForUrl(url, mime, typeof confidence === 'number' ? confidence : 0.5);
     post({ event: 'MEDIA_DETECTED', url: url, pageUrl: location.href,
            userAgent: navigator.userAgent, mimeType: mime || null,
-           mediaType: type, timestamp: Date.now(),
+           mediaType: type, mediaKind: detectKind(url, mime), timestamp: Date.now(),
            provenance: provenance || 'perf-observer',
            confidence: conf });
   }
@@ -137,7 +213,8 @@ export const INJECTED_SCRIPT = `
     if (!url || typeof url !== 'string') return;
     url = url.trim();
     if (!url || url.startsWith('blob:') || url.startsWith('data:') || url.length < 12) return;
-    if (SKIP_EXT.test(url.split('?')[0])) return;
+    try { url = new URL(url, location.href).href; } catch (_) {}
+    if (SKIP_EXT.test(url.split('?')[0]) && !/\\.(jpe?g|png|webp|gif|avif|heic)(\\?|$)/i.test(url)) return;
     if (LOG_SEEN.has(url)) return;
     LOG_SEEN.add(url);
     post({ event: 'URL_CAPTURED', url: url, timestamp: Date.now() });
@@ -151,8 +228,8 @@ export const INJECTED_SCRIPT = `
       text.replace(/\\\\\\/g, '/').replace(/\\\\u0026/g, '&').replace(/\\\\u003d/g, '=')
            .replace(/\\\\u002F/gi, '/'),
     ];
-    var extRe = /https?:\\/\\/[^"'\\\\\\s<>]{4,}?\\.(m3u8|mpd|mp4|webm|mov|m4v)[^"'\\\\\\s<>]*/gi;
-    var cdnRe = /https?:\\/\\/[^"'\\\\\\s<>]*(?:video\\.twimg\\.com|tiktokcdn\\.com|tiktokcdn-us\\.com|v\\d+-webapp\\.tiktok\\.com|cdninstagram\\.com|scontent[-\\w]*\\.cdninstagram\\.com|v\\.redd\\.it|fbcdn\\.net\\/videos|vimeocdn\\.com\\/video|googlevideo\\.com\\/videoplayback|pinimg\\.com\\/videos|dmcdn\\.net|usher\\.twitch\\.tv|bilivideo\\.com)[^"'\\\\\\s<>]{4,}/gi;
+    var extRe = /https?:\\/\\/[^"'\\\\\\s<>]{4,}?\\.(m3u8|mpd|mp4|webm|mov|m4v|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)[^"'\\\\\\s<>]*/gi;
+    var cdnRe = /https?:\\/\\/[^"'\\\\\\s<>]*(?:video\\.twimg\\.com|tiktokcdn\\.com|tiktokcdn-us\\.com|v\\d+-webapp\\.tiktok\\.com|cdninstagram\\.com|scontent[-\\w]*\\.cdninstagram\\.com|v\\.redd\\.it|fbcdn\\.net|threadscdn\\.com|vimeocdn\\.com\\/video|googlevideo\\.com\\/videoplayback|pinimg\\.com\\/(?:videos|originals|736x|1200x|564x)|dmcdn\\.net|usher\\.twitch\\.tv|bilivideo\\.com|weibocdn\\.com|xhscdn\\.com|vod\\.pstatic\\.net)[^"'\\\\\\s<>]{4,}/gi;
     variants.forEach(function (body) {
       var m;
       extRe.lastIndex = 0;
@@ -207,6 +284,7 @@ export const INJECTED_SCRIPT = `
       '__DEFAULT_SCOPE__',
       '__NUXT__',
       '__staticRouterHydrationData',
+      '__INITIAL_STATE__',
     ].forEach(function (key) {
       try {
         if (window[key]) scanText(JSON.stringify(window[key]));
@@ -378,10 +456,24 @@ export const INJECTED_SCRIPT = `
             try { _blobLineageResp.set(res, url); } catch(_) {}
           }
           res.clone().text().then(function (text) {
+            if (!text || text.length > 1048576) return; // skip >1 MB
             var head = (text || '').trimStart().slice(0, 40);
             if (head.indexOf('#EXTM3U') === 0) emit(url, 'application/x-mpegurl', 'manifest-parser', 0.92);
             else if (head.indexOf('<?xml') === 0 && text.indexOf('<MPD ') !== -1) emit(url, 'application/dash+xml', 'manifest-parser', 0.92);
             scanText(text);
+            // JSON API body parsing — catch image_url / video_url fields
+            // that scanText's URL regex misses (e.g. extensionless CDN paths)
+            var ct = res.headers && res.headers.get('Content-Type');
+            var isApi = (ct && ct.indexOf('application/json') !== -1) ||
+                        /\/api\/|\/v[123]\//.test(url.split('?')[0]);
+            if (isApi && (head.startsWith('{') || head.startsWith('['))) {
+              var jsonRe = /"(?:video_url|playable_url|browser_native_hd_url|hd_src|sd_src|download_url|play_url|stream_url|media_url|image_url|photo_url|thumbnail_url|cover_url|src_url|original_url|article_photo_link)"\s*:\s*"(https?:\\?\/\\?\/[^"]{10,})"/gi;
+              var jm;
+              while ((jm = jsonRe.exec(text))) {
+                var jurl = jm[1].replace(/\\u002F/gi, '/').replace(/\\/g, '');
+                if (jurl.startsWith('http')) { emit(jurl, null, 'json-api', 0.75); }
+              }
+            }
           }).catch(function () {});
         }
       } catch (_) {}
@@ -417,10 +509,22 @@ export const INJECTED_SCRIPT = `
         var isSegment = /\\.(ts|m4s|aac|m4a)$/i.test(base.split('/').pop() || '');
         if (!isSegment && (this.responseType === '' || this.responseType === 'text')) {
           var text = this.responseText || '';
+          if (text.length > 1048576) return;
           var head = text.trimStart().slice(0, 40);
           if (head.indexOf('#EXTM3U') === 0) emit(xurl, 'application/x-mpegurl', 'manifest-parser', 0.92);
           else if (head.indexOf('<?xml') === 0 && text.indexOf('<MPD ') !== -1) emit(xurl, 'application/dash+xml', 'manifest-parser', 0.92);
           scanText(text);
+          var xct = this.getResponseHeader('Content-Type') || '';
+          var xIsApi = (xct.indexOf('application/json') !== -1) ||
+                       /\/api\/|\/v[123]\//.test(base);
+          if (xIsApi && (head.startsWith('{') || head.startsWith('['))) {
+            var xjsonRe = /"(?:video_url|playable_url|browser_native_hd_url|hd_src|sd_src|download_url|play_url|stream_url|media_url|image_url|photo_url|thumbnail_url|cover_url|src_url|original_url|article_photo_link)"\s*:\s*"(https?:\\?\/\\?\/[^"]{10,})"/gi;
+            var xjm;
+            while ((xjm = xjsonRe.exec(text))) {
+              var xjurl = xjm[1].replace(/\\u002F/gi, '/').replace(/\\/g, '');
+              if (xjurl.startsWith('http')) { emit(xjurl, null, 'json-api', 0.75); }
+            }
+          }
         }
       } catch (_) {}
     });
@@ -598,13 +702,14 @@ export const INJECTED_SCRIPT = `
       muts.forEach(function (m) {
         m.addedNodes.forEach(function (node) {
           if (node.nodeType !== 1) return;
-          if (/^(VIDEO|AUDIO|SOURCE)$/.test(node.tagName)) {
-            emit(node.src || node.currentSrc || node.getAttribute('src'), node.type || null, 'mutation-observer', 0.75);
+          if (/^(VIDEO|AUDIO|SOURCE|IMG|PICTURE)$/.test(node.tagName)) {
+            emitElementMedia(node);
           }
           if (node.querySelectorAll) {
-            node.querySelectorAll('video,audio,source').forEach(function (el) {
-              emit(el.src || el.currentSrc || el.getAttribute('src'), el.type || null, 'mutation-observer', 0.75);
+            node.querySelectorAll('video,audio,source,img,picture source').forEach(function (el) {
+              emitElementMedia(el);
             });
+            scanBackgroundImages(node);
           }
         });
       });
@@ -616,8 +721,8 @@ export const INJECTED_SCRIPT = `
   var _timer = setInterval(function () {
     if (++_ticks > 60) { clearInterval(_timer); return; }
     try {
-      document.querySelectorAll('video,audio').forEach(function (el) {
-        if (el.currentSrc) emit(el.currentSrc, null);
+      document.querySelectorAll('video,audio,img').forEach(function (el) {
+        emitElementMedia(el);
       });
       performance.getEntriesByType('resource').forEach(function (e) { emit(e.name, null); });
     } catch (_) {}
@@ -628,23 +733,24 @@ export const INJECTED_SCRIPT = `
 
   // ── 13. On-demand deep scan ───────────────────────────────────
   window.__fcdownloader_scan = function () {
-    document.querySelectorAll('video,audio,source').forEach(function (el) {
-      emit(el.src || el.currentSrc || el.getAttribute('src'), el.type || null);
+    document.querySelectorAll('video,audio,source,img,picture source').forEach(function (el) {
+      emitElementMedia(el);
     });
     try { performance.getEntriesByType('resource').forEach(function (e) { emit(e.name, null); }); }
     catch (_) {}
+    scanBackgroundImages(document);
     // Inline scripts
     document.querySelectorAll('script').forEach(function (s) {
       var text = s.textContent || '';
-      var re = /["'](https?:\\/\\/[^"'\\s]{8,}\\.(m3u8|mpd|mp4|webm)[^"'\\s]*)/gi;
-      var re2 = /"(?:src|file|url|source|stream|manifest|playAddr|play_addr|videoUrl|video_url|hls_url|dash_url)"\s*:\s*"(https?:\\/\\/[^"]{8,})"/gi;
+      var re = /["'](https?:\\/\\/[^"'\\s]{8,}\\.(m3u8|mpd|mp4|webm|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)[^"'\\s]*)/gi;
+      var re2 = /"(?:src|file|url|source|stream|manifest|playAddr|play_addr|videoUrl|video_url|image|image_url|display_url|thumbnail|hls_url|dash_url)"\s*:\s*"(https?:\\/\\/[^"]{8,})"/gi;
       [re, re2].forEach(function (r) { var m; while ((m = r.exec(text))) emit(m[1], null); });
     });
     // data-* attributes
     document.querySelectorAll(
-      '[data-src],[data-url],[data-video],[data-hls],[data-stream],[data-manifest],[data-play-url]'
+      '[data-src],[data-url],[data-video],[data-image],[data-img],[data-hls],[data-stream],[data-manifest],[data-play-url]'
     ).forEach(function (el) {
-      ['data-src','data-url','data-video','data-hls','data-stream','data-manifest','data-play-url'].forEach(function (a) {
+      ['data-src','data-url','data-video','data-image','data-img','data-hls','data-stream','data-manifest','data-play-url'].forEach(function (a) {
         var v = el.getAttribute(a);
         if (v && v.startsWith('http')) emit(v, null);
       });
@@ -679,10 +785,11 @@ export const INJECTED_SCRIPT = `
   // ── 14. Initial DOM scan ──────────────────────────────────────
   function initialScan() {
     try {
-      document.querySelectorAll('video,audio,source').forEach(function (el) {
-        emit(el.src || el.currentSrc || el.getAttribute('src'), el.type || null);
+      document.querySelectorAll('video,audio,source,img,picture source').forEach(function (el) {
+        emitElementMedia(el);
       });
       performance.getEntriesByType('resource').forEach(function (e) { emit(e.name, null); });
+      scanBackgroundImages(document);
     } catch (_) {}
     scanGlobals();
   }

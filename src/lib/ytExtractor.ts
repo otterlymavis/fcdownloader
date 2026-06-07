@@ -17,6 +17,7 @@
 
 import { DetectedMedia } from '../types';
 import { extractSessionCookies } from './cookieManager';
+import { runtimeLanguageTags, youtubeLocaleForTags } from './languageProfiles';
 
 const INNERTUBE_URL =
   'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
@@ -93,6 +94,7 @@ export async function extractYouTubeStreams(
 ): Promise<DetectedMedia[]> {
   const videoId = extractYouTubeVideoId(pageUrl);
   if (!videoId) return [];
+  const youtubeLocale = youtubeLocaleForTags(runtimeLanguageTags());
 
   // Forward youtube.com cookies if the user has signed in via the in-app
   // browser. With a logged-in session, InnerTube returns hlsManifestUrl for
@@ -124,8 +126,8 @@ export async function extractYouTubeStreams(
         videoId,
         context: {
           client: {
-            hl: 'en',
-            gl: 'US',
+            hl: youtubeLocale.hl,
+            gl: youtubeLocale.gl,
             clientName: client.name,
             clientVersion: client.version,
             utcOffsetMinutes: 0,

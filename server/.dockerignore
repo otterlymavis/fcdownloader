@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.env.*
+.git/
+.idea/
+.vscode/
+README.md
+fly.toml
+
+# Never bake credentials into the image
+cookies.txt
+cookies.b64
+_extract_test.json

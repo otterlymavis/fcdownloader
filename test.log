@@ -1,0 +1,8 @@
+Monitoring boot status for iPhone 17 (91DD8048-BB9A-42E8-8790-90D809267A88).
+Device already booted, nothing to do.
+
+Testing 1 URLs on iPhone 17 (91DD8048-BB9A-42E8-8790-90D809267A88)
+[PASS] 01/01 Direct-MP4: fcdownloader://share?url=https%3A%2F%2Fstorage.googleapis.com%2Fgtv-videos-bucket%2Fsample%2FBigBuckBunny.mp4
+
+1/1 deep links opened
+Results: /Users/imac/Documents/fcdownloader/artifacts/ios-url-tests/results.jsonl

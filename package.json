@@ -1,36 +1,66 @@
 {
   "name": "fcdownloader",
-  "version": "1.0.0",
+  "version": "1.5.20",
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "postinstall": "patch-package"
+    "postinstall": "patch-package",
+    "pack:extension": "node scripts/pack-extension.mjs",
+    "validate:safari-extension": "node --check safari-extension/background.js && node --check safari-extension/content.js && node --check safari-extension/popup.js",
+    "test:ios-urls": "python3 scripts/test_ios_urls.py",
+    "test:macos-safari-urls": "python3 scripts/test_macos_safari_urls.py",
+    "bake:web": "node scripts/bake-web-config.mjs",
+    "dist:companion": "npm --prefix desktop-companion run dist",
+    "dist:companion:nobrowser-go": "npm --prefix desktop-companion run variants:nobrowser-go",
+    "test:companion:nobrowser-go": "npm --prefix desktop-companion run test:nobrowser-go"
   },
   "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-cookies/cookies": "^6.2.1",
-    "expo": "~55.0.24",
+    "expo": "~55.0.26",
     "expo-build-properties": "~55.0.14",
-    "expo-dev-client": "~55.0.34",
-    "expo-file-system": "~55.0.20",
+    "expo-file-system": "~55.0.22",
+    "expo-font": "~55.0.8",
+    "expo-linear-gradient": "~55.0.14",
     "expo-linking": "~55.0.15",
     "expo-media-library": "~55.0.17",
-    "expo-notifications": "~55.0.23",
-    "expo-sharing": "~55.0.19",
+    "expo-sharing": "~55.0.20",
     "expo-status-bar": "~55.0.6",
     "expo-video": "~55.0.17",
     "fast-xml-parser": "^5.8.0",
     "react": "19.2.0",
+    "react-dom": "19.2.0",
     "react-native": "0.83.6",
+    "react-native-safe-area-context": "~5.6.2",
+    "react-native-web": "^0.21.0",
     "react-native-webview": "13.16.0"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "adm-zip": "^0.5.17",
+    "cross-env": "^10.1.0",
+    "module-alias": "^2.3.4",
     "patch-package": "^8.0.1",
+    "tsx": "^4.22.4",
     "typescript": "~5.9.2"
+  },
+  "expo": {
+    "doctor": {
+      "appConfigFieldsNotSyncedCheck": {
+        "enabled": false
+      },
+      "reactNativeDirectoryCheck": {
+        "enabled": true,
+        "exclude": [
+          "@react-native-cookies/cookies"
+        ],
+        "listUnknownPackages": true
+      }
+    }
   },
   "private": true
 }

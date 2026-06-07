@@ -1,0 +1,52 @@
+{
+  "ytDlp": {
+    "version": "2026.03.17",
+    "baseUrl": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17",
+    "assets": {
+      "windows-amd64": {
+        "filename": "yt-dlp.exe",
+        "sha256": "3db811b366b2da47337d2fcfdfe5bbd9a258dad3f350c54974f005df115a1545"
+      },
+      "darwin-amd64": {
+        "filename": "yt-dlp_macos",
+        "sha256": "e80c47b3ce712acee51d5e3d4eace2d181b44d38f1942c3a32e3c7ff53cd9ed5"
+      },
+      "darwin-arm64": {
+        "filename": "yt-dlp_macos",
+        "sha256": "e80c47b3ce712acee51d5e3d4eace2d181b44d38f1942c3a32e3c7ff53cd9ed5"
+      },
+      "linux-amd64": {
+        "filename": "yt-dlp",
+        "sha256": "3bda0968a01cde70d26720653003b28553c71be14dcb2e5f4c24e9921fdad745"
+      },
+      "linux-arm64": {
+        "filename": "yt-dlp",
+        "sha256": "3bda0968a01cde70d26720653003b28553c71be14dcb2e5f4c24e9921fdad745"
+      }
+    }
+  },
+  "ffmpeg": {
+    "baseUrl": "https://raw.githubusercontent.com/imageio/imageio-binaries/master/ffmpeg",
+    "assets": {
+      "windows-amd64": {
+        "filename": "ffmpeg-win-x86_64-v7.1.exe",
+        "sha256": "2ce797a0f88d7f067180338fb227f7b1928ea727bd9a4d7a1d022f7c52af71a3"
+      },
+      "windows-386": {
+        "filename": "ffmpeg-win32-v4.2.2.exe"
+      },
+      "darwin-arm64": {
+        "filename": "ffmpeg-macos-aarch64-v7.1"
+      },
+      "darwin-amd64": {
+        "filename": "ffmpeg-macos-x86_64-v7.1"
+      },
+      "linux-arm64": {
+        "filename": "ffmpeg-linux-aarch64-v7.0.2"
+      },
+      "linux-amd64": {
+        "filename": "ffmpeg-linux-x86_64-v7.0.2"
+      }
+    }
+  }
+}
