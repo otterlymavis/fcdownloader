@@ -167,6 +167,51 @@ func TestYtDlpPrimaryPathHonorsExplicitExecutable(t *testing.T) {
 	}
 }
 
+func TestDefaultYtDlpChannel(t *testing.T) {
+	if got := defaultYtDlpChannel(); got != "auto" {
+		t.Fatalf("default channel = %q, want auto", got)
+	}
+	t.Setenv("FCDL_YTDLP_CHANNEL", "stable")
+	if got := defaultYtDlpChannel(); got != "stable" {
+		t.Fatalf("stable channel = %q", got)
+	}
+	t.Setenv("FCDL_YTDLP_CHANNEL", "nightly")
+	if got := defaultYtDlpChannel(); got != "nightly" {
+		t.Fatalf("nightly channel = %q", got)
+	}
+	t.Setenv("FCDL_YTDLP_CHANNEL", "invalid")
+	if got := defaultYtDlpChannel(); got != "auto" {
+		t.Fatalf("invalid channel should fall back to auto, got %q", got)
+	}
+}
+
+func TestToolStatusesIncludeNightlyYtDlp(t *testing.T) {
+	t.Setenv("FCDL_HELPER_CACHE_DIR", t.TempDir())
+	for _, path := range []string{stableYtDlpCachePath(), nightlyYtDlpCachePath()} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("tool"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	statuses := toolStatuses()
+	found := map[string]bool{}
+	for _, status := range statuses {
+		found[status.Name] = status.Installed
+	}
+	if !found["yt-dlp"] {
+		t.Fatalf("stable yt-dlp status missing or not installed: %+v", statuses)
+	}
+	if !found["yt-dlp-nightly"] {
+		t.Fatalf("nightly yt-dlp status missing or not installed: %+v", statuses)
+	}
+	downloads := downloadedTools()
+	if !downloads["yt-dlp"] || !downloads["yt-dlp-nightly"] {
+		t.Fatalf("downloaded tools should report both yt-dlp channels: %+v", downloads)
+	}
+}
+
 func TestMediaProgressDoesNotMoveBackward(t *testing.T) {
 	mediaProgressMu.Lock()
 	mediaDownloads = make(map[string]*mediaProgress)

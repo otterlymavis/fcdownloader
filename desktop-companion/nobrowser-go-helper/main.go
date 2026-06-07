@@ -172,6 +172,8 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 		},
 		"ytDlpVersion":    toolPins.YtDlp.Version,
 		"ytDlpAsset":      ytDlpAsset.Filename,
+		"ytDlpChannel":    defaultYtDlpChannel(),
+		"youtubeYtDlp":    "nightly",
 		"ffmpegVersion":   ffmpegAsset.Filename,
 		"cacheRoot":       cacheRoot(),
 		"logPath":         logPath(),
@@ -201,7 +203,7 @@ func handleToolsProgress(w http.ResponseWriter, _ *http.Request) {
 func handleEnsureTools(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
-	if _, err := ytDlpPath(ctx); err != nil {
+	if err := ensureYtDlpTools(ctx); err != nil {
 		logf("tool ensure failed for yt-dlp: %v", err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error(), "tool": "yt-dlp"})
 		return
@@ -215,6 +217,19 @@ func handleEnsureTools(w http.ResponseWriter, r *http.Request) {
 		"ok":    true,
 		"tools": toolStatuses(),
 	})
+}
+
+func ensureYtDlpTools(ctx context.Context) error {
+	if _, err := ytDlpStablePath(ctx); err != nil {
+		return err
+	}
+	if defaultYtDlpChannel() == "stable" || strings.TrimSpace(os.Getenv("FCDL_YTDLP_EXE")) != "" {
+		return nil
+	}
+	if _, err := ytDlpNightlyPath(ctx); err != nil {
+		return fmt.Errorf("stable yt-dlp is ready, but YouTube nightly prewarm failed: %w", err)
+	}
+	return nil
 }
 
 func handleFormats(w http.ResponseWriter, r *http.Request) {
@@ -517,7 +532,7 @@ func ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL string) []string {
 }
 
 func ytDlpPrimaryPath(ctx context.Context, rawURL string) (string, string, error) {
-	channel := strings.ToLower(strings.TrimSpace(os.Getenv("FCDL_YTDLP_CHANNEL")))
+	channel := defaultYtDlpChannel()
 	if channel == "nightly" {
 		path, err := ytDlpNightlyPath(ctx)
 		return path, "nightly", err
@@ -542,10 +557,18 @@ func ytDlpPrimaryPath(ctx context.Context, rawURL string) (string, string, error
 }
 
 func ytDlpPath(ctx context.Context) (string, error) {
-	if strings.EqualFold(os.Getenv("FCDL_YTDLP_CHANNEL"), "nightly") {
+	if defaultYtDlpChannel() == "nightly" {
 		return ytDlpNightlyPath(ctx)
 	}
 	return ytDlpStablePath(ctx)
+}
+
+func defaultYtDlpChannel() string {
+	channel := strings.ToLower(strings.TrimSpace(os.Getenv("FCDL_YTDLP_CHANNEL")))
+	if channel == "nightly" || channel == "stable" {
+		return channel
+	}
+	return "auto"
 }
 
 func ytDlpStablePath(ctx context.Context) (string, error) {
@@ -559,7 +582,7 @@ func ytDlpStablePath(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	target := filepath.Join(cacheRoot(), "bin", toolExecutableName("yt-dlp", runtime.GOOS))
+	target := stableYtDlpCachePath()
 	expected := envDefault("FCDL_YTDLP_SHA256", asset.SHA256)
 	if cachedToolValid(target, expected) {
 		return target, nil
@@ -581,7 +604,7 @@ func ytDlpNightlyPath(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	target := filepath.Join(cacheRoot(), "bin", "nightly-"+toolExecutableName("yt-dlp", runtime.GOOS))
+	target := nightlyYtDlpCachePath()
 	if cachedNightlyToolValid(target) {
 		return target, nil
 	}
@@ -621,6 +644,14 @@ func ffmpegPath(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return target, nil
+}
+
+func stableYtDlpCachePath() string {
+	return filepath.Join(cacheRoot(), "bin", toolExecutableName("yt-dlp", runtime.GOOS))
+}
+
+func nightlyYtDlpCachePath() string {
+	return filepath.Join(cacheRoot(), "bin", "nightly-"+toolExecutableName("yt-dlp", runtime.GOOS))
 }
 
 func mustToolManifest() toolManifest {
@@ -846,18 +877,22 @@ func logf(format string, args ...interface{}) {
 
 func downloadedTools() map[string]bool {
 	ytDlpAsset, _ := platformYtDlpAsset(runtime.GOOS, runtime.GOARCH)
+	nightlyYtDlpAsset, _ := platformNightlyYtDlpAsset(runtime.GOOS, runtime.GOARCH)
 	ffmpegAsset, _ := platformFFmpegAsset(runtime.GOOS, runtime.GOARCH)
 	return map[string]bool{
-		"yt-dlp": ytDlpAsset.Filename != "" && executable(filepath.Join(cacheRoot(), "bin", toolExecutableName("yt-dlp", runtime.GOOS))),
-		"ffmpeg": ffmpegAsset.Filename != "" && executable(filepath.Join(cacheRoot(), "ffmpeg", ffmpegAsset.Filename)),
+		"yt-dlp":         ytDlpAsset.Filename != "" && executable(stableYtDlpCachePath()),
+		"yt-dlp-nightly": nightlyYtDlpAsset.Filename != "" && executable(nightlyYtDlpCachePath()),
+		"ffmpeg":         ffmpegAsset.Filename != "" && executable(filepath.Join(cacheRoot(), "ffmpeg", ffmpegAsset.Filename)),
 	}
 }
 
 func toolStatuses() []toolStatus {
 	ytDlpAsset, _ := platformYtDlpAsset(runtime.GOOS, runtime.GOARCH)
+	nightlyYtDlpAsset, _ := platformNightlyYtDlpAsset(runtime.GOOS, runtime.GOARCH)
 	ffmpegAsset, _ := platformFFmpegAsset(runtime.GOOS, runtime.GOARCH)
 	return []toolStatus{
-		statusForTool("yt-dlp", filepath.Join(cacheRoot(), "bin", toolExecutableName("yt-dlp", runtime.GOOS)), ytDlpAsset),
+		statusForTool("yt-dlp", stableYtDlpCachePath(), ytDlpAsset),
+		statusForTool("yt-dlp-nightly", nightlyYtDlpCachePath(), nightlyYtDlpAsset),
 		statusForTool("ffmpeg", filepath.Join(cacheRoot(), "ffmpeg", ffmpegAsset.Filename), ffmpegAsset),
 	}
 }
