@@ -39,6 +39,7 @@ const (
 	youtubeFormat        = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/137+140/136+140/18"
 	pinnedYtDlpVersion   = "2026.03.17"
 	defaultYtDlpBaseURL  = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17"
+	nightlyYtDlpBaseURL  = "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download"
 	defaultFFmpegBaseURL = "https://raw.githubusercontent.com/imageio/imageio-binaries/master/ffmpeg"
 	maxRequestsPerMinute = 90
 )
@@ -282,6 +283,19 @@ func runYtDlpJSON(ctx context.Context, rawURL string) (map[string]interface{}, e
 	if err != nil {
 		return nil, err
 	}
+	data, err := runYtDlpJSONWithPath(ctx, ytDlp, rawURL)
+	if err == nil || !shouldRetryWithNightly(rawURL, err.Error()) {
+		return data, err
+	}
+	logf("stable yt-dlp failed for YouTube formats; retrying with nightly: %v", err)
+	nightly, nightlyErr := ytDlpNightlyPath(ctx)
+	if nightlyErr != nil {
+		return nil, fmt.Errorf("%v; nightly fallback unavailable: %w", err, nightlyErr)
+	}
+	return runYtDlpJSONWithPath(ctx, nightly, rawURL)
+}
+
+func runYtDlpJSONWithPath(ctx context.Context, ytDlp, rawURL string) (map[string]interface{}, error) {
 	args := []string{
 		"--dump-single-json",
 		"--skip-download",
@@ -380,6 +394,65 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (strin
 	out, err := runYtDlpWithProgress(runCtx, ytDlp, args, rawURL)
 	if err != nil {
 		cleanup()
+		stableErr := fmt.Errorf("%s", tail(out))
+		if shouldRetryWithNightly(rawURL, stableErr.Error()) {
+			logf("stable yt-dlp failed for YouTube download; retrying with nightly: %v", stableErr)
+			nightly, nightlyErr := ytDlpNightlyPath(ctx)
+			if nightlyErr != nil {
+				return "", nil, fmt.Errorf("%v; nightly fallback unavailable: %w", stableErr, nightlyErr)
+			}
+			return downloadMediaWithYtDlp(ctx, nightly, ffmpeg, rawURL, format)
+		}
+		return "", nil, stableErr
+	}
+
+	files, err := os.ReadDir(tmp)
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	var candidates []string
+	for _, file := range files {
+		if !file.Type().IsRegular() {
+			continue
+		}
+		candidates = append(candidates, filepath.Join(tmp, file.Name()))
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		ai, _ := os.Stat(candidates[i])
+		aj, _ := os.Stat(candidates[j])
+		return ai.Size() > aj.Size()
+	})
+	if len(candidates) == 0 {
+		cleanup()
+		return "", nil, errors.New("yt-dlp produced no media file")
+	}
+	return candidates[0], cleanup, nil
+}
+
+func downloadMediaWithYtDlp(ctx context.Context, ytDlp, ffmpeg, rawURL, format string) (string, func(), error) {
+	tmp, err := os.MkdirTemp("", "fcdl_native_*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(tmp) }
+
+	runCtx, cancel := context.WithTimeout(ctx, time.Hour)
+	defer cancel()
+	args := []string{
+		"-f", format,
+		"--newline",
+		"--merge-output-format", "mp4",
+		"--remux-video", "mp4",
+		"--js-runtimes", "node",
+		"--remote-components", "ejs:github",
+		"--ffmpeg-location", ffmpeg,
+		"-o", filepath.Join(tmp, "%(title).120s-%(id)s.%(ext)s"),
+		rawURL,
+	}
+	out, err := runYtDlpWithProgress(runCtx, ytDlp, args, rawURL)
+	if err != nil {
+		cleanup()
 		return "", nil, fmt.Errorf("%s", tail(out))
 	}
 
@@ -408,6 +481,9 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (strin
 }
 
 func ytDlpPath(ctx context.Context) (string, error) {
+	if strings.EqualFold(os.Getenv("FCDL_YTDLP_CHANNEL"), "nightly") {
+		return ytDlpNightlyPath(ctx)
+	}
 	if explicit := os.Getenv("FCDL_YTDLP_EXE"); explicit != "" {
 		return explicit, nil
 	}
@@ -430,6 +506,21 @@ func ytDlpPath(ctx context.Context) (string, error) {
 	}
 	if err := verifySHA256(target, expected); err != nil {
 		_ = os.Remove(target)
+		return "", err
+	}
+	return target, nil
+}
+
+func ytDlpNightlyPath(ctx context.Context) (string, error) {
+	asset, err := platformNightlyYtDlpAsset(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return "", err
+	}
+	target := filepath.Join(cacheRoot(), "bin", "nightly-"+toolExecutableName("yt-dlp", runtime.GOOS))
+	if cachedNightlyToolValid(target) {
+		return target, nil
+	}
+	if err := downloadFile(ctx, "yt-dlp-nightly", asset.URL, target, ""); err != nil {
 		return "", err
 	}
 	return target, nil
@@ -488,6 +579,19 @@ func platformYtDlpAsset(goos, goarch string) (toolAsset, error) {
 	return asset, nil
 }
 
+func platformNightlyYtDlpAsset(goos, goarch string) (toolAsset, error) {
+	filename := "yt-dlp"
+	if goos == "windows" {
+		filename = "yt-dlp.exe"
+	} else if goos == "darwin" {
+		filename = "yt-dlp_macos"
+	}
+	return toolAsset{
+		URL:      strings.TrimRight(nightlyYtDlpBaseURL, "/") + "/" + filename,
+		Filename: filename,
+	}, nil
+}
+
 func platformFFmpegAsset(goos, goarch string) (toolAsset, error) {
 	asset, ok := toolPins.FFmpeg.Assets[goos+"-"+goarch]
 	if !ok {
@@ -510,6 +614,17 @@ func cachedToolValid(path, expectedSHA string) bool {
 	}
 	if err := verifySHA256(path, expectedSHA); err != nil {
 		_ = os.Remove(path)
+		return false
+	}
+	return true
+}
+
+func cachedNightlyToolValid(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if time.Since(info.ModTime()) > 24*time.Hour {
 		return false
 	}
 	return true
@@ -847,6 +962,29 @@ func youtubeURL(value string) bool {
 	return host == "youtu.be" || strings.HasSuffix(host, "youtube.com") || strings.HasSuffix(host, "youtube-nocookie.com")
 }
 
+func shouldRetryWithNightly(rawURL, message string) bool {
+	if !youtubeURL(rawURL) {
+		return false
+	}
+	text := strings.ToLower(message)
+	for _, needle := range []string{
+		"403",
+		"bot",
+		"sabr",
+		"nsig",
+		"signature",
+		"requested format is not available",
+		"unable to extract",
+		"sign in to confirm",
+		"this video is unavailable",
+	} {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func executable(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
@@ -994,13 +1132,13 @@ func runYtDlpWithProgress(ctx context.Context, ytDlp string, args []string, rawU
 			percentMatch := percentRx.FindStringSubmatch(line)
 			if len(percentMatch) > 1 {
 				pct, _ := strconv.ParseFloat(percentMatch[1], 64)
-				
+
 				prog := &mediaProgress{
 					URL:     rawURL,
 					Percent: pct,
 					Status:  "downloading",
 				}
-				
+
 				if sizeMatch := sizeRx.FindStringSubmatch(line); len(sizeMatch) > 1 {
 					prog.Total = sizeMatch[1]
 				}

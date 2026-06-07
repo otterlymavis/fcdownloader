@@ -99,6 +99,31 @@ func TestPinnedTools(t *testing.T) {
 	}
 }
 
+func TestNightlyYtDlpAssetUsesWindowsExe(t *testing.T) {
+	asset, err := platformNightlyYtDlpAsset("windows", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asset.Filename != "yt-dlp.exe" {
+		t.Fatalf("unexpected Windows nightly filename: %s", asset.Filename)
+	}
+	if asset.URL != "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp.exe" {
+		t.Fatalf("unexpected Windows nightly URL: %s", asset.URL)
+	}
+}
+
+func TestYouTubeFailuresRetryWithNightly(t *testing.T) {
+	if !shouldRetryWithNightly("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "ERROR: HTTP Error 403: Forbidden") {
+		t.Fatal("YouTube 403 should trigger nightly fallback")
+	}
+	if !shouldRetryWithNightly("https://youtu.be/dQw4w9WgXcQ", "Requested format is not available") {
+		t.Fatal("YouTube format breakage should trigger nightly fallback")
+	}
+	if shouldRetryWithNightly("https://example.com/video", "HTTP Error 403: Forbidden") {
+		t.Fatal("non-YouTube failures should not trigger nightly fallback")
+	}
+}
+
 func TestCachedToolValidRemovesChecksumMismatch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tool")

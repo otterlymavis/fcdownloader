@@ -683,6 +683,19 @@ function localHelperDownloadUrl(pageUrl, youtubeOnly = false) {
   return `http://127.0.0.1:8765/${youtubeOnly ? "youtube-hd" : "download"}?${params.toString()}`;
 }
 
+function isPageLikeDownloadUrl(url) {
+  const value = String(url || "");
+  if (!value) return false;
+  try {
+    const parsed = new URL(value);
+    if (/\.(?:html?|php|aspx?|jsp)(?:$|[?#])/i.test(parsed.pathname)) return true;
+    if (!isConcreteStreamUrl(value) && (PAGE_HTML_RE.test(parsed.hostname) || SERVER_ONLY_RE.test(value))) return true;
+  } catch {
+    if (/\.(?:html?|php|aspx?|jsp)(?:$|[?#])/i.test(value)) return true;
+  }
+  return false;
+}
+
 function decodeWeiboMediaUrl(raw) {
   let url = String(raw || "")
     .replace(/\\u0026/g, "&")
@@ -1005,6 +1018,9 @@ async function preflightDirectUrl(url, headers = []) {
     const len = Number(r.headers.get("content-length") || "0");
     ac.abort();
     if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+    if (/^(text\/html|application\/xhtml\+xml|application\/json)\b/i.test(ct)) {
+      return { ok: false, error: ct || "page response" };
+    }
     if (/^(video|audio|image)\//i.test(ct) || len > 1024) return { ok: true };
     return { ok: false, error: ct || "not a media response" };
   } catch (e) {
@@ -1245,11 +1261,12 @@ async function downloadItem(tabId, item) {
     return chromeDownload(localUrl, suggestedFilename({ ...item, ext: "mp4" }, helperTarget, tabTitle));
   });
 
-  addRoute("direct", item.url && !backendStrategy && !hasReplayHeaders, async () => {
+  addRoute("direct", item.url && !backendStrategy && !hasReplayHeaders && !isPageLikeDownloadUrl(item.url), async () => {
     debugLog("[fcdl] → direct CDN");
     const directHeaders = [];
+    const check = await preflightDirectUrl(item.url, directHeaders);
+    if (!check.ok) throw new Error(`Direct download failed (${check.error})`);
     if (/googlevideo\.com/i.test(item.url || "")) {
-      const check = await preflightDirectUrl(item.url, directHeaders);
       if (!check.ok) throw new Error(`YouTube direct 360p was refused by YouTube (${check.error})`);
     }
     return chromeDownload(item.url, suggestedFilename(item, downloadPageUrl, tabTitle), directHeaders);
@@ -1284,8 +1301,10 @@ async function downloadItem(tabId, item) {
     return viaBackend(item.url);
   });
 
-  addRoute("direct fallback", item.url && backendStrategy && !hasReplayHeaders && !/googlevideo\.com/i.test(item.url || ""), async () => {
+  addRoute("direct fallback", item.url && backendStrategy && !hasReplayHeaders && !/googlevideo\.com/i.test(item.url || "") && !isPageLikeDownloadUrl(item.url), async () => {
     debugLog("[fcdl] → direct fallback");
+    const check = await preflightDirectUrl(item.url);
+    if (!check.ok) throw new Error(`Direct fallback failed (${check.error})`);
     return chromeDownload(item.url, suggestedFilename(item, downloadPageUrl, tabTitle));
   });
 

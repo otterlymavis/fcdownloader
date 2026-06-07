@@ -112,6 +112,76 @@ def _is_valid_ffmpeg(exe: str) -> bool:
         return False
 
 
+def _available_ffmpeg_path() -> str | None:
+    explicit = os.environ.get("FCDL_FFMPEG_EXE") or os.environ.get("IMAGEIO_FFMPEG_EXE")
+    if explicit and _is_valid_ffmpeg(explicit):
+        return explicit
+
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg and _is_valid_ffmpeg(system_ffmpeg):
+        return system_ffmpeg
+
+    try:
+        cached = _cached_ffmpeg_path()
+    except Exception:
+        return None
+    if cached.exists() and _is_valid_ffmpeg(str(cached)):
+        return str(cached)
+    return None
+
+
+def _is_valid_yt_dlp() -> bool:
+    try:
+        subprocess.run(
+            _yt_dlp_command(["--version"]),
+            cwd=str(ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+            check=True,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _tool_status() -> dict[str, Any]:
+    ffmpeg = _available_ffmpeg_path()
+    yt_dlp_ok = _is_valid_yt_dlp()
+    tools = [
+        {
+            "name": "yt-dlp",
+            "ok": yt_dlp_ok,
+            "required": True,
+        },
+        {
+            "name": "ffmpeg",
+            "ok": bool(ffmpeg),
+            "path": ffmpeg,
+            "required": True,
+        },
+    ]
+    return {
+        "ok": all(tool["ok"] for tool in tools),
+        "tools": tools,
+        "needsSetup": not all(tool["ok"] for tool in tools),
+    }
+
+
+def _ensure_tools() -> dict[str, Any]:
+    if not _is_valid_yt_dlp():
+        raise RuntimeError("yt-dlp is not available in the helper runtime")
+    ffmpeg = _ffmpeg_path()
+    return {
+        "ok": True,
+        "tools": [
+            {"name": "yt-dlp", "ok": True, "required": True},
+            {"name": "ffmpeg", "ok": True, "path": ffmpeg, "required": True},
+        ],
+        "needsSetup": False,
+    }
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as fh:
@@ -337,13 +407,24 @@ class Handler(BaseHTTPRequestHandler):
         qs = urllib.parse.parse_qs(parsed.query)
 
         if parsed.path == "/health":
+            status = _tool_status()
             _json(self, 200, {
                 "ok": True,
                 "service": "fcdownloader-local-helper",
                 "version": SERVICE_VERSION,
                 "apiVersion": LOCAL_HELPER_API_VERSION,
-                "endpoints": ["/health", "/formats", "/download", "/youtube-hd"],
+                "endpoints": ["/health", "/tools", "/tools/ensure", "/formats", "/download", "/youtube-hd"],
+                "needsSetup": status["needsSetup"],
+                "tools": status["tools"],
             })
+            return
+
+        if parsed.path == "/tools":
+            _json(self, 200, _tool_status())
+            return
+
+        if parsed.path == "/tools/ensure":
+            self._handle_tools_ensure()
             return
 
         if parsed.path == "/formats":
@@ -367,6 +448,12 @@ class Handler(BaseHTTPRequestHandler):
             _json(self, 504, {"error": "yt-dlp format extraction timed out"})
         except Exception as exc:  # noqa: BLE001
             _json(self, 502, {"error": str(exc)})
+
+    def _handle_tools_ensure(self) -> None:
+        try:
+            _json(self, 200, _ensure_tools())
+        except Exception as exc:  # noqa: BLE001
+            _json(self, 502, {**_tool_status(), "ok": False, "error": str(exc)})
 
     def _handle_download(self, qs: dict[str, list[str]], youtube_only: bool = False) -> None:
         url = _query(qs, "url")
