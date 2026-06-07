@@ -63,7 +63,9 @@ jobs:
       - name: Build NoBrowser Go companion
         if: runner.os == 'Windows'
         working-directory: desktop-companion
-        run: npm run variants:nobrowser-go
+        run: |
+          choco install nsis -y --no-progress
+          npm run variants:nobrowser-go
 
       - name: Smoke test NoBrowser Go helper
         if: runner.os == 'Windows'

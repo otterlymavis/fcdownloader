@@ -35,6 +35,9 @@ jobs:
         working-directory: desktop-companion
         run: npm ci
 
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+
       - name: Build NoBrowser Go companion
         working-directory: desktop-companion
         run: npm run variants:nobrowser-go
