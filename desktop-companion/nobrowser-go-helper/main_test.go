@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -140,6 +141,29 @@ func TestYtDlpDownloadArgsUseSteadierDefaults(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("download args missing %q: %#v", want, args)
 		}
+	}
+}
+
+func TestYtDlpPrimaryPathHonorsStableOverride(t *testing.T) {
+	t.Setenv("FCDL_YTDLP_CHANNEL", "stable")
+	t.Setenv("FCDL_YTDLP_EXE", "/tmp/custom-ytdlp")
+	path, channel, err := ytDlpPrimaryPath(context.Background(), "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/tmp/custom-ytdlp" || channel != "stable" {
+		t.Fatalf("unexpected yt-dlp primary selection: path=%q channel=%q", path, channel)
+	}
+}
+
+func TestYtDlpPrimaryPathHonorsExplicitExecutable(t *testing.T) {
+	t.Setenv("FCDL_YTDLP_EXE", "/tmp/custom-ytdlp")
+	path, channel, err := ytDlpPrimaryPath(context.Background(), "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/tmp/custom-ytdlp" || channel != "stable" {
+		t.Fatalf("explicit yt-dlp executable should win: path=%q channel=%q", path, channel)
 	}
 }
 

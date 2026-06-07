@@ -286,20 +286,31 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 }
 
 func runYtDlpJSON(ctx context.Context, rawURL string) (map[string]interface{}, error) {
-	ytDlp, err := ytDlpPath(ctx)
+	ytDlp, channel, err := ytDlpPrimaryPath(ctx, rawURL)
 	if err != nil {
 		return nil, err
 	}
 	data, err := runYtDlpJSONWithPath(ctx, ytDlp, rawURL)
-	if err == nil || !shouldRetryWithNightly(rawURL, err.Error()) {
+	if err == nil || !youtubeURL(rawURL) {
 		return data, err
 	}
-	logf("stable yt-dlp failed for YouTube formats; retrying with nightly: %v", err)
-	nightly, nightlyErr := ytDlpNightlyPath(ctx)
-	if nightlyErr != nil {
-		return nil, fmt.Errorf("%v; nightly fallback unavailable: %w", err, nightlyErr)
+	if channel == "nightly" {
+		logf("nightly yt-dlp failed for YouTube formats; retrying with stable: %v", err)
+		stable, stableErr := ytDlpStablePath(ctx)
+		if stableErr != nil {
+			return nil, fmt.Errorf("%v; stable fallback unavailable: %w", err, stableErr)
+		}
+		return runYtDlpJSONWithPath(ctx, stable, rawURL)
 	}
-	return runYtDlpJSONWithPath(ctx, nightly, rawURL)
+	if shouldRetryWithNightly(rawURL, err.Error()) {
+		logf("stable yt-dlp failed for YouTube formats; retrying with nightly: %v", err)
+		nightly, nightlyErr := ytDlpNightlyPath(ctx)
+		if nightlyErr != nil {
+			return nil, fmt.Errorf("%v; nightly fallback unavailable: %w", err, nightlyErr)
+		}
+		return runYtDlpJSONWithPath(ctx, nightly, rawURL)
+	}
+	return data, err
 }
 
 func runYtDlpJSONWithPath(ctx context.Context, ytDlp, rawURL string) (map[string]interface{}, error) {
@@ -361,7 +372,7 @@ func runYtDlpJSONWithPath(ctx context.Context, ytDlp, rawURL string) (map[string
 }
 
 func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (string, func(), error) {
-	ytDlp, err := ytDlpPath(ctx)
+	ytDlp, channel, err := ytDlpPrimaryPath(ctx, rawURL)
 	if err != nil {
 		return "", nil, err
 	}
@@ -392,6 +403,15 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (strin
 	if err != nil {
 		cleanup()
 		stableErr := fmt.Errorf("%s", tail(out))
+		if youtubeURL(rawURL) && channel == "nightly" {
+			logf("nightly yt-dlp failed for YouTube download; retrying with stable: %v", stableErr)
+			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: currentMediaPercent(rawURL), Status: "retrying"})
+			stable, stablePathErr := ytDlpStablePath(ctx)
+			if stablePathErr != nil {
+				return "", nil, fmt.Errorf("%v; stable fallback unavailable: %w", stableErr, stablePathErr)
+			}
+			return downloadMediaWithYtDlp(ctx, stable, ffmpeg, rawURL, format)
+		}
 		if shouldRetryWithNightly(rawURL, stableErr.Error()) {
 			logf("stable yt-dlp failed for YouTube download; retrying with nightly: %v", stableErr)
 			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: currentMediaPercent(rawURL), Status: "retrying"})
@@ -496,10 +516,39 @@ func ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL string) []string {
 	return args
 }
 
+func ytDlpPrimaryPath(ctx context.Context, rawURL string) (string, string, error) {
+	channel := strings.ToLower(strings.TrimSpace(os.Getenv("FCDL_YTDLP_CHANNEL")))
+	if channel == "nightly" {
+		path, err := ytDlpNightlyPath(ctx)
+		return path, "nightly", err
+	}
+	if channel == "stable" {
+		path, err := ytDlpStablePath(ctx)
+		return path, "stable", err
+	}
+	if strings.TrimSpace(os.Getenv("FCDL_YTDLP_EXE")) != "" {
+		path, err := ytDlpStablePath(ctx)
+		return path, "stable", err
+	}
+	if youtubeURL(rawURL) {
+		path, err := ytDlpNightlyPath(ctx)
+		if err == nil {
+			return path, "nightly", nil
+		}
+		logf("nightly yt-dlp unavailable for YouTube; using stable: %v", err)
+	}
+	path, err := ytDlpStablePath(ctx)
+	return path, "stable", err
+}
+
 func ytDlpPath(ctx context.Context) (string, error) {
 	if strings.EqualFold(os.Getenv("FCDL_YTDLP_CHANNEL"), "nightly") {
 		return ytDlpNightlyPath(ctx)
 	}
+	return ytDlpStablePath(ctx)
+}
+
+func ytDlpStablePath(ctx context.Context) (string, error) {
 	if explicit := os.Getenv("FCDL_YTDLP_EXE"); explicit != "" {
 		return explicit, nil
 	}
