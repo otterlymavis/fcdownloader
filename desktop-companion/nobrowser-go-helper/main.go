@@ -380,17 +380,7 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (strin
 
 	runCtx, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
-	args := []string{
-		"-f", format,
-		"--newline",
-		"--merge-output-format", "mp4",
-		"--remux-video", "mp4",
-		"--js-runtimes", "node",
-		"--remote-components", "ejs:github",
-		"--ffmpeg-location", ffmpeg,
-		"-o", filepath.Join(tmp, "%(title).120s-%(id)s.%(ext)s"),
-		rawURL,
-	}
+	args := ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL)
 	out, err := runYtDlpWithProgress(runCtx, ytDlp, args, rawURL)
 	if err != nil {
 		cleanup()
@@ -439,17 +429,7 @@ func downloadMediaWithYtDlp(ctx context.Context, ytDlp, ffmpeg, rawURL, format s
 
 	runCtx, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
-	args := []string{
-		"-f", format,
-		"--newline",
-		"--merge-output-format", "mp4",
-		"--remux-video", "mp4",
-		"--js-runtimes", "node",
-		"--remote-components", "ejs:github",
-		"--ffmpeg-location", ffmpeg,
-		"-o", filepath.Join(tmp, "%(title).120s-%(id)s.%(ext)s"),
-		rawURL,
-	}
+	args := ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL)
 	out, err := runYtDlpWithProgress(runCtx, ytDlp, args, rawURL)
 	if err != nil {
 		cleanup()
@@ -478,6 +458,34 @@ func downloadMediaWithYtDlp(ctx context.Context, ytDlp, ffmpeg, rawURL, format s
 		return "", nil, errors.New("yt-dlp produced no media file")
 	}
 	return candidates[0], cleanup, nil
+}
+
+func ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL string) []string {
+	concurrentFragments := strings.TrimSpace(os.Getenv("FCDL_YTDLP_CONCURRENT_FRAGMENTS"))
+	if concurrentFragments == "" {
+		concurrentFragments = "4"
+	}
+	args := []string{
+		"-f", format,
+		"--newline",
+		"--no-part",
+		"--retries", "10",
+		"--fragment-retries", "20",
+		"--file-access-retries", "5",
+		"--socket-timeout", "30",
+		"--concurrent-fragments", concurrentFragments,
+		"--merge-output-format", "mp4",
+		"--remux-video", "mp4",
+		"--js-runtimes", "node",
+		"--remote-components", "ejs:github",
+		"--ffmpeg-location", ffmpeg,
+		"-o", filepath.Join(tmp, "%(title).120s-%(id)s.%(ext)s"),
+	}
+	if youtubeURL(rawURL) {
+		args = append(args, "--extractor-args", "youtube:player_client=default")
+	}
+	args = append(args, rawURL)
+	return args
 }
 
 func ytDlpPath(ctx context.Context) (string, error) {
@@ -1076,6 +1084,23 @@ var (
 func setMediaProgress(url string, p *mediaProgress) {
 	mediaProgressMu.Lock()
 	defer mediaProgressMu.Unlock()
+	if current := mediaDownloads[url]; current != nil && p.Status == "downloading" {
+		if p.Percent < current.Percent {
+			p.Percent = current.Percent
+		}
+		if p.Percent > 95 {
+			p.Percent = 95
+		}
+		if p.Speed == "" {
+			p.Speed = current.Speed
+		}
+		if p.ETA == "" {
+			p.ETA = current.ETA
+		}
+		if p.Total == "" {
+			p.Total = current.Total
+		}
+	}
 	mediaDownloads[url] = p
 }
 
@@ -1153,7 +1178,7 @@ func runYtDlpWithProgress(ctx context.Context, ytDlp string, args []string, rawU
 		} else if strings.Contains(line, "[Merger]") || strings.Contains(line, "Merging formats") {
 			setMediaProgress(rawURL, &mediaProgress{
 				URL:     rawURL,
-				Percent: 100,
+				Percent: 98,
 				Status:  "merging",
 			})
 		}

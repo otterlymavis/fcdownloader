@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -121,6 +122,46 @@ func TestYouTubeFailuresRetryWithNightly(t *testing.T) {
 	}
 	if shouldRetryWithNightly("https://example.com/video", "HTTP Error 403: Forbidden") {
 		t.Fatal("non-YouTube failures should not trigger nightly fallback")
+	}
+}
+
+func TestYtDlpDownloadArgsUseSteadierDefaults(t *testing.T) {
+	t.Setenv("FCDL_YTDLP_CONCURRENT_FRAGMENTS", "")
+	args := ytDlpDownloadArgs("best", "/tmp/ffmpeg", "/tmp/out", "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+	joined := strings.Join(args, "\x00")
+	for _, want := range []string{
+		"--retries\x0010",
+		"--fragment-retries\x0020",
+		"--file-access-retries\x005",
+		"--socket-timeout\x0030",
+		"--concurrent-fragments\x004",
+		"--extractor-args\x00youtube:player_client=default",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("download args missing %q: %#v", want, args)
+		}
+	}
+}
+
+func TestMediaProgressDoesNotMoveBackward(t *testing.T) {
+	mediaProgressMu.Lock()
+	mediaDownloads = make(map[string]*mediaProgress)
+	mediaProgressMu.Unlock()
+
+	const rawURL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 72, Speed: "1MiB/s", Total: "100MiB", Status: "downloading"})
+	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 15, Status: "downloading"})
+	got := getMediaProgress(rawURL)
+	if got.Percent != 72 {
+		t.Fatalf("progress moved backward: %+v", got)
+	}
+	if got.Speed != "1MiB/s" || got.Total != "100MiB" {
+		t.Fatalf("progress should preserve missing metadata: %+v", got)
+	}
+	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 100, Status: "downloading"})
+	got = getMediaProgress(rawURL)
+	if got.Percent != 95 {
+		t.Fatalf("downloading progress should be capped before merge: %+v", got)
 	}
 }
 

@@ -92,10 +92,11 @@ function setStatus(text, kind = "info", detail = "") {
 }
 
 function setProgress(pct, text = "") {
+  const safePct = Math.max(0, Math.min(100, Number(pct) || 0));
   if (statusProgressFill) statusProgressFill.classList.remove("indeterminate");
   statusEl.hidden = false;
   if (statusProgressContainer) statusProgressContainer.style.display = "block";
-  if (statusProgressFill) statusProgressFill.style.width = `${pct}%`;
+  if (statusProgressFill) statusProgressFill.style.width = `${safePct}%`;
   if (text && statusTextEl) statusTextEl.textContent = text;
 }
 
@@ -120,6 +121,7 @@ function startProgressPolling(mediaUrl) {
   if (progressPollInterval) {
     clearInterval(progressPollInterval);
   }
+  let progressFloor = 0;
 
   setProgress(0, "Connecting to companion...");
 
@@ -132,13 +134,17 @@ function startProgressPolling(mediaUrl) {
       }
       const data = await r.json();
       if (data.status === "downloading") {
-        let label = `Downloading: ${data.percent.toFixed(1)}%`;
+        const rawPercent = Number(data.percent) || 0;
+        progressFloor = Math.max(progressFloor, Math.min(rawPercent, 95));
+        let label = `Downloading: ${progressFloor.toFixed(1)}%`;
         if (data.speed) label += ` at ${data.speed}`;
         if (data.eta) label += `, ETA: ${data.eta}`;
-        setProgress(data.percent, label);
+        setProgress(progressFloor, label);
       } else if (data.status === "merging") {
-        setProgress(99, "Companion is merging formats...");
+        progressFloor = Math.max(progressFloor, 98);
+        setProgress(progressFloor, "Companion is merging formats...");
       } else if (data.status === "complete") {
+        progressFloor = 100;
         setProgress(100, "Download complete!");
         setTimeout(() => {
           setStatus("Download finished. Saved to your browser's Downloads.", "success");
