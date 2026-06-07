@@ -66,17 +66,24 @@ function buildLiteElectron() {
 
 function findMakeNsis() {
   const root = path.join(BUILD_ROOT, "electron-builder-cache", "nsis");
+  if (!fs.existsSync(root)) {
+    try {
+      const result = spawnSync(process.platform === "win32" ? "where" : "which", ["makensis"], { shell: false });
+      if (result.status === 0) return "makensis";
+    } catch (e) {}
+    return null;
+  }
   const candidates = [];
   function walk(dir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (entry.name.toLowerCase() === "makensis.exe") candidates.push(full);
+      else if (entry.name.toLowerCase() === "makensis.exe" || entry.name.toLowerCase() === "makensis") candidates.push(full);
     }
   }
   walk(root);
   const direct = candidates.find((candidate) => path.basename(path.dirname(candidate)).toLowerCase() !== "bin");
-  return direct || candidates[0];
+  return direct || candidates[0] || null;
 }
 
 function findGo() {
@@ -259,7 +266,12 @@ Section "Uninstall"
 SectionEnd
 `;
   fs.writeFileSync(nsiPath, script.trimStart(), "utf8");
-  run(findMakeNsis(), ["/V2", nsiPath]);
+  const makeNsis = findMakeNsis();
+  if (makeNsis) {
+    run(makeNsis, ["/V2", nsiPath]);
+  } else {
+    console.warn("[variants] Warning: makensis not found. Skipping NSIS installer generation.");
+  }
 }
 
 function buildNoBrowserGo() {
@@ -439,7 +451,12 @@ Section "Uninstall"
 SectionEnd
 `;
   fs.writeFileSync(nsiPath, script.trimStart(), "utf8");
-  run(findMakeNsis(), ["/V2", nsiPath]);
+  const makeNsis = findMakeNsis();
+  if (makeNsis) {
+    run(makeNsis, ["/V2", nsiPath]);
+  } else {
+    console.warn("[variants] Warning: makensis not found. Skipping NSIS installer generation.");
+  }
 }
 
 const requested = new Set(process.argv.slice(2));

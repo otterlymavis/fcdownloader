@@ -38,24 +38,64 @@ function probe(command, args) {
   return !result.error && result.status === 0;
 }
 
+function pythonVersion(command, args = []) {
+  const result = spawnSync(command, [
+    ...args,
+    "-c",
+    "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')",
+  ], {
+    cwd: COMPANION_ROOT,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    shell: false,
+  });
+  if (result.error || result.status !== 0) return null;
+  const [major, minor, patch] = String(result.stdout || "").trim().split(".").map((x) => Number.parseInt(x, 10));
+  if (!Number.isFinite(major) || !Number.isFinite(minor)) return null;
+  return { major, minor, patch: Number.isFinite(patch) ? patch : 0 };
+}
+
+function isSupportedPython(command, args = []) {
+  const version = pythonVersion(command, args);
+  return Boolean(version && (version.major > 3 || (version.major === 3 && version.minor >= 10)));
+}
+
 function findPython() {
   if (process.env.FCDL_BUILD_PYTHON) {
+    if (!isSupportedPython(process.env.FCDL_BUILD_PYTHON, [])) {
+      throw new Error("FCDL_BUILD_PYTHON must point to Python 3.10 or newer.");
+    }
     return { command: process.env.FCDL_BUILD_PYTHON, args: [] };
   }
+  const repoVenvPython = process.platform === "win32"
+    ? path.join(REPO_ROOT, ".venv", "Scripts", "python.exe")
+    : path.join(REPO_ROOT, ".venv", "bin", "python");
   const candidates = process.platform === "win32"
     ? [
+        { command: repoVenvPython, args: [] },
         { command: "py", args: ["-3"] },
         { command: "python", args: [] },
         { command: "python3", args: [] },
       ]
     : [
+        { command: repoVenvPython, args: [] },
+        { command: "python3.14", args: [] },
+        { command: "python3.13", args: [] },
+        { command: "python3.12", args: [] },
+        { command: "python3.11", args: [] },
+        { command: "python3.10", args: [] },
         { command: "python3", args: [] },
         { command: "python", args: [] },
       ];
   for (const candidate of candidates) {
-    if (probe(candidate.command, [...candidate.args, "--version"])) return candidate;
+    if (
+      probe(candidate.command, [...candidate.args, "--version"]) &&
+      isSupportedPython(candidate.command, candidate.args)
+    ) {
+      return candidate;
+    }
   }
-  throw new Error("Python 3 is required to build the companion helper executable.");
+  throw new Error("Python 3.10 or newer is required to build the companion helper executable.");
 }
 
 function venvPythonPath() {
@@ -66,6 +106,10 @@ function venvPythonPath() {
 
 function ensureBuildVenv(systemPython) {
   const venvPython = venvPythonPath();
+  if (fs.existsSync(venvPython) && !isSupportedPython(venvPython, [])) {
+    console.log(`[helper-build] removing stale Python <3.10 venv: ${BUILD_VENV}`);
+    fs.rmSync(BUILD_VENV, { recursive: true, force: true });
+  }
   if (!fs.existsSync(venvPython)) {
     run(systemPython.command, [...systemPython.args, "-m", "venv", BUILD_VENV]);
   }
