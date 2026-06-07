@@ -66,6 +66,13 @@ function buildLiteElectron() {
 
 function findMakeNsis() {
   const root = path.join(BUILD_ROOT, "electron-builder-cache", "nsis");
+  const windowsNsis = [
+    "C:\\Program Files (x86)\\NSIS\\makensis.exe",
+    "C:\\Program Files\\NSIS\\makensis.exe",
+  ];
+  for (const candidate of windowsNsis) {
+    if (process.platform === "win32" && fs.existsSync(candidate)) return candidate;
+  }
   if (!fs.existsSync(root)) {
     try {
       const result = spawnSync(process.platform === "win32" ? "where" : "which", ["makensis"], { shell: false });
