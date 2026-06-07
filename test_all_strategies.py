@@ -635,20 +635,14 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: yahoo news video stream"),
 
-    ("DMM", "https://www.dmm.co.jp/digital/video/-/detail/=/cid=13ds00645/", [
+    ("DMM", "https://www.dmm.co.jp/mono/dvd/-/detail/=/cid=3841h_015/", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: DMM video extraction"),
 
-    ("Mildom", "https://www.mildom.com/playback/10105254/20200824", [
-        ("server /extract",          strat_server,        {}),
-        ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
-        ("local helper",             strat_local_helper,  {}),
-    ], "🌐 browser-only: mildom stream extraction"),
-
     # ── Japanese / Korean News, Magazines, Blogs & Galleries ─────────────
-    ("Oricon", "https://www.oricon.co.jp/news/2452025/photo/1/", [
+    ("Oricon", "https://www.oricon.co.jp/news/2285123/full/", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -678,7 +672,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: naver news photo extraction"),
 
-    ("Naver Entertainment", "https://entertain.naver.com/now", [
+    ("Naver Entertainment", "https://entertain.naver.com/read?oid=108&aid=0003257812", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
         ("local helper",             strat_local_helper,  {}),
@@ -702,7 +696,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: kstyle photo extraction"),
 
-    ("Daum / Tistory", "https://storymarketer.tistory.com/entry/%EB%B8%94%EB%A1%9C%EA%B7%B8-%EB%A7%88%EC%BC%80%ED%8C%85-%EC%95%84%EC%A7%81-%ED%9A%A8%EA%B3%BC-%EC%9E%88%EC%9D%84%EA%B9%8C", [
+    ("Daum / Tistory", "https://storymarketer.tistory.com/m/entry/%EB%B8%94%EB%A1%9C%EA%B7%B8-%EB%A7%88%EC%BC%80%ED%8C%85-%EC%95%84%EC%A7%81-%ED%9A%A8%EA%B3%BC-%EC%9E%88%EC%9D%84%EA%B9%8C", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
         ("local helper",             strat_local_helper,  {}),

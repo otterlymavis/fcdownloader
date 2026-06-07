@@ -211,7 +211,7 @@ def fetch_with_retry(
         try:
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.read(), resp.status
+                return resp.read(), getattr(resp, "status", 200)
         except urllib.error.HTTPError as exc:
             if exc.code in (429, 503) and attempt < max_retries:
                 _time.sleep(backoff * (2 ** attempt))

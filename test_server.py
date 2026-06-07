@@ -9,7 +9,7 @@ URLS = [
     ("TikTok", "https://www.tiktok.com/@tiktok/video/7106594312292453678"),
     ("Facebook", "https://www.facebook.com/watch/?v=10153231379946729"),
     ("Bilibili", "https://www.bilibili.com/video/BV1GJ411x7h7/"),
-    ("Twitter", "https://twitter.com/X/status/123456789")
+    ("Twitter", "https://x.com/NASA/status/1902118174591521056")
 ]
 
 results = []

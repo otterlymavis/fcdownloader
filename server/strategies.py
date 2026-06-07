@@ -16,6 +16,7 @@ diagnostics for the error response when all strategies fail.
 from __future__ import annotations
 
 import os
+import re
 import socket
 import time
 import urllib.parse
@@ -440,15 +441,18 @@ def _strategy_html_scan_combined(
         **({"Origin": http_headers["Origin"]} if http_headers.get("Origin") else {}),
         **({"Cookie": cookies} if cookies else {}),
     })
-    body, status = fetch_with_retry(page_url, req_headers, timeout=20, max_retries=1)
-    if not body:
-        return _result(name, False, reason=f"fetch failed (HTTP {status})")
-    html_text = body.decode("utf-8", errors="replace")
-
-    if _html_cache is not None:
-        _html_cache[page_url] = html_text
+    if _html_cache is not None and page_url in _html_cache:
+        html_text = _html_cache[page_url]
+    else:
+        body, status = fetch_with_retry(page_url, req_headers, timeout=20, max_retries=1)
+        if not body:
+            return _result(name, False, reason=f"fetch failed (HTTP {status})")
+        html_text = body.decode("utf-8", errors="replace")
+        if _html_cache is not None:
+            _html_cache[page_url] = html_text
 
     title = _html_title(html_text)
+    thumbnail = _html_thumbnail(html_text, page_url)
 
     def _info_from_url(media_url: str) -> dict[str, Any]:
         url = normalize_url(html_mod.unescape(media_url))
@@ -459,7 +463,7 @@ def _strategy_html_scan_combined(
         return {
             "url": url,
             "http_headers": safe_headers({**req_headers, "Referer": req_headers.get("Referer") or page_url}),
-            "title": title, "thumbnail": None, "duration": None,
+            "title": title, "thumbnail": thumbnail, "duration": None,
             "ext": ext,
             "protocol": (
                 "m3u8_native"        if ext == "m3u8" else
@@ -720,6 +724,23 @@ def _html_title(html_text: str) -> str | None:
     return None
 
 
+def _html_thumbnail(html_text: str, page_url: str) -> str | None:
+    import html as html_mod
+    patterns = (
+        r'<(?:video|audio)\b[^>]{0,600}?\bposter=["\']([^"\']+)["\']',
+        r'<meta\s[^>]*?(?:property|name)\s*=\s*["\'](?:og:image(?::url|:secure_url)?|twitter:image(?::src)?)["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']',
+        r'<meta\s[^>]*?content\s*=\s*["\']([^"\']+)["\'][^>]*?(?:property|name)\s*=\s*["\'](?:og:image(?::url|:secure_url)?|twitter:image(?::src)?)["\']',
+    )
+    for pattern in patterns:
+        m = re.search(pattern, html_text, re.IGNORECASE | re.DOTALL)
+        if not m:
+            continue
+        raw = html_mod.unescape(m.group(1)).replace("\\/", "/").replace("\\u0026", "&").strip()
+        if raw and not raw.lower().startswith(("data:", "blob:", "javascript:", "mailto:", "#")):
+            return urllib.parse.urljoin(page_url, raw)
+    return None
+
+
 def _scan_media_urls(html_text: str, mode: str) -> list[str]:
     import re
     import html as html_mod
@@ -735,19 +756,19 @@ def _scan_media_urls(html_text: str, mode: str) -> list[str]:
         # URL even when it lacks a file extension (common with signed CDN URLs).
         patterns.append(
             r'<(?:video|audio|source)\b[^>]{0,400}?\bsrc=["\']'
-            r'(https?://[^"\'<>\s]{10,})["\']'
+            r'([^"\'<>\s]{2,})["\']'
         )
         # data-src lazy-loaded variants (used by some video libraries).
         patterns.append(
             r'<(?:video|source)\b[^>]{0,400}?\bdata-src=["\']'
-            r'(https?://[^"\'<>\s]{10,})["\']'
+            r'([^"\'<>\s]{2,})["\']'
         )
         # data-video-url / data-stream-url / data-mp4 / data-hls on arbitrary
         # container elements (common in custom CMS and sports/news video players).
         patterns.append(
             r'<[a-z][a-z0-9-]*\b[^>]{0,600}?\bdata-(?:video-url|stream-url|media-url'
             r'|video-src|stream-src|hls-url|mp4-url|mp4|m3u8|hls)=["\']'
-            r'(https?://[^"\'<>\s]{10,})["\']'
+            r'([^"\'<>\s]{2,})["\']'
         )
     if mode == "og":
         _vt = r'(?:og:video(?::url)?|og:video:secure_url|twitter:player:stream|og:audio(?::url)?)'
@@ -768,6 +789,14 @@ def _scan_media_urls(html_text: str, mode: str) -> list[str]:
             r'<meta\s[^>]*?content\s*=\s*["\']([^"\']+)["\'][^>]*?(?:property|name)\s*=\s*["\']' + _it + r'["\']'
         )
     found: list[str] = []
+    def _is_candidate(raw_url: str) -> bool:
+        lower = raw_url.lower()
+        if lower.startswith(("data:", "blob:", "javascript:", "mailto:", "#")):
+            return False
+        if raw_url.startswith(("http://", "https://", "/", "./", "../")):
+            return True
+        return bool(re.search(r'\.(?:m3u8|mpd|mp4|m4v|webm|mov|mp3|m4a|aac|ogg|flac|opus)(?:[?#]|$)', raw_url, re.IGNORECASE))
+
     variants = [
         html_text,
         html_text.replace("\\u0026", "&").replace("\\u003d", "=").replace("\\/", "/"),
@@ -777,9 +806,188 @@ def _scan_media_urls(html_text: str, mode: str) -> list[str]:
             for m in re.finditer(pattern, text, re.IGNORECASE | re.DOTALL):
                 raw = m.group(1) if m.lastindex else m.group(0)
                 raw = html_mod.unescape(raw).replace("\\/", "/").replace("\\u0026", "&").strip()
-                if raw.startswith(("http://", "https://")) and raw not in found:
+                if _is_candidate(raw) and raw not in found:
                     found.append(raw)
     return found
+
+
+def _strategy_structured_media_data(
+    page_url: str,
+    http_headers: dict[str, str],
+    cookies: str | None,
+    _html_cache: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Extract media URLs from JSON-LD, RSS/media tags, and hydration blobs."""
+    import html as html_mod
+    import json as json_mod
+
+    name = "structured media data"
+    req_headers = safe_headers({
+        "User-Agent": http_headers.get("User-Agent") or _DESKTOP_UA,
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Language": (
+            http_headers.get("Accept-Language")
+            or languages.accept_language_for_url(page_url, "en-US,en;q=0.9")
+        ),
+        **({"Referer": http_headers["Referer"]} if http_headers.get("Referer") else {}),
+        **({"Cookie": cookies} if cookies else {}),
+    })
+
+    if _html_cache is not None and page_url in _html_cache:
+        html_text = _html_cache[page_url]
+    else:
+        body, status = fetch_with_retry(page_url, req_headers, timeout=20, max_retries=1)
+        if not body:
+            return _result(name, False, reason=f"fetch failed (HTTP {status})")
+        html_text = body.decode("utf-8", errors="replace")
+        if _html_cache is not None:
+            _html_cache[page_url] = html_text
+
+    direct_urls: list[str] = []
+    embed_urls: list[str] = []
+    thumbnail_urls: list[str] = []
+
+    def add_direct(raw: Any) -> None:
+        if not isinstance(raw, str):
+            return
+        url = html_mod.unescape(raw).replace("\\/", "/").replace("\\u0026", "&").strip()
+        if not url or url.lower().startswith(("data:", "blob:", "javascript:", "mailto:", "#")):
+            return
+        if not url.startswith(("http://", "https://")):
+            url = urllib.parse.urljoin(page_url, url)
+        if url.startswith(("http://", "https://")) and url not in direct_urls:
+            direct_urls.append(url)
+
+    def add_embed(raw: Any) -> None:
+        if not isinstance(raw, str):
+            return
+        url = html_mod.unescape(raw).replace("\\/", "/").replace("\\u0026", "&").strip()
+        if not url or url.lower().startswith(("data:", "blob:", "javascript:", "mailto:", "#")):
+            return
+        if not url.startswith(("http://", "https://")):
+            url = urllib.parse.urljoin(page_url, url)
+        if url.startswith(("http://", "https://")) and url not in embed_urls:
+            embed_urls.append(url)
+
+    def add_thumbnail(raw: Any) -> None:
+        if isinstance(raw, list):
+            for item in raw:
+                add_thumbnail(item)
+            return
+        if isinstance(raw, dict):
+            add_thumbnail(raw.get("url") or raw.get("contentUrl"))
+            return
+        if not isinstance(raw, str):
+            return
+        url = html_mod.unescape(raw).replace("\\/", "/").replace("\\u0026", "&").strip()
+        if not url or url.lower().startswith(("data:", "blob:", "javascript:", "mailto:", "#")):
+            return
+        if not url.startswith(("http://", "https://")):
+            url = urllib.parse.urljoin(page_url, url)
+        if url.startswith(("http://", "https://")) and url not in thumbnail_urls:
+            thumbnail_urls.append(url)
+
+    def schema_type(obj: dict[str, Any]) -> str:
+        raw = obj.get("@type") or obj.get("type") or ""
+        if isinstance(raw, list):
+            return " ".join(str(x) for x in raw).lower()
+        return str(raw).lower()
+
+    def walk_schema(obj: Any, media_context: bool = False) -> None:
+        if isinstance(obj, list):
+            for item in obj:
+                walk_schema(item, media_context)
+            return
+        if not isinstance(obj, dict):
+            return
+
+        obj_type = schema_type(obj)
+        is_media = media_context or any(t in obj_type for t in ("videoobject", "audioobject", "mediaobject"))
+        if is_media:
+            for key in ("contentUrl", "contentURL", "url", "downloadUrl", "downloadURL"):
+                add_direct(obj.get(key))
+            add_embed(obj.get("embedUrl") or obj.get("embedURL"))
+            add_thumbnail(obj.get("thumbnailUrl") or obj.get("thumbnailURL") or obj.get("thumbnail"))
+
+        for key in ("associatedMedia", "video", "audio", "media", "encoding", "encodings"):
+            if key in obj:
+                walk_schema(obj[key], is_media)
+
+    for ld_m in re.finditer(
+        r'<script\b[^>]*?\btype=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html_text,
+        re.DOTALL | re.IGNORECASE,
+    ):
+        try:
+            walk_schema(json_mod.loads(html_mod.unescape(ld_m.group(1))))
+        except Exception:
+            continue
+
+    for enc_m in re.finditer(
+        r'<(?:enclosure|media:content)\b[^>]*?\burl=["\']([^"\']{10,})["\']',
+        html_text,
+        re.IGNORECASE,
+    ):
+        add_direct(enc_m.group(1))
+
+    video_key_re = re.compile(
+        r'"(?:video|audio|media|stream|play|file|download|hls|mp4|dash|manifest|content)'
+        r'(?:Url|_url|URL|Src|_src|File|_file|Path|_path|Link)?"\s*:\s*"(https?://[^"]{10,})"'
+        r'|"(?:source|src)(?:Url|_url|URL|Src|_src|File|_file|Path|_path|Link)+"\s*:\s*"(https?://[^"]{10,})"',
+        re.IGNORECASE,
+    )
+    imageish_re = re.compile(
+        r'(?:\.(?:jpe?g|png|gif|webp|svg|avif|bmp|ico)(?:[?#][^"]*)?$'
+        r'|/(?:thumbnails?|thumbs?|avatars?|photos?|images?|imgs?|icons?|logos?|banners?|posters?)/)',
+        re.IGNORECASE,
+    )
+    for scr_m in re.finditer(r"<script\b[^>]*>(.*?)</script>", html_text, re.DOTALL | re.IGNORECASE):
+        script_text = html_mod.unescape(scr_m.group(1)).replace("\\/", "/").replace("\\u0026", "&")
+        for key_m in video_key_re.finditer(script_text):
+            url = key_m.group(1) or key_m.group(2) or ""
+            if not imageish_re.search(url):
+                add_direct(url)
+
+    if not direct_urls and not embed_urls:
+        return _result(name, False, reason="no structured media URLs found")
+
+    page_title = _html_title(html_text)
+    page_thumbnail = thumbnail_urls[0] if thumbnail_urls else _html_thumbnail(html_text, page_url)
+
+    def mk_entry(url: str) -> dict[str, Any]:
+        ext = guess_ext_from_url(url) or (
+            "m3u8" if ".m3u8" in url.lower() else
+            "mpd" if ".mpd" in url.lower() else
+            "mp3" if any(x in url.lower() for x in (".mp3", "/mp3", "audio/mpeg")) else "mp4"
+        )
+        return {
+            "url": url,
+            "ext": ext,
+            "id": cache_key(url),
+            "title": page_title,
+            "thumbnail": page_thumbnail,
+            "http_headers": req_headers,
+            "protocol": "m3u8_native" if ext == "m3u8" else ("dash" if ext == "mpd" else "https"),
+        }
+
+    urls = direct_urls or embed_urls
+    audit_entries = [
+        source_audit.audit_entry(
+            strategy=name,
+            source="structured-metadata",
+            url=url,
+            selected=(i == 0),
+            rejected_reason=None if i == 0 else "additional structured media URL",
+            headers=req_headers,
+        )
+        for i, url in enumerate(urls[:20])
+    ]
+    if len(urls) == 1:
+        return _result(name, True, media=source_audit.add_audit(mk_entry(urls[0]), audit_entries))
+
+    playlist = {"_type": "playlist", "entries": [mk_entry(url) for url in urls[:40]], "title": page_title}
+    source_audit.add_audit(playlist, audit_entries)
+    return _result(name, True, media=playlist)
 
 
 def _strategy_page_embeds(
@@ -801,6 +1009,7 @@ def _strategy_page_embeds(
     redundant HTTP request.
     """
     import html as html_mod
+    import json as _json
     import re
 
     name = "embedded player detector"
@@ -825,6 +1034,47 @@ def _strategy_page_embeds(
         html_text = body.decode("utf-8", errors="replace")
 
     embed_urls: list[str] = []
+
+    # ── oEmbed discovery: <link rel="alternate" type="application/json+oembed"> ──
+    # Many pages expose the actual embeddable player through a small JSON endpoint.
+    # The JSON commonly contains an iframe in `html`, which we can pass to yt-dlp.
+    oembed_links: list[str] = []
+    for link_m in re.finditer(r"<link\b[^>]{0,1200}>", html_text, re.IGNORECASE | re.DOTALL):
+        tag = link_m.group(0)
+        if "oembed" not in tag.lower():
+            continue
+        href_m = re.search(r'\bhref=["\']([^"\']+)["\']', tag, re.IGNORECASE)
+        if not href_m:
+            continue
+        href = urllib.parse.urljoin(page_url, html_mod.unescape(href_m.group(1)))
+        if href.startswith(("http://", "https://")) and href not in oembed_links:
+            oembed_links.append(href)
+
+    for oembed_url in oembed_links[:5]:
+        body, status = fetch_with_retry(
+            oembed_url,
+            safe_headers({**req_headers, "Accept": "application/json"}),
+            timeout=10,
+            max_retries=1,
+        )
+        if not body:
+            print(f"[embed] oEmbed fetch failed HTTP {status} for {oembed_url[:80]}")
+            continue
+        try:
+            data = _json.loads(body)
+        except Exception:
+            continue
+        html_fragment = str(data.get("html") or "")
+        for iframe_m in re.finditer(r'<iframe\b[^>]+?\bsrc=["\']([^"\']+)["\']', html_fragment, re.IGNORECASE):
+            src = urllib.parse.urljoin(page_url, html_mod.unescape(iframe_m.group(1)))
+            if src.startswith(("http://", "https://")) and src not in embed_urls:
+                embed_urls.append(src)
+        for key in ("embed_url", "embedUrl", "url"):
+            raw = data.get(key)
+            if isinstance(raw, str):
+                src = urllib.parse.urljoin(page_url, html_mod.unescape(raw))
+                if src.startswith(("http://", "https://")) and src not in embed_urls:
+                    embed_urls.append(src)
 
     # ── Brightcove: data-account + data-video-id ──────────────────────────────
     bc_acc = re.search(r'data-account=["\'](\d{7,})["\']', html_text)
@@ -910,7 +1160,6 @@ def _strategy_page_embeds(
         r"""<video\b[^>]+?data-setup='(\{[^']{0,2000}\})'""",   # single-quoted attribute
         r'<video\b[^>]+?data-setup="(\{[^"]{0,2000}\})"',        # double-quoted attribute
     ]
-    import json as _json
     for _vjs_pat in _vjs_patterns:
         for vjs_m in re.finditer(_vjs_pat, html_text, re.IGNORECASE | re.DOTALL):
             try:
@@ -1083,6 +1332,128 @@ def _strategy_page_embeds(
             last_err = safe_text(exc)[:200]
 
     return _result(name, False, reason=f"embed extraction failed: {last_err}")
+
+
+def _probe_direct_media_url(page_url: str, http_headers: dict[str, str]) -> dict[str, Any] | None:
+    """Identify extensionless direct media URLs by HEAD Content-Type."""
+    probe_headers = safe_headers({
+        "User-Agent": http_headers.get("User-Agent") or _DESKTOP_UA,
+        "Accept": "video/*,audio/*,image/*,application/vnd.apple.mpegurl,application/dash+xml,*/*;q=0.4",
+        **({"Referer": http_headers["Referer"]} if http_headers.get("Referer") else {}),
+        **({"Origin": http_headers["Origin"]} if http_headers.get("Origin") else {}),
+        **({"Cookie": http_headers["Cookie"]} if http_headers.get("Cookie") else {}),
+    })
+
+    def classify_content_type(content_type: str) -> tuple[str, str] | None:
+        media_types = {
+            "application/vnd.apple.mpegurl": ("m3u8", "m3u8_native"),
+            "application/x-mpegurl": ("m3u8", "m3u8_native"),
+            "application/mpegurl": ("m3u8", "m3u8_native"),
+            "application/dash+xml": ("mpd", "http_dash_segments"),
+            "video/mp4": ("mp4", "https"),
+            "video/webm": ("webm", "https"),
+            "video/quicktime": ("mov", "https"),
+            "audio/mpeg": ("mp3", "https"),
+            "audio/mp4": ("m4a", "https"),
+            "audio/aac": ("aac", "https"),
+            "audio/ogg": ("ogg", "https"),
+            "audio/opus": ("opus", "https"),
+            "audio/flac": ("flac", "https"),
+            "image/jpeg": ("jpg", "https"),
+            "image/png": ("png", "https"),
+            "image/webp": ("webp", "https"),
+            "image/gif": ("gif", "https"),
+            "image/avif": ("avif", "https"),
+        }
+        ext_protocol = media_types.get(content_type)
+        if ext_protocol:
+            return ext_protocol
+        if content_type.startswith("video/"):
+            return ("mp4", "https")
+        if content_type.startswith("audio/"):
+            return ("mp3", "https")
+        if content_type.startswith("image/"):
+            return ("jpg", "https")
+        return None
+
+    def classify_signature(sample: bytes) -> tuple[str, str] | None:
+        head = sample[:4096].lstrip()
+        lower = head[:512].lower()
+        if head.startswith(b"#EXTM3U"):
+            return ("m3u8", "m3u8_native")
+        if b"<mpd" in lower[:512]:
+            return ("mpd", "http_dash_segments")
+        if len(sample) >= 12 and sample[4:8] == b"ftyp":
+            return ("mp4", "https")
+        if head.startswith(b"\x1a\x45\xdf\xa3"):
+            return ("webm", "https")
+        if head.startswith(b"ID3") or head[:2] == b"\xff\xfb":
+            return ("mp3", "https")
+        if head.startswith(b"OggS"):
+            return ("ogg", "https")
+        if head.startswith(b"fLaC"):
+            return ("flac", "https")
+        if head.startswith(b"\xff\xd8\xff"):
+            return ("jpg", "https")
+        if head.startswith(b"\x89PNG\r\n\x1a\n"):
+            return ("png", "https")
+        if head.startswith((b"GIF87a", b"GIF89a")):
+            return ("gif", "https")
+        if len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+            return ("webp", "https")
+        return None
+
+    content_type = ""
+    probe_source = "request-url/head"
+    ext_protocol: tuple[str, str] | None = None
+    try:
+        req = urllib.request.Request(page_url, headers=probe_headers, method="HEAD")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            content_type = (resp.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        ext_protocol = classify_content_type(content_type)
+    except Exception:
+        pass
+
+    generic_or_unknown = content_type in {"", "application/octet-stream", "binary/octet-stream"}
+    if not ext_protocol and (generic_or_unknown or content_type.startswith("application/")):
+        range_headers = safe_headers({**probe_headers, "Range": "bytes=0-4095"})
+        try:
+            req = urllib.request.Request(page_url, headers=range_headers, method="GET")
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                content_type = (resp.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+                sample = b""
+                if not classify_content_type(content_type):
+                    try:
+                        sample = resp.read(4096)
+                    except TypeError:
+                        sample = resp.read()
+                probe_source = "request-url/range-get"
+            ext_protocol = classify_content_type(content_type) or classify_signature(sample or b"")
+        except Exception:
+            return None
+
+    if not ext_protocol:
+        return None
+
+    ext, protocol = ext_protocol
+    return {
+        "url": page_url,
+        "http_headers": probe_headers,
+        "title": None,
+        "thumbnail": None,
+        "duration": None,
+        "ext": ext,
+        "protocol": protocol,
+        "id": cache_key(page_url),
+        "_source_audit": [source_audit.audit_entry(
+            strategy="direct media content-type probe",
+            source=probe_source,
+            url=page_url,
+            selected=True,
+            mime_type=content_type,
+            headers=probe_headers,
+        )],
+    }
 
 
 # ── Engine ────────────────────────────────────────────────────────────────────
@@ -1280,6 +1651,9 @@ def run_extraction(
             )],
         }
 
+    if probed_media := _probe_direct_media_url(page_url, http_headers):
+        return probed_media
+
     # ── Cookie file ───────────────────────────────────────────────────────────
     cookie_file: str | None = None
     if cookies:
@@ -1366,6 +1740,7 @@ def run_extraction(
                 "WebView/runtime interception",
                 "browser runtime is client-side only",
             )),
+            ("structured media data",    lambda: _strategy_structured_media_data(page_url, http_headers, cookies, _html_cache)),
             # Combined HTML scan: fetches the page once and tries HLS→DASH→OG→generic
             # in priority order. The fetched HTML is cached in _html_cache so the
             # subsequent embed-detector strategy reuses it without a second HTTP request.

@@ -144,7 +144,7 @@ class TestClassifier:
         p = classifier.classify("https://www.bilibili.com/video/BV123")
         assert not p.is_youtube
         assert not p.sabr_risk
-        assert p.hls_likely
+        assert p.dash_likely
 
     def test_direct_mp4_url(self):
         p = classifier.classify("https://cdn.example.com/video.mp4")
@@ -177,7 +177,7 @@ class TestRegistry:
     def test_bilibili_lookup(self):
         cap = registry.lookup("https://www.bilibili.com/video/BV123")
         assert cap.requires_referer
-        assert cap.hls_common
+        assert cap.dash_common
 
     def test_weibo_lookup(self):
         cap = registry.lookup("https://weibo.com/status/123")
@@ -925,6 +925,257 @@ class TestCuratedSiteExtractor:
         assert [entry["url"] for entry in info["entries"]] == [
             "https://imgnews.pstatic.net/image/001/2026/05/28/article_photo.jpg?type=w647",
         ]
+
+
+class TestStructuredMediaDataStrategy:
+    def test_extracts_json_ld_video_content_url(self):
+        from strategies import _strategy_structured_media_data
+
+        html = """
+        <html><head>
+          <title>Structured Video</title>
+          <script type="application/ld+json">
+          {
+            "@context": "https://schema.org",
+            "@type": "VideoObject",
+            "name": "Structured Video",
+            "contentUrl": "https://cdn.example.com/videos/main.m3u8",
+            "thumbnailUrl": "/thumbs/main.jpg"
+          }
+          </script>
+        </head><body></body></html>
+        """
+
+        result = _strategy_structured_media_data(
+            "https://example.com/watch/1",
+            {"User-Agent": "test"},
+            None,
+            {"https://example.com/watch/1": html},
+        )
+
+        assert result["success"]
+        assert result["media"]["url"] == "https://cdn.example.com/videos/main.m3u8"
+        assert result["media"]["protocol"] == "m3u8_native"
+        assert result["media"]["thumbnail"] == "https://example.com/thumbs/main.jpg"
+
+    def test_resolves_relative_json_ld_video_content_url(self):
+        from strategies import _strategy_structured_media_data
+
+        html = """
+        <html><head>
+          <script type="application/ld+json">
+          {"@type":"VideoObject","contentUrl":"/media/episode.mp4"}
+          </script>
+        </head><body></body></html>
+        """
+
+        result = _strategy_structured_media_data(
+            "https://example.com/watch/1",
+            {"User-Agent": "test"},
+            None,
+            {"https://example.com/watch/1": html},
+        )
+
+        assert result["success"]
+        assert result["media"]["url"] == "https://example.com/media/episode.mp4"
+
+    def test_extracts_hydration_blob_media_url(self):
+        from strategies import _strategy_structured_media_data
+
+        html = """
+        <html><head><title>Hydrated Video</title></head><body>
+          <script id="__NEXT_DATA__" type="application/json">
+          {"props":{"pageProps":{"videoUrl":"https://media.example.com/file/video.mp4?token=abc"}}}
+          </script>
+        </body></html>
+        """
+
+        result = _strategy_structured_media_data(
+            "https://example.com/stories/2",
+            {"User-Agent": "test"},
+            None,
+            {"https://example.com/stories/2": html},
+        )
+
+        assert result["success"]
+        assert result["media"]["url"] == "https://media.example.com/file/video.mp4?token=abc"
+        assert result["media"]["ext"] == "mp4"
+
+
+class TestHtmlMediaScannerStrategy:
+    def test_resolves_relative_video_source_url(self):
+        from strategies import _strategy_html_scan_combined
+
+        html = """
+        <html><head><title>Relative Clip</title></head><body>
+          <video controls poster="/assets/posters/intro.jpg" src="/assets/clips/intro.mp4"></video>
+        </body></html>
+        """
+
+        result = _strategy_html_scan_combined(
+            "https://example.com/articles/intro",
+            {"User-Agent": "test"},
+            None,
+            {"https://example.com/articles/intro": html},
+        )
+
+        assert result["success"]
+        assert result["media"]["url"] == "https://example.com/assets/clips/intro.mp4"
+        assert result["media"]["ext"] == "mp4"
+        assert result["media"]["thumbnail"] == "https://example.com/assets/posters/intro.jpg"
+
+    def test_response_preserves_thumbnail(self):
+        from main import _to_response
+
+        response = _to_response({
+            "url": "https://cdn.example.com/video.mp4",
+            "ext": "mp4",
+            "thumbnail": "https://cdn.example.com/poster.jpg",
+        })
+
+        assert response["thumbnail"] == "https://cdn.example.com/poster.jpg"
+
+
+class TestEmbeddedPlayerDetectorStrategy:
+    def test_oembed_iframe_url_is_extracted(self, monkeypatch):
+        from strategies import _strategy_page_embeds
+
+        page_url = "https://example.com/posts/1"
+        html = """
+        <html><head>
+          <link rel="alternate" type="application/json+oembed" href="/oembed?url=1">
+        </head><body></body></html>
+        """
+        oembed_body = b'{"type":"video","html":"<iframe src=\\"https://player.example.com/embed/abc\\"></iframe>"}'
+
+        class FakeResponse:
+            headers = {}
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return oembed_body
+
+        seen: dict[str, str] = {}
+
+        class FakeYDL:
+            def __init__(self, opts): pass
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def extract_info(self, url, download=False):
+                seen["url"] = url
+                return {
+                    "url": "https://cdn.example.com/video.mp4",
+                    "ext": "mp4",
+                    "id": "abc",
+                    "title": "oEmbed video",
+                }
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: FakeResponse())
+        monkeypatch.setattr("strategies.YoutubeDL", FakeYDL)
+
+        result = _strategy_page_embeds(
+            page_url,
+            {"User-Agent": "test"},
+            None,
+            {"quiet": True},
+            {page_url: html},
+        )
+
+        assert result["success"]
+        assert seen["url"] == "https://player.example.com/embed/abc"
+        assert result["media"]["url"] == "https://cdn.example.com/video.mp4"
+
+
+class TestDirectMediaContentTypeProbe:
+    def test_extensionless_video_url_short_circuits(self, monkeypatch):
+        from strategies import run_extraction
+
+        class FakeResponse:
+            headers = {"Content-Type": "video/mp4; charset=binary"}
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+
+        def fake_urlopen(req, *args, **kwargs):
+            assert getattr(req, "method", "") == "HEAD"
+            return FakeResponse()
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        info = run_extraction("https://cdn.example.com/download?id=abc")
+
+        assert info["url"] == "https://cdn.example.com/download?id=abc"
+        assert info["ext"] == "mp4"
+        assert info["protocol"] == "https"
+
+    def test_html_content_type_does_not_probe_as_media(self, monkeypatch):
+        from strategies import _probe_direct_media_url
+
+        class FakeResponse:
+            headers = {"Content-Type": "text/html; charset=utf-8"}
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: FakeResponse())
+
+        assert _probe_direct_media_url("https://example.com/page", {"User-Agent": "test"}) is None
+
+    def test_range_get_fallback_when_head_fails(self, monkeypatch):
+        import urllib.error
+        from strategies import _probe_direct_media_url
+
+        calls: list[str] = []
+
+        class FakeResponse:
+            headers = {"Content-Type": "audio/mpeg"}
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+
+        def fake_urlopen(req, *args, **kwargs):
+            method = getattr(req, "method", "")
+            calls.append(method)
+            if method == "HEAD":
+                raise urllib.error.HTTPError(req.full_url, 405, "Method Not Allowed", {}, None)
+            assert method == "GET"
+            assert req.headers.get("Range") == "bytes=0-4095"
+            return FakeResponse()
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        info = _probe_direct_media_url("https://cdn.example.com/signed?id=abc", {"User-Agent": "test"})
+
+        assert calls == ["HEAD", "GET"]
+        assert info is not None
+        assert info["ext"] == "mp3"
+        assert info["protocol"] == "https"
+        assert info["_source_audit"][0]["source"] == "request-url/range-get"
+
+    def test_octet_stream_hls_signature_is_detected(self, monkeypatch):
+        from strategies import _probe_direct_media_url
+
+        class HeadResponse:
+            headers = {"Content-Type": "application/octet-stream"}
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+
+        class GetResponse:
+            headers = {"Content-Type": "application/octet-stream"}
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self, *_args): return b"#EXTM3U\n#EXT-X-VERSION:3\n"
+
+        def fake_urlopen(req, *args, **kwargs):
+            if getattr(req, "method", "") == "HEAD":
+                return HeadResponse()
+            return GetResponse()
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        info = _probe_direct_media_url("https://cdn.example.com/manifest?id=abc", {"User-Agent": "test"})
+
+        assert info is not None
+        assert info["ext"] == "m3u8"
+        assert info["protocol"] == "m3u8_native"
+        assert info["_source_audit"][0]["source"] == "request-url/range-get"
 
 
 # ── YouTube HLS guard (strategies._strategy_ydl / _strategy_ydl_client) ──────

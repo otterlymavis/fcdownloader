@@ -4,7 +4,7 @@ import time
 
 URLS = {
     "YouTube": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    "Twitter": "https://twitter.com/X/status/123456789",
+    "Twitter": "https://x.com/NASA/status/1902118174591521056",
     "Instagram": "https://www.instagram.com/p/C-h902Ttc2C/",
     "TikTok": "https://www.tiktok.com/@tiktok/video/7106594312292453678",
     "Facebook": "https://www.facebook.com/watch/?v=10153231379946729",
@@ -15,8 +15,8 @@ URLS = {
     "Xiaohongshu": "http://xhslink.com/o/AuDpBCMNn0z",
     "Naver TV": "https://tv.naver.com/v/33215888",
     "Kakao TV": "https://tv.kakao.com/channel/3268481/cliplink/436329432",
-    "Niconico": "https://www.nicovideo.jp/watch/sm9",
-    "TVer": "https://tver.jp/episodes/epb51e5e",
+    "Niconico": "https://www.nicovideo.jp/watch/1173108780",
+    "TVer": "https://tver.jp/episodes/epc1hdugbk",
     "Abema": "https://abema.tv/video/episode/90-1869_s1_p1"
 }
 

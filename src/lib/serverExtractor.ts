@@ -243,6 +243,7 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
     provenance: 'social-extractor' as const,
     sourcePageUrl: pageUrl,
     sourceTitle: r.title,
+    thumbnailUrl: r.thumbnail,
     duration: r.duration,
     extractor: r.extractor,
     formatId: r.formatId,

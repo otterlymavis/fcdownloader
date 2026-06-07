@@ -44,6 +44,9 @@ class ExtractionProfile:
     hls_likely: bool = False
     """Site commonly delivers HLS manifests."""
 
+    dash_likely: bool = False
+    """Site commonly delivers DASH manifests."""
+
     proxy_stream_needed: bool = False
     """Server-side download proxy (/ytdl-stream) is the recommended path."""
 
@@ -104,6 +107,7 @@ def classify(url: str, cookies_provided: bool = False) -> ExtractionProfile:
         sabr_risk=sabr_risk,
         livestream_likely=is_live,
         hls_likely=cap.hls_common or is_live,
+        dash_likely=cap.dash_common,
         proxy_stream_needed=proxy_stream_needed,
         preferred_yt_clients=cap.preferred_yt_clients,
         max_duration_hint=cap.max_duration_hint,

@@ -315,7 +315,8 @@ def _to_response(info: dict[str, Any]) -> dict[str, Any]:
                 safe_text(video.get("format_id")),
                 safe_text(audio.get("format_id")),
             ]).strip("+"),
-            "formats": _format_options(info),
+            "formats":       _format_options(info),
+            "thumbnail":     info.get("thumbnail"),
         }
 
     url = info.get("url")
@@ -336,6 +337,7 @@ def _to_response(info: dict[str, Any]) -> dict[str, Any]:
             "extractor": info.get("extractor"),
             "formatId":  info.get("format_id"),
             "formats":   _format_options(info),
+            "thumbnail": info.get("thumbnail"),
         }
 
     if looks_like_hls(url, info.get("protocol")):
@@ -351,6 +353,7 @@ def _to_response(info: dict[str, Any]) -> dict[str, Any]:
             "extractor": info.get("extractor"),
             "formatId":  info.get("format_id"),
             "formats":   _format_options(info),
+            "thumbnail": info.get("thumbnail"),
         }
 
     return {
@@ -365,6 +368,7 @@ def _to_response(info: dict[str, Any]) -> dict[str, Any]:
         "extractor": info.get("extractor"),
         "formatId":  info.get("format_id"),
         "formats":   _format_options(info),
+        "thumbnail": info.get("thumbnail"),
     }
 
 
@@ -1390,7 +1394,7 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
     response = _to_response(info)
     _attach_source_audit(response, info, req.sourceAudit)
     response["title"]     = info.get("title")
-    response["thumbnail"] = None
+    response["thumbnail"] = info.get("thumbnail")
     response["duration"]  = info.get("duration")
 
     if req.subtitles:

@@ -70,12 +70,16 @@ function mediaKindFromUrl(url: string): NonNullable<DetectedMedia['mediaKind']> 
 }
 
 function makeItem(url: string, pageUrl: string, label?: string, provenance: Provenance = 'social-extractor', confidence = 0.85): DetectedMedia {
-  const clean = url
+  const raw = url
     .replace(/&amp;/g, '&')
     .replace(/\\u0026/g, '&')
     .replace(/\\\//g, '/')
     .replace(/\\/g, '')
     .trim();
+  let clean = raw;
+  try {
+    clean = new URL(raw, pageUrl).toString();
+  } catch {}
   const lower = clean.toLowerCase();
   return {
     id: genId(),
@@ -145,9 +149,13 @@ function _scanHtml(html: string, pageUrl: string, mode: 'hls' | 'dash' | 'generi
     : [
         /(https?:\/\/[^"'\\<>\s]+?\.(?:m3u8|mpd|mp4|m4v|webm|mov|mp3|m4a|ogg|opus|aac|flac|wav|jpe?g|png|webp|gif|avif)[^"'\\<>\s]*)/gi,
         /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.(?:com|cn)|weibocdn\.com|xhscdn\.com|ci\.xiaohongshu\.com|biliimg\.com|hdslb\.com|pximg\.net|yimg\.jp|kakaocdn\.net)[^"'\\<>\s]*)/gi,
+        /<(?:video|audio|source)\b[^>]{0,400}?\bsrc=["']([^"'<>\\\s]{2,})["']/gi,
+        /<(?:video|source)\b[^>]{0,400}?\bdata-src=["']([^"'<>\\\s]{2,})["']/gi,
+        /<[a-z][a-z0-9-]*\b[^>]{0,600}?\bdata-(?:video-url|stream-url|media-url|video-src|stream-src|hls-url|mp4-url|mp4|m3u8|hls)=["']([^"'<>\\\s]{2,})["']/gi,
       ];
   patterns.forEach((re) => {
     extractUrls(html, re)
+      .filter((u) => !/^(?:data:|blob:|javascript:|mailto:|#)/i.test(u))
       .filter((u) => !isLikelyNonContentMediaUrl(u))
       .forEach((u) => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.65)));
   });
@@ -177,6 +185,84 @@ function _scanOgImage(html: string, pageUrl: string): DetectedMedia[] {
     .map(u => makeItem(u, pageUrl, 'Image', 'social-extractor', 0.6));
 }
 
+function _scanPageThumbnail(html: string, pageUrl: string): string | undefined {
+  const patterns = [
+    /<(?:video|audio)\b[^>]{0,600}?\bposter=["']([^"']+)["']/i,
+    /<meta\s[^>]*?(?:property|name)\s*=\s*["'](?:og:image(?::url|:secure_url)?|twitter:image(?::src)?)["'][^>]*?content\s*=\s*["']([^"']+)["']/i,
+    /<meta\s[^>]*?content\s*=\s*["']([^"']+)["'][^>]*?(?:property|name)\s*=\s*["'](?:og:image(?::url|:secure_url)?|twitter:image(?::src)?)["']/i,
+  ];
+  for (const re of patterns) {
+    const raw = html.match(re)?.[1]?.replace(/&amp;/g, '&').replace(/\\u0026/g, '&').replace(/\\\//g, '/').trim();
+    if (!raw || /^(?:data:|blob:|javascript:|mailto:|#)/i.test(raw)) continue;
+    try { return new URL(raw, pageUrl).toString(); } catch {}
+  }
+  return undefined;
+}
+
+function _scanStructuredMediaData(html: string, pageUrl: string): DetectedMedia[] {
+  const results: DetectedMedia[] = [];
+  const thumbnails: string[] = [];
+  const add = (url?: unknown) => {
+    if (typeof url !== 'string') return;
+    const raw = url.replace(/\\u0026/g, '&').replace(/\\\//g, '/').trim();
+    if (!raw || /^(?:data:|blob:|javascript:|mailto:|#)/i.test(raw)) return;
+    let clean = raw;
+    try { clean = new URL(raw, pageUrl).toString(); } catch {}
+    if (!clean.startsWith('http') || isLikelyNonContentMediaUrl(clean)) return;
+    pushUnique(results, makeItem(clean, pageUrl, undefined, 'social-extractor', 0.72));
+  };
+  const walkSchema = (obj: unknown, mediaContext = false) => {
+    if (Array.isArray(obj)) {
+      obj.forEach(item => walkSchema(item, mediaContext));
+      return;
+    }
+    if (!obj || typeof obj !== 'object') return;
+    const record = obj as Record<string, unknown>;
+    const rawType = record['@type'] ?? record.type ?? '';
+    const type = Array.isArray(rawType) ? rawType.join(' ').toLowerCase() : String(rawType).toLowerCase();
+    const isMedia = mediaContext || /(?:videoobject|audioobject|mediaobject)/i.test(type);
+    if (isMedia) {
+      add(record.contentUrl ?? record.contentURL ?? record.url ?? record.downloadUrl ?? record.downloadURL);
+      add(record.embedUrl ?? record.embedURL);
+      const thumb = record.thumbnailUrl ?? record.thumbnailURL ?? record.thumbnail;
+      const thumbValue = Array.isArray(thumb) ? thumb[0] : thumb;
+      if (typeof thumbValue === 'string') {
+        try { thumbnails.push(new URL(thumbValue, pageUrl).toString()); } catch {}
+      } else if (thumbValue && typeof thumbValue === 'object') {
+        const nested = (thumbValue as Record<string, unknown>).url ?? (thumbValue as Record<string, unknown>).contentUrl;
+        if (typeof nested === 'string') {
+          try { thumbnails.push(new URL(nested, pageUrl).toString()); } catch {}
+        }
+      }
+    }
+    ['associatedMedia', 'video', 'audio', 'media', 'encoding', 'encodings'].forEach((key) => {
+      if (key in record) walkSchema(record[key], isMedia);
+    });
+  };
+
+  const ldRe = /<script\b[^>]*?\btype=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let ldMatch: RegExpExecArray | null;
+  while ((ldMatch = ldRe.exec(html)) !== null) {
+    try { walkSchema(JSON.parse(ldMatch[1])); } catch {}
+  }
+
+  extractUrls(html, /<(?:enclosure|media:content)\b[^>]*?\burl=["']([^"']{10,})["']/gi).forEach(add);
+
+  const keyRe = /"(?:video|audio|media|stream|play|file|download|hls|mp4|dash|manifest|content)(?:Url|_url|URL|Src|_src|File|_file|Path|_path|Link)?"\s*:\s*"(https?:\/\/[^"]{10,})"|"(?:source|src)(?:Url|_url|URL|Src|_src|File|_file|Path|_path|Link)+"\s*:\s*"(https?:\/\/[^"]{10,})"/gi;
+  const imageish = /(?:\.(?:jpe?g|png|gif|webp|svg|avif|bmp|ico)(?:[?#][^"]*)?$|\/(?:thumbnails?|thumbs?|avatars?|photos?|images?|imgs?|icons?|logos?|banners?|posters?)\/)/i;
+  let keyMatch: RegExpExecArray | null;
+  while ((keyMatch = keyRe.exec(html.replace(/\\\//g, '/').replace(/\\u0026/g, '&'))) !== null) {
+    const url = keyMatch[1] ?? keyMatch[2] ?? '';
+    if (!imageish.test(url)) add(url);
+  }
+
+  const thumb = thumbnails[0] ?? _scanPageThumbnail(html, pageUrl);
+  if (thumb) results.forEach((item) => {
+    if (item.mediaKind === 'video' || item.mediaKind === 'audio') item.thumbnailUrl = thumb;
+  });
+  return results;
+}
+
 // Fetch the page once and scan in HLS→DASH→OG video→generic video→OG image priority order.
 // OG image is a last resort — almost all article pages have one, so we only use it
 // when no video content was found.
@@ -189,7 +275,13 @@ async function extractHtmlMediaAll(pageUrl: string): Promise<DetectedMedia[]> {
     }
     const og = _scanOg(html, pageUrl);
     if (og.length > 0) return og;
+    const structured = _scanStructuredMediaData(html, pageUrl);
+    if (structured.length > 0) return structured;
     const generic = _scanHtml(html, pageUrl, 'generic');
+    const thumb = _scanPageThumbnail(html, pageUrl);
+    if (thumb) generic.forEach((item) => {
+      if (item.mediaKind === 'video' || item.mediaKind === 'audio') item.thumbnailUrl = thumb;
+    });
     if (generic.length > 0) return generic;
     return _scanOgImage(html, pageUrl);
   } catch { return []; }

@@ -3,7 +3,7 @@ import { extractFromSocialUrl } from './src/lib/platformExtractors';
 // Mock URLs
 const URLS = {
   "YouTube": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-  "Twitter": "https://twitter.com/X/status/123456789",
+  "Twitter": "https://x.com/NASA/status/1902118174591521056",
   "Instagram": "https://www.instagram.com/p/C-h902Ttc2C/",
   "TikTok": "https://www.tiktok.com/@tiktok/video/7106594312292453678",
   "Facebook": "https://www.facebook.com/watch/?v=10153231379946729",
@@ -13,8 +13,8 @@ const URLS = {
   "Bilibili": "https://www.bilibili.com/video/BV1GJ411x7h7/",
   "Xiaohongshu": "https://www.xiaohongshu.com/explore/654a1a5b000000001e018694",
   "Kakao TV": "https://tv.kakao.com/channel/3268481/cliplink/436329432",
-  "Niconico": "https://www.nicovideo.jp/watch/sm9",
-  "TVer": "https://tver.jp/episodes/epb51e5e"
+  "Niconico": "https://www.nicovideo.jp/watch/1173108780",
+  "TVer": "https://tver.jp/episodes/epc1hdugbk"
 };
 
 // We will mock `Platform.OS` to 'android' to test the client-fallback path.
