@@ -36,21 +36,14 @@
       "android": {
         "buildType": "apk"
       }
-    },
-    "local-only": {
-      "extends": "production",
-      "channel": "local-only",
-      "env": {
-        "FCDL_ALLOW_INSECURE_HTTP": "1"
-      },
-      "android": {
-        "buildType": "apk"
-      }
-    },
-    "preview-local-only": {
-      "extends": "preview",
-      "env": {
-        "FCDL_ALLOW_INSECURE_HTTP": "1"
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "appleId": "your@apple.id",
+        "ascAppId": "YOUR_APP_STORE_CONNECT_APP_ID",
+        "appleTeamId": "YOUR_TEAM_ID"
       }
     }
   }

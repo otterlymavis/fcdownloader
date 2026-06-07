@@ -1,20 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  Image,
+  Dimensions,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
+  useColorScheme,
   View,
 } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import WebView from 'react-native-webview';
-import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { SafeAreaProvider, SafeAreaView, initialWindowMetrics } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
@@ -24,142 +24,224 @@ import BrowserView from './src/components/BrowserView';
 import Toast, { ToastMessage } from './src/components/Toast';
 import VideoPlayerModal from './src/components/VideoPlayerModal';
 import SettingsSheet from './src/components/SettingsSheet';
-import { translate, TranslationKey } from './src/constants/translations';
 
 import { useMediaDetection } from './src/hooks/useMediaDetection';
 import { useDownloadManager } from './src/hooks/useDownloadManager';
 import { useBookmarks } from './src/hooks/useBookmarks';
 import { useSettings } from './src/hooks/useSettings';
 import { DetectedMedia, DownloadTask } from './src/types';
-import { extractionManager } from './src/lib/extractionManager';
-import { ServerExtractOptions, setRemoveWatermark, setPreferredQuality } from './src/lib/serverExtractor';
-import {
-  BOTTOM_PAD,
-  IS_ANDROID,
-  IS_IOS,
-  R,
-  RIPPLE,
-  RIPPLE_BL,
-  S,
-  subtleShadow,
-  TOP_PAD,
-  useTheme,
-} from './src/theme/appTheme';
-import {
-  formatBytes,
-  getFormatResolution,
-  getInitial,
-  getMediaFormat,
-  getMediaKind,
-  getMediaResolution,
-  getMimeFromPath,
-  getPageTitle,
-  getQuality,
-  getSourceName,
-  guessMediaType,
-  isDirectMediaUrl,
-  isRuntimeDownloadCandidate,
-  smartDedup,
-} from './src/lib/mediaHelpers';
+import { extractFromSocialUrl, isSocialPageUrl } from './src/lib/platformExtractors';
 
 // ── Layout constants ──────────────────────────────────────────
+const TOP_PAD    = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 0;
+const BOTTOM_PAD = Platform.OS === 'android' ? 16 : 0;
+const IS_IOS     = Platform.OS === 'ios';
+const IS_ANDROID = Platform.OS === 'android';
+const SCREEN_W   = Dimensions.get('window').width;
+
 // ── Ripple ────────────────────────────────────────────────────
+const RIPPLE    = IS_ANDROID ? { color: 'rgba(0,0,0,0.06)', borderless: false } : undefined;
+const RIPPLE_BL = IS_ANDROID ? { color: 'rgba(0,0,0,0.06)', borderless: true  } : undefined;
+
 // ── Spacing / radius ──────────────────────────────────────────
+const S = { xs: 4, sm: 8, md: 16, lg: 24, xl: 32 } as const;
+const R = { sm: 8, md: 12, lg: 16, xl: 20 } as const;
+
 // ── Color tokens ──────────────────────────────────────────────
+// Light
+const L = {
+  bg:     '#FFFFFF',
+  card:   '#F5F5F5',
+  card2:  '#EBEBEB',
+  sep:    '#E8E8E8',
+  ink:    '#1A1A1A',
+  ink2:   '#8A8A8A',
+  ink3:   '#C0C0C0',
+  btn:    '#1A1A1A',   // primary button fill
+  btnTxt: '#FFFFFF',
+  red:    '#C0392B',
+  redBg:  '#FDF2F2',
+} as const;
+
+// Dark
+const D = {
+  bg:     '#0D0D0D',
+  card:   '#1A1A1A',
+  card2:  '#252525',
+  sep:    '#2A2A2A',
+  ink:    '#F2F2F2',
+  ink2:   '#888888',
+  ink3:   '#404040',
+  btn:    '#F2F2F2',
+  btnTxt: '#0D0D0D',
+  red:    '#E05A5A',
+  redBg:  '#2A1515',
+} as const;
+
+function useTheme(darkOverride?: boolean) {
+  const systemDark = useColorScheme() === 'dark';
+  const dark = darkOverride ?? systemDark;
+  const c = dark ? D : L;
+  return { ...c, dark,
+    ripple: dark ? { color: 'rgba(255,255,255,0.06)', borderless: false } : RIPPLE,
+  };
+}
+
 // ── Helpers ───────────────────────────────────────────────────
+
+function getSourceName(url: string): string {
+  if (/video\.twimg\.com|twimg\.com/i.test(url))                                            return 'Twitter';
+  if (/cdninstagram\.com|instagram\.com/i.test(url))                                        return 'Instagram';
+  if (/threads\.net/i.test(url))                                                             return 'Threads';
+  if (/vimeocdn\.com|vimeo\.com/i.test(url))                                                return 'Vimeo';
+  if (/tiktokcdn\.com|tiktokcdn-us\.com|v\d+-webapp\.tiktok\.com|tiktok\.com/i.test(url))  return 'TikTok';
+  if (/v\.redd\.it|reddit\.com/i.test(url))                                                 return 'Reddit';
+  if (/googlevideo\.com|youtube\.com/i.test(url))                                           return 'YouTube';
+  if (/dailymotion\.com|dmcdn\.net/i.test(url))                                             return 'Dailymotion';
+  if (/facebook\.com|fbcdn\.net/i.test(url))                                                return 'Facebook';
+  if (/twitch\.tv|usher\.twitch\.tv/i.test(url))                                            return 'Twitch';
+  if (/pinimg\.com|pinterest\.com/i.test(url))                                              return 'Pinterest';
+  if (/bilivideo\.com|bilibili\.com/i.test(url))                                            return 'Bilibili';
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, '');
+    const name = host.split('.').slice(-2, -1)[0] ?? 'Video';
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  } catch { return 'Video'; }
+}
+
+function getQuality(url: string, label?: string): string | null {
+  if (label) return label;
+  const ytH = url.match(/[?&]height=(\d+)/i);
+  if (ytH) {
+    const h = parseInt(ytH[1], 10);
+    if (h >= 2160) return '4K';
+    if (h >= 1080) return '1080p';
+    if (h >= 720)  return '720p';
+    if (h >= 480)  return '480p';
+    if (h >= 360)  return '360p';
+  }
+  if (/4k|2160/i.test(url)) return '4K';
+  if (/1080/i.test(url))    return '1080p';
+  if (/720/i.test(url))     return '720p';
+  if (/480/i.test(url))     return '480p';
+  if (/360/i.test(url))     return '360p';
+  if (/\bhd\b/i.test(url))  return 'HD';
+  return null;
+}
+
+function getPageTitle(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, ''); }
+  catch { return url.slice(0, 40); }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes > 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes > 1e6) return `${(bytes / 1e6).toFixed(0)} MB`;
+  return `${Math.round(bytes / 1e3)} KB`;
+}
+
+function getInitial(name: string): string {
+  return (name[0] ?? '?').toUpperCase();
+}
 
 // ── URL classification ────────────────────────────────────────
 
+const SEGMENT_RE     = /\.(ts|m4s|aac|m4a|cmfv|cmfa)(\?|#|$)/i;
+const VIMEO_RANGE_RE = /vimeocdn\.com\/.*\/v2\/range\/.*\/avf\//i;
+const USEFUL_EXT_RE  = /\.(m3u8|mpd|mp4|m4v|webm|mov)(\?|#|$)/i;
+const VIMEO_JSON_RE  = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i;
+const VIDEO_CDN_RE   = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|fbcdn\.net\/videos|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/)/i;
+const YT_RANGE_RE    = /googlevideo\.com\/videoplayback[^#]*[?&](?:range=|sq=)\d/i;
+
+function isUseful(url: string): boolean {
+  const clean = url.split('#')[0];
+  if (SEGMENT_RE.test(clean))   return false;
+  if (VIMEO_RANGE_RE.test(url)) return false;
+  if (YT_RANGE_RE.test(url))   return false;
+  return USEFUL_EXT_RE.test(url) || VIMEO_JSON_RE.test(url) || VIDEO_CDN_RE.test(url);
+}
+
+function isDirectMediaUrl(url: string): boolean {
+  const clean = url.split('#')[0];
+  if (SEGMENT_RE.test(clean)) return false;
+  if (YT_RANGE_RE.test(url)) return false;
+  return USEFUL_EXT_RE.test(url) || VIMEO_JSON_RE.test(url) || VIDEO_CDN_RE.test(url);
+}
+
 // ── Dedup ─────────────────────────────────────────────────────
 
+const YT_CDN_RE   = /googlevideo\.com\/videoplayback/i;
+const TW_VIDEO_RE = /video\.twimg\.com\/(?:ext_tw_video|amplify_video)\/(\d+)\//i;
+
+const YT_ITAG_RANK: Record<number, number> = {
+  22: 100, 59: 90, 78: 85, 18: 70, 36: 40, 17: 20,
+};
+
+function getVideoGroupKey(url: string): string | null {
+  try {
+    if (YT_CDN_RE.test(url)) {
+      const id = new URL(url).searchParams.get('id');
+      return id ? `yt_${id}` : null;
+    }
+    const ytM = url.match(/manifest\.googlevideo\.com\/api\/manifest\/[^/]+\/.*?\/id\/([^/.]+)/);
+    if (ytM) return `ytm_${ytM[1]}`;
+    const tw = url.match(TW_VIDEO_RE);
+    if (tw) return `tw_${tw[1]}`;
+    return null;
+  } catch { return null; }
+}
+
+function getQualityScore(url: string): number {
+  if (YT_CDN_RE.test(url)) {
+    try {
+      const p = new URL(url).searchParams;
+      const itag = parseInt(p.get('itag') ?? '0', 10);
+      if ((p.get('mime') ?? '').startsWith('audio/')) return -1;
+      return YT_ITAG_RANK[itag] ?? 1;
+    } catch { return 1; }
+  }
+  const res = url.match(/\/(\d+)x(\d+)\//);
+  if (!res && /\.m3u8/i.test(url)) return 10_000_000;
+  if (res) return parseInt(res[1]) * parseInt(res[2]) + (/\.m3u8/i.test(url) ? 1 : 0);
+  const u = url.toLowerCase();
+  if (/\.mpd/.test(u))                return 3_000_000;
+  if (/\.(mp4|m4v|webm|mov)/.test(u)) return 100;
+  return 50;
+}
+
+function smartDedup(items: DetectedMedia[]): DetectedMedia[] {
+  const grouped  = new Map<string, { item: DetectedMedia; score: number }>();
+  const ungrouped: DetectedMedia[] = [];
+  for (const item of items) {
+    const urlScore = getQualityScore(item.url);
+    if (urlScore < 0) continue;
+    const score = urlScore * (1 + (item.confidence ?? 0.5) * 0.2);
+    const key   = getVideoGroupKey(item.url);
+    if (key) {
+      const ex = grouped.get(key);
+      if (!ex || score > ex.score) grouped.set(key, { item, score });
+    } else {
+      ungrouped.push(item);
+    }
+  }
+  return [...Array.from(grouped.values()).map((e) => e.item), ...ungrouped];
+}
+
 // ── Shadow ────────────────────────────────────────────────────
+const subtleShadow = IS_IOS
+  ? { shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } }
+  : { elevation: 1 };
+
 // ─────────────────────────────────────────────────────────────
-type Tab = 'home' | 'browser' | 'library' | 'bookmarks' | 'settings';
-
-function getBookmarkColor(domain: string): string {
-  const d = domain.toLowerCase();
-  if (d.includes('youtube')) return '#FF0000';
-  if (d.includes('tiktok')) return '#111111';
-  if (d.includes('instagram')) return '#E1306C';
-  if (d.includes('twitter') || d.includes('x.com')) return '#1DA1F2';
-  if (d.includes('bilibili')) return '#00AEEC';
-  return '#5B5BD6';
-}
-
-function getBookmarkInitials(domain: string): string {
-  const d = domain.toLowerCase();
-  if (d.includes('youtube')) return 'YT';
-  if (d.includes('tiktok')) return 'TT';
-  if (d.includes('instagram')) return 'IG';
-  if (d.includes('twitter') || d.includes('x.com')) return 'X';
-  if (d.includes('bilibili')) return 'B';
-  return domain.charAt(0).toUpperCase();
-}
-
-function getPlatformColor(url: string): string {
-  const lower = url.toLowerCase();
-  if (lower.includes('youtube') || lower.includes('youtu.be')) {
-    return '#A855F7'; // YouTube purple/violet
-  }
-  if (lower.includes('tiktok')) {
-    return '#06B6D4'; // TikTok cyan/blue
-  }
-  if (lower.includes('instagram')) {
-    return '#E1306C'; // Instagram pink/red
-  }
-  return '#5B5BD6'; // Default color
-}
-
-function formatOptionLabel(format: NonNullable<DetectedMedia['availableFormats']>[number]): string {
-  const resolution = getFormatResolution(format);
-  const parts = [
-    format.label && format.label !== resolution ? format.label : undefined,
-    resolution,
-    format.ext?.toUpperCase(),
-    format.vcodec && format.vcodec !== 'none' ? format.vcodec : undefined,
-    format.acodec && format.acodec !== 'none' ? format.acodec : undefined,
-  ].filter(Boolean);
-  return parts.length > 0 ? parts.join('  ') : format.id;
-}
-
-function compactMediaDetails(...parts: Array<string | null | undefined>): string {
-  return parts
-    .filter((part): part is string => Boolean(part))
-    .filter((part, index, all) => all.indexOf(part) === index)
-    .join('  |  ');
-}
+type Tab = 'home' | 'browser' | 'library' | 'bookmarks';
 
 export default function App() {
-  const {
-    theme,
-    fontSize,
-    fontScale,
-    language,
-    resolvedLanguage,
-    removeWatermark,
-    preferredQuality,
-    setTheme,
-    setFontSize,
-    setLanguage,
-    setRemoveWatermark: saveRemoveWatermark,
-    setPreferredQuality: savePreferredQuality,
-  } = useSettings();
-
-  // Keep the serverExtractor module-level flags in sync with settings.
-  useEffect(() => { setRemoveWatermark(removeWatermark); }, [removeWatermark]);
-  useEffect(() => { setPreferredQuality(preferredQuality); }, [preferredQuality]);
-  const t = useTheme(theme === 'system' ? undefined : theme === 'dark');
-  const isDark = t.dark;
+  const { theme, fontSize, fontScale, setTheme, setFontSize } = useSettings();
+  const systemDark = useColorScheme() === 'dark';
+  const isDark = theme === 'system' ? systemDark : theme === 'dark';
+  const t  = useTheme(isDark);
   const fs = (base: number) => base * fontScale;
   const webviewRef = useRef<WebView>(null);
-  // Note IDs we've already auto-extracted, so a single XHS page load only kicks
-  // off extraction once (onLoadEnd fires repeatedly across redirects/subframes).
-  const autoExtractedRef = useRef<string | null>(null);
-
-  const resolvedLangRef = useRef(resolvedLanguage);
-  resolvedLangRef.current = resolvedLanguage;
-
-  const editLabel = resolvedLanguage === 'ar' ? 'تعديل' : (resolvedLanguage === 'zh' ? '编辑' : (resolvedLanguage === 'ja' ? '編集' : (resolvedLanguage === 'ko' ? '편집' : (resolvedLanguage === 'es' ? 'Editar' : (resolvedLanguage === 'fr' ? 'Modifier' : (resolvedLanguage === 'de' ? 'Bearbeiten' : 'Edit'))))));
 
   // ── Navigation ────────────────────────────────────────────
   const [tab, setTab]               = useState<Tab>('home');
@@ -170,7 +252,6 @@ export default function App() {
   // ── UI ────────────────────────────────────────────────────
   const [videosOpen, setVideosOpen]     = useState(false);
   const [previewItem, setPreviewItem]   = useState<DetectedMedia | null>(null);
-  const [selectedFormatId, setSelectedFormatId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [playingPath, setPlayingPath]   = useState<string | null>(null);
   const [toast, setToast]               = useState<ToastMessage | null>(null);
@@ -178,19 +259,9 @@ export default function App() {
   const [fileSizes, setFileSizes]       = useState<Record<string, string>>({});
   const [libSelectMode, setLibSelectMode] = useState(false);
   const [libSelected, setLibSelected]     = useState<Set<string>>(new Set());
-  const [libFilter, setLibFilter]         = useState<'all' | 'videos' | 'audio' | 'failed'>('all');
-  const [bmEditMode, setBmEditMode]       = useState(false);
 
   // ── Core hooks ────────────────────────────────────────────
-  const {
-    detected,
-    networkLog,
-    mseActive,
-    onPageChange,
-    onMessage,
-    addDetected,
-    captureSessionSnapshot,
-  } = useMediaDetection();
+  const { detected, networkLog, mseActive, onPageChange, onMessage, addDetected } = useMediaDetection();
   const { bookmarks, toggle: toggleBM, remove: removeBM, isSaved } = useBookmarks();
 
   const showToast = useCallback((msg: string, type: ToastMessage['type'] = 'info') => {
@@ -199,107 +270,21 @@ export default function App() {
 
   const homepageSet = useRef(false);
   useEffect(() => {
-    setSelectedFormatId(null);
-  }, [previewItem?.id]);
-
-  useEffect(() => {
     if (homepageSet.current) return;
     const home = bookmarks[0]?.url ?? 'https://www.google.com';
     setLoadedUrl(home); setBrowserInput(home);
     homepageSet.current = true;
   }, [bookmarks]);
 
-  // ── Download manager ──────────────────────────────────────
-  const { active, history, enqueue, retry, cancel, remove } = useDownloadManager({
-    onComplete: useCallback(() => showToast(translate('downloadComplete', resolvedLangRef.current), 'success'), [showToast]),
-    onError:    useCallback((task: DownloadTask) => {
-      const lang = resolvedLangRef.current;
-      if (task.errorCode === 'AUTH_REQUIRED') showToast(translate('authRequired', lang), 'error');
-      else if (task.errorCode === 'GEO_BLOCKED') showToast(translate('geoBlocked', lang), 'error');
-      else if (task.errorCode === 'RATE_LIMITED') showToast(translate('rateLimited', lang), 'error');
-      else showToast(translate('failedError', lang, { error: task.error ?? 'unknown error' }), 'error');
-    }, [showToast]),
-  });
-
-  const [extractionQueue, setExtractionQueue] = useState<string[]>([]);
-
-  const runExtractionAndDownload = useCallback(async (url: string) => {
-    let targetUrl = url.trim();
-    if (!targetUrl) return;
-    if (!targetUrl.startsWith('http')) targetUrl = `https://${targetUrl}`;
-
-    if (isDirectMediaUrl(targetUrl)) {
-      const item: DetectedMedia = {
-        id: `home_${Date.now()}`, url: targetUrl, pageUrl: targetUrl, userAgent: '',
-        timestamp: Date.now(),
-        mediaType: guessMediaType(targetUrl),
-        mediaKind: getMediaKind({ url: targetUrl }),
-        confidence: 0.75, provenance: 'manual',
-      };
-      await enqueue(item);
-      setPasteUrl('');
-      showToast(translate('downloadStarted', resolvedLangRef.current), 'success');
-      setTab('library');
-      return;
-    }
-
-    setExtracting(true);
-    try {
-      const result = await extractionManager.extract(targetUrl);
-      const items = result.media ?? [];
-      if (items.length > 0) {
-        for (const item of items) await enqueue(item);
-        setPasteUrl('');
-        showToast(
-          items.length === 1
-            ? translate('startedDownload', resolvedLangRef.current)
-            : translate('startedDownloads', resolvedLangRef.current, { count: items.length }),
-          'success'
-        );
-        setTab('library');
-        return;
-      }
-      const lang = resolvedLangRef.current;
-      if (result.errorCode === 'AUTH_REQUIRED') showToast(translate('authRequired', lang), 'error');
-      else if (result.errorCode === 'GEO_BLOCKED') showToast(translate('geoBlocked', lang), 'error');
-      else if (result.errorCode === 'RATE_LIMITED') showToast(translate('rateLimited', lang), 'error');
-      else showToast(translate('openingInBrowserScan', lang), 'info');
-    } catch {
-      showToast(translate('openingInBrowser', resolvedLangRef.current), 'info');
-    } finally {
-      setExtracting(false);
-    }
-    setLoadedUrl(targetUrl); setBrowserInput(targetUrl); setTab('browser');
-  }, [enqueue, showToast, setPasteUrl, setTab, setLoadedUrl, setBrowserInput]);
-
-  useEffect(() => {
-    if (extracting || extractionQueue.length === 0) return;
-    const nextUrl = extractionQueue[0];
-    setExtractionQueue((prev) => prev.slice(1));
-    runExtractionAndDownload(nextUrl);
-  }, [extracting, extractionQueue, runExtractionAndDownload]);
-
-  // ── Start download and extraction ───────────────────────
-  const startDownloadAndExtraction = useCallback((url: string) => {
-    const targetUrl = url.trim();
-    if (!targetUrl) return;
-    setExtractionQueue((prev) => [...prev, targetUrl]);
-  }, []);
-
   const handleIncomingUrl = useCallback((raw: string) => {
     try {
       const parsed = Linking.parse(raw);
       if (parsed.path === 'share' || parsed.hostname === 'share') {
         const mediaUrl = parsed.queryParams?.url ? String(parsed.queryParams.url) : null;
-        if (mediaUrl) {
-          setPasteUrl(mediaUrl);
-          setTab('home');
-          showToast(translate('linkReceived', resolvedLangRef.current), 'success');
-          startDownloadAndExtraction(mediaUrl);
-        }
+        if (mediaUrl) { setPasteUrl(mediaUrl); setTab('home'); showToast('Link received — tap Download', 'success'); }
       }
     } catch {}
-  }, [showToast, startDownloadAndExtraction, setPasteUrl, setTab]);
+  }, [showToast]);
 
   useEffect(() => {
     Linking.getInitialURL().then((url) => { if (url) handleIncomingUrl(url); });
@@ -307,16 +292,22 @@ export default function App() {
     return () => sub.remove();
   }, [handleIncomingUrl]);
 
+  // ── Download manager ──────────────────────────────────────
+  const { active, history, enqueue, retry, cancel, remove } = useDownloadManager({
+    onComplete: useCallback(() => showToast('Download complete', 'success'), [showToast]),
+    onError:    useCallback((task: DownloadTask) =>
+      showToast(`Failed: ${task.error ?? 'unknown error'}`, 'error'), [showToast]),
+  });
+
   // ── Detected videos ───────────────────────────────────────
   const allVideos = useMemo<DetectedMedia[]>(() => {
     const seen = new Set(detected.map((m) => m.url));
     const fromNet: DetectedMedia[] = networkLog
-      .filter((url) => isRuntimeDownloadCandidate(url, loadedUrl) && !seen.has(url))
+      .filter((url) => isUseful(url) && !seen.has(url))
       .map((url) => ({
         id: `net_${url}`, url, pageUrl: loadedUrl, userAgent: '',
         timestamp: Date.now(),
-        mediaType: guessMediaType(url),
-        mediaKind: getMediaKind({ url }),
+        mediaType: url.toLowerCase().includes('.mpd') ? 'dash' as const : 'hls' as const,
       }));
     return smartDedup([...detected, ...fromNet]);
   }, [detected, networkLog, loadedUrl]);
@@ -324,21 +315,6 @@ export default function App() {
   const allTasks    = useMemo(() => [...active, ...history], [active, history]);
   const doneTasks   = useMemo(() => history.filter((t) => t.status === 'completed'), [history]);
   const failedTasks = useMemo(() => history.filter((t) => t.status !== 'completed'), [history]);
-
-  const filteredActive = useMemo(() => {
-    if (libFilter === 'failed') return [];
-    if (libFilter === 'videos') return active.filter(t => getMediaKind(t.media) === 'video');
-    if (libFilter === 'audio') return active.filter(t => getMediaKind(t.media) === 'audio');
-    return active;
-  }, [active, libFilter]);
-
-  const filteredHistory = useMemo(() => {
-    if (libFilter === 'all') return history;
-    if (libFilter === 'videos') return history.filter(t => getMediaKind(t.media) === 'video' && t.status === 'completed');
-    if (libFilter === 'audio') return history.filter(t => getMediaKind(t.media) === 'audio' && t.status === 'completed');
-    if (libFilter === 'failed') return history.filter(t => t.status === 'failed');
-    return history;
-  }, [history, libFilter]);
 
   useEffect(() => {
     history.forEach(async (task) => {
@@ -388,180 +364,83 @@ export default function App() {
     else setLoadedUrl(url);
   }, [browserInput, loadedUrl]);
 
-  const scanBrowserPage = useCallback(() => {
-    webviewRef.current?.injectJavaScript(`
-      try {
-        if (window.__fcdownloader_scan) window.__fcdownloader_scan();
-      } catch (_) {}
-      true;
-    `);
-    showToast(translate('scanningPage', resolvedLangRef.current), 'info');
-  }, [showToast]);
-
-  const browserSessionFor = useCallback(async (pageUrl: string): Promise<ServerExtractOptions | undefined> => {
-    if (tab !== 'browser') return undefined;
-    const target = pageUrl.trim();
-    if (!target || target === 'about:blank') return undefined;
-    const snapshot = await captureSessionSnapshot((script) => webviewRef.current?.injectJavaScript(script));
-    return {
-      referer: snapshot.referer || snapshot.pageUrl || loadedUrl || target,
-      cookies: snapshot.cookies,
-      pageHtml: snapshot.pageHtml,
-      mediaHints: snapshot.mediaHints,
-      sourceAudit: snapshot.sourceAudit,
-    };
-  }, [captureSessionSnapshot, loadedUrl, tab]);
-
-  const extractBrowserPage = useCallback(async (pageUrl = loadedUrl) => {
-    const url = pageUrl.trim();
-    if (!url || url === 'about:blank' || extracting) return;
-    setExtracting(true);
-    try {
-      const session = await browserSessionFor(url);
-      const items = await extractionManager.extractMedia(url, session);
-      if (items.length > 0) {
-        for (const item of items) await enqueue(item);
-        showToast(
-          items.length === 1
-            ? translate('startedDownload', resolvedLangRef.current)
-            : translate('startedDownloads', resolvedLangRef.current, { count: items.length }),
-          'success'
-        );
-        setTab('library');
-        return;
-      }
-      showToast(translate('scanningPage', resolvedLangRef.current), 'info');
-      scanBrowserPage();
-    } finally {
-      setExtracting(false);
-    }
-  }, [browserSessionFor, enqueue, extracting, loadedUrl, scanBrowserPage, showToast]);
-
-  // XHS gates its note pages and there's no inline player to detect, so a manual
-  // Scan rarely surfaces anything. When an XHS note page finishes loading in the
-  // in-app browser, auto-run extraction (server first, then on-device) once per
-  // note — the user no longer has to tap Scan. Other sites keep the manual flow.
-  const handleBrowserLoadEnd = useCallback((url: string) => {
-    const noteId = url.match(/\/(?:explore|discovery\/item|item)\/([a-f0-9]{24})/i)?.[1];
-    if (!noteId || autoExtractedRef.current === noteId) return;
-    autoExtractedRef.current = noteId;
-    extractBrowserPage(url);
-  }, [extractBrowserPage]);
-
   // ── Home: paste → download ────────────────────────────────
-  const handleHomeDownload = useCallback(() => {
-    startDownloadAndExtraction(pasteUrl);
-  }, [pasteUrl, startDownloadAndExtraction]);
+  const handleHomeDownload = useCallback(async () => {
+    let url = pasteUrl.trim();
+    if (!url || extracting) return;
+    if (!url.startsWith('http')) url = `https://${url}`;
+
+    if (isSocialPageUrl(url)) {
+      setExtracting(true);
+      try {
+        const items = await extractFromSocialUrl(url);
+        if (items.length > 0) {
+          for (const item of items) await enqueue(item);
+          setPasteUrl('');
+          showToast(`Downloading ${items.length} video${items.length !== 1 ? 's' : ''}`, 'success');
+          setTab('library');
+        } else {
+          showToast('Opening in browser — tap the video button when it appears', 'info');
+          setLoadedUrl(url); setBrowserInput(url); setTab('browser');
+        }
+      } catch {
+        showToast('Opening in browser instead', 'info');
+        setLoadedUrl(url); setBrowserInput(url); setTab('browser');
+      } finally { setExtracting(false); }
+      return;
+    }
+
+    if (isDirectMediaUrl(url)) {
+      const item: DetectedMedia = {
+        id: `home_${Date.now()}`, url, pageUrl: url, userAgent: '',
+        timestamp: Date.now(),
+        mediaType: url.toLowerCase().includes('.mpd') ? 'dash' : 'hls',
+        confidence: 0.75, provenance: 'manual',
+      };
+      await enqueue(item);
+      setPasteUrl('');
+      showToast('Download started', 'success');
+      setTab('library');
+      return;
+    }
+
+    showToast('Opening in browser', 'info');
+    setLoadedUrl(url); setBrowserInput(url); setTab('browser');
+  }, [pasteUrl, extracting, enqueue, showToast]);
 
   // ── Browser: download detected video ─────────────────────
   const handleDetectedDownload = useCallback(async (item: DetectedMedia) => {
     setVideosOpen(false);
     setPreviewItem(null);
-    const selected = selectedFormatId && item.availableFormats?.some((f) => f.id === selectedFormatId)
-      ? item.availableFormats.find((f) => f.id === selectedFormatId)
-      : null;
-    await enqueue(selected
-      ? {
-          ...item,
-          formatId: selected.id,
-          label: selected.label ?? item.label,
-          mimeType: selected.ext ? `${item.mediaKind === 'audio' ? 'audio' : 'video'}/${selected.ext}` : item.mimeType,
-          forceServerDownload: true,
-        }
-      : item);
-    setSelectedFormatId(null);
-    showToast(translate('downloadStarted', resolvedLangRef.current), 'success');
-    setTab('library');
-  }, [enqueue, selectedFormatId, showToast]);
-
-  const handleDetectedAudioDownload = useCallback(async (item: DetectedMedia) => {
-    setVideosOpen(false);
-    setPreviewItem(null);
-    await enqueue({
-      ...item,
-      id: `${item.id}_audio_${Date.now()}`,
-      url: item.sourcePageUrl || item.pageUrl || item.url,
-      mediaKind: 'audio',
-      mediaType: 'direct',
-      mimeType: 'audio/mp4',
-      label: 'Audio only',
-      audioOnly: true,
-      forceServerDownload: true,
-      sourcePageUrl: item.sourcePageUrl || item.pageUrl || item.url,
-      formatId: undefined,
-    });
-    setSelectedFormatId(null);
-    showToast(translate('audioDownloadStarted', resolvedLangRef.current), 'success');
+    await enqueue(item);
+    showToast('Download started', 'success');
     setTab('library');
   }, [enqueue, showToast]);
-
-  const handleDownloadAllDetected = useCallback(async () => {
-    if (!allVideos.length) return;
-    setVideosOpen(false);
-    setPreviewItem(null);
-    for (const item of allVideos) await enqueue(item);
-    showToast(
-      allVideos.length === 1
-        ? translate('startedDownload', resolvedLangRef.current)
-        : translate('startedDownloads', resolvedLangRef.current, { count: allVideos.length }),
-      'success'
-    );
-    setTab('library');
-  }, [allVideos, enqueue, showToast]);
-
-  const handleDownloadAllAudio = useCallback(async () => {
-    const audioItems = allVideos.filter((item) => getMediaKind(item) !== 'image');
-    if (!audioItems.length) return;
-    setVideosOpen(false);
-    setPreviewItem(null);
-    for (const item of audioItems) {
-      await enqueue({
-        ...item,
-        id: `${item.id}_audio_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        url: item.sourcePageUrl || item.pageUrl || item.url,
-        mediaKind: 'audio',
-        mediaType: 'direct',
-        mimeType: 'audio/mp4',
-        label: 'Audio only',
-        audioOnly: true,
-        forceServerDownload: true,
-        sourcePageUrl: item.sourcePageUrl || item.pageUrl || item.url,
-        formatId: undefined,
-      });
-    }
-    showToast(
-      audioItems.length === 1
-        ? translate('startedAudioDownload', resolvedLangRef.current)
-        : translate('startedAudioDownloads', resolvedLangRef.current, { count: audioItems.length }),
-      'success'
-    );
-    setTab('library');
-  }, [allVideos, enqueue, showToast]);
 
   // ── Export / Gallery ──────────────────────────────────────
   const handleExport = useCallback(async (task: DownloadTask) => {
     if (!task.localPlaylistPath) return;
     try {
-      if (!(await Sharing.isAvailableAsync())) { showToast(translate('sharingNotAvailable', resolvedLangRef.current), 'error'); return; }
+      if (!(await Sharing.isAvailableAsync())) { showToast('Sharing not available', 'error'); return; }
       const path = task.localPlaylistPath;
-      const mime = getMimeFromPath(path);
-      await Sharing.shareAsync(path, { mimeType: mime, dialogTitle: translate('exportMedia', resolvedLangRef.current) });
-    } catch (e) { showToast(translate('exportFailed', resolvedLangRef.current, { error: (e as Error).message }), 'error'); }
+      const mime = path.endsWith('.mp4') ? 'video/mp4' : path.endsWith('.ts') ? 'video/mp2t' : 'application/octet-stream';
+      await Sharing.shareAsync(path, { mimeType: mime, dialogTitle: 'Export video' });
+    } catch (e) { showToast(`Export failed: ${(e as Error).message}`, 'error'); }
   }, [showToast]);
 
   const handleGallery = useCallback(async (task: DownloadTask) => {
     if (!task.localPlaylistPath) return;
-    const { status } = await MediaLibrary.requestPermissionsAsync(true, ['photo', 'video']);
-    if (status !== 'granted') { showToast(translate('galleryPermissionDenied', resolvedLangRef.current), 'error'); return; }
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    if (status !== 'granted') { showToast('Gallery permission denied', 'error'); return; }
     try {
       await MediaLibrary.saveToLibraryAsync(task.localPlaylistPath);
-      showToast(translate('savedToGallery', resolvedLangRef.current), 'success');
-    } catch (e) { showToast(translate('gallerySaveFailed', resolvedLangRef.current, { error: (e as Error).message }), 'error'); }
+      showToast('Saved to gallery', 'success');
+    } catch (e) { showToast(`Gallery save failed: ${(e as Error).message}`, 'error'); }
   }, [showToast]);
 
   const handleRetry = useCallback((task: DownloadTask) => {
     retry(task.id, task.strategy);
-    showToast(translate('retrying', resolvedLangRef.current), 'info');
+    showToast('Retrying…', 'info');
   }, [retry, showToast]);
 
   const toggleLibSelect = useCallback((id: string) => {
@@ -588,246 +467,178 @@ export default function App() {
   const deleteLibSelected = useCallback(() => {
     const ids = Array.from(libSelected);
     if (ids.length === 0) return;
-    Alert.alert(
-      translate('delete', resolvedLangRef.current),
-      translate('deleteItemsConfirm', resolvedLangRef.current, { count: ids.length }),
-      [
-        { text: translate('cancel', resolvedLangRef.current), style: 'cancel' },
-        {
-          text: translate('delete', resolvedLangRef.current),
-          style: 'destructive',
-          onPress: async () => {
-            for (const id of ids) await remove(id);
-            setLibSelectMode(false);
-            setLibSelected(new Set());
-          },
-        },
-      ]
-    );
+    Alert.alert('Delete', `Delete ${ids.length} item${ids.length !== 1 ? 's' : ''}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: async () => {
+        for (const id of ids) await remove(id);
+        setLibSelectMode(false);
+        setLibSelected(new Set());
+      }},
+    ]);
   }, [libSelected, remove]);
 
   const videoCount  = allVideos.length;
-  const mediaCount  = allVideos.length;
   const activeCount = active.length;
 
   // ─────────────────────────────────────────────────────────
   return (
-    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-      <LinearGradient
-        colors={t.bgGrad}
-        style={s.root}
-      >
-        <SafeAreaView style={[s.flex, IS_ANDROID && { paddingTop: TOP_PAD }]}>
-          <ExpoStatusBar style={isDark ? 'light' : 'dark'} />
+    <View style={[s.root, { backgroundColor: t.bg, paddingTop: TOP_PAD }]}>
+      <ExpoStatusBar style={isDark ? 'light' : 'dark'} />
 
+      {/* ══════════════════════════════════════════════════ */}
+      {/*  HOME TAB                                         */}
+      {/* ══════════════════════════════════════════════════ */}
+      {tab === 'home' && (
+        <View style={s.flex}>
+          <View style={[s.topBar, { backgroundColor: t.bg, borderBottomColor: t.sep }]}>
+            {IS_IOS
+              ? <Text style={[s.largeTitleIOS, { color: t.ink }]}>Downloader</Text>
+              : <Text style={[s.titleAndroid, { color: t.ink }]}>Downloader</Text>
+            }
+            <Pressable android_ripple={RIPPLE_BL} style={[s.gearBtn, { backgroundColor: t.card }]}
+              onPress={() => setSettingsOpen(true)} hitSlop={S.sm}>
+              <Text style={[s.gearIcon, { color: t.ink2 }]}>⚙</Text>
+            </Pressable>
+          </View>
 
-
-        {/* ══════════════════════════════════════════════════ */}
-        {/*  HOME TAB                                         */}
-        {/* ══════════════════════════════════════════════════ */}
-        {tab === 'home' && (
-          <View style={s.flex}>
-            <View style={s.homeLogoContainer}>
-              <View style={[
-                s.logoGlowWrap,
-                {
-                  backgroundColor: t.dark ? 'rgba(124, 58, 237, 0.25)' : 'rgba(245, 158, 11, 0.25)',
-                  shadowColor: t.dark ? '#7C3AED' : '#F59E0B',
-                }
-              ]}>
-                <Image source={require('./assets/logo.png')} style={s.homeLogoImage} />
-              </View>
-              <Text style={[s.homeLogoTitle, { color: t.ink }]}>FCDownloader</Text>
+          <ScrollView
+            style={s.flex}
+            contentContainerStyle={[s.homeScroll, { paddingBottom: BOTTOM_PAD + 80 }]}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Paste card */}
+            <View style={[s.pasteCard, { backgroundColor: t.bg }, subtleShadow,
+              IS_ANDROID && { backgroundColor: t.card }]}>
+              <Text style={[s.pasteLabel, { color: t.ink2, fontSize: fs(12) }]}>
+                VIDEO OR PAGE LINK
+              </Text>
+              <TextInput
+                style={[s.pasteInput, { backgroundColor: t.card, color: t.ink, fontSize: fs(15),
+                  ...(IS_ANDROID && { backgroundColor: t.card2 }) }]}
+                value={pasteUrl}
+                onChangeText={setPasteUrl}
+                placeholder="Paste URL here"
+                placeholderTextColor={t.ink3}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                returnKeyType="done"
+                onSubmitEditing={handleHomeDownload}
+                editable={!extracting}
+              />
+              <Pressable
+                android_ripple={{ color: 'rgba(255,255,255,0.15)', borderless: false }}
+                style={[s.primaryBtn, { backgroundColor: t.btn }, extracting && { opacity: 0.5 }]}
+                onPress={handleHomeDownload}
+                disabled={extracting}
+              >
+                <Text style={[s.primaryBtnLabel, { color: t.btnTxt, fontSize: fs(16) }]}>
+                  {extracting ? 'Finding…' : 'Download'}
+                </Text>
+              </Pressable>
+              <Pressable onPress={() => setTab('browser')} hitSlop={S.xs} style={s.browseLink}>
+                <Text style={[s.browseLinkLabel, { color: t.ink2, fontSize: fs(13) }]}>
+                  or browse for a video →
+                </Text>
+              </Pressable>
+              <Text style={[s.browseHint, { color: t.ink3, fontSize: fs(11) }]}>
+                Tip: signing in via Browse unlocks HD on more YouTube videos
+              </Text>
             </View>
 
-            <ScrollView
-              style={s.flex}
-              contentContainerStyle={[s.homeScroll, { paddingBottom: BOTTOM_PAD + 100 }]}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              {/* Paste card */}
-              <View style={[s.pasteCard, { backgroundColor: t.card, borderColor: t.sep, borderWidth: 1 }, subtleShadow]}>
-                <Text style={[s.pasteLabel, { color: t.ink2, fontSize: fs(12), textAlign: 'center' }]}>
-                  {translate('videoOrPageLink', resolvedLanguage)}
-                </Text>
-                <TextInput
-                  style={[s.pasteInput, { backgroundColor: t.card2, color: t.ink, fontSize: fs(15), textAlign: 'center' }]}
-                  value={pasteUrl}
-                  onChangeText={(text) => {
-                    const delta = Math.abs(text.length - pasteUrl.length);
-                    if (delta >= 6) {
-                      const m = text.match(/https?:\/\/[^\s<>"'`\\]+/i);
-                      if (m) {
-                        const url = m[0].replace(/[.,;:!?)\]}>'"]+$/, '');
-                        if (url !== text.trim()) {
-                          setPasteUrl(url);
-                          return;
-                        }
-                      }
-                    }
-                    setPasteUrl(text);
-                  }}
-                  placeholder="Paste a link..."
-                  placeholderTextColor={t.ink3}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="url"
-                  returnKeyType="done"
-                  onSubmitEditing={handleHomeDownload}
-                  editable={!extracting}
-                />
-                <Pressable
-                  android_ripple={{ color: 'rgba(255,255,255,0.15)', borderless: false }}
-                  style={[s.primaryBtn, { backgroundColor: t.btn }, extracting && { opacity: 0.5 }]}
-                  onPress={handleHomeDownload}
-                  disabled={extracting}
-                >
-                  <Text style={[s.primaryBtnLabel, { color: t.btnTxt, fontSize: fs(16) }]}>
-                    {extracting ? translate('finding', resolvedLanguage) : translate('download', resolvedLanguage)}
-                  </Text>
-                </Pressable>
-                <Pressable onPress={() => setTab('browser')} hitSlop={S.xs} style={s.browseLink}>
-                  <Text style={[s.browseLinkLabel, { color: t.ink2, fontSize: fs(13), textAlign: 'center' }]}>
-                    or browse the web →
-                  </Text>
-                </Pressable>
-                <Text style={[s.browseHint, { color: t.ink3, fontSize: fs(11), textAlign: 'center' }]}>
-                  {translate('browseHint', resolvedLanguage)}
+            {/* Active downloads (compact) */}
+            {active.length > 0 && (
+              <View style={s.section}>
+                <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11) }]}>IN PROGRESS</Text>
+                {active.map((task) => (
+                  <View key={task.id} style={[s.compactCard, { backgroundColor: t.card }, subtleShadow]}>
+                    <View style={s.compactRow}>
+                      <Text style={[s.compactSource, { color: t.ink, fontSize: fs(14) }]}>
+                        {getSourceName(task.media.url)}
+                      </Text>
+                      <Text style={[s.compactPct, { color: t.ink2, fontSize: fs(13) }]}>
+                        {Math.round(task.progress * 100)}%
+                      </Text>
+                      <Pressable android_ripple={RIPPLE_BL} onPress={() => cancel(task.id)} hitSlop={S.xs}
+                        style={[s.cancelBtn, { borderColor: t.sep }]}>
+                        <Text style={[s.cancelBtnLabel, { color: t.ink2, fontSize: fs(12) }]}>Cancel</Text>
+                      </Pressable>
+                    </View>
+                    <View style={[s.progressTrack, { backgroundColor: t.card2 }]}>
+                      <View style={[s.progressFill, { backgroundColor: t.btn,
+                        width: `${Math.round(task.progress * 100)}%` as `${number}%` }]} />
+                    </View>
+                    <Text style={[s.compactStatus, { color: t.ink2, fontSize: fs(11) }]}>
+                      {task.status === 'downloading' && task.totalSegments > 0
+                        ? `${task.downloadedSegments} / ${task.totalSegments} parts`
+                        : task.status === 'assembling'        ? 'Assembling…'
+                        : task.status === 'fetching_manifest' ? 'Reading stream…'
+                        : 'Starting…'}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Empty state */}
+            {active.length === 0 && allTasks.length === 0 && (
+              <View style={s.emptyHome}>
+                <Text style={[s.emptyHomeIcon, { color: t.ink3 }]}>↓</Text>
+                <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14) }]}>
+                  Paste a link to start downloading
                 </Text>
               </View>
-
-              {/* Active downloads (V3 Simple rows with slim progress bars) */}
-              {active.length > 0 && (
-                <View style={s.section}>
-                  <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                    {translate('inProgress', resolvedLanguage).toUpperCase()}
-                  </Text>
-                  {active.map((task) => {
-                    return (
-                      <View key={task.id} style={[s.homeActiveRow, { backgroundColor: t.card, borderColor: t.sep, borderWidth: 1 }, subtleShadow]}>
-                        <View style={[s.homeActiveHeader, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
-                          <Text style={[s.homeActiveTitle, { color: t.ink, fontSize: fs(14) }]} numberOfLines={1}>
-                            {getSourceName(task.media.url)} · {Math.round(task.progress * 100)}%
-                          </Text>
-                          <Pressable onPress={() => cancel(task.id)} hitSlop={S.xs}>
-                            <Ionicons name="close" size={18} color={t.ink2} />
-                          </Pressable>
-                        </View>
-                        <View style={[s.progressTrack, { backgroundColor: t.card2, marginTop: S.xs }]}>
-                          <View style={[s.progressFill, { backgroundColor: getPlatformColor(task.media.url),
-                            width: `${Math.round(task.progress * 100)}%` as `${number}%` }]} />
-                        </View>
-                      </View>
-                    );
-                  })}
-                </View>
-              )}
-
-              {/* Empty state */}
-              {active.length === 0 && allTasks.length === 0 && (
-                <View style={s.emptyHome}>
-                  <Text style={[s.emptyHomeIcon, { color: t.ink3 }]}>↓</Text>
-                  <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14) }]}>
-                    {translate('noDownloads', resolvedLanguage)}
-                  </Text>
-                </View>
-              )}
-              {active.length === 0 && allTasks.length > 0 && (
-                <Pressable android_ripple={RIPPLE} style={[s.libraryLink, { backgroundColor: t.card }, subtleShadow]}
-                  onPress={() => setTab('library')}>
-                  <Text style={[s.libraryLinkLabel, { color: t.ink, fontSize: fs(14) }]}>
-                    {allTasks.length === 1 ? translate('itemInLibrary', resolvedLanguage) : translate('itemsInLibrary', resolvedLanguage, { count: allTasks.length })}
-                  </Text>
-                  <Text style={[{ color: t.ink2, fontSize: fs(14) }]}>→</Text>
-                </Pressable>
-              )}
-            </ScrollView>
-          </View>
-        )}
+            )}
+            {active.length === 0 && allTasks.length > 0 && (
+              <Pressable android_ripple={RIPPLE} style={[s.libraryLink, { backgroundColor: t.card }, subtleShadow]}
+                onPress={() => setTab('library')}>
+                <Text style={[s.libraryLinkLabel, { color: t.ink, fontSize: fs(14) }]}>
+                  {allTasks.length} item{allTasks.length !== 1 ? 's' : ''} in Library
+                </Text>
+                <Text style={[{ color: t.ink2, fontSize: fs(14) }]}>→</Text>
+              </Pressable>
+            )}
+          </ScrollView>
+        </View>
+      )}
 
       {/* ══════════════════════════════════════════════════ */}
       {/*  BROWSER TAB                                      */}
       {/* ══════════════════════════════════════════════════ */}
       {tab === 'browser' && (
         <View style={s.flex}>
-          {/* Two-row navbar */}
-          <View style={[s.navBar, { backgroundColor: t.card, borderBottomColor: t.sep, borderBottomWidth: 1 }]}>
-            {/* Row 1 */}
-            <View style={[s.navBarTopRow, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
-              <Pressable
-                android_ripple={RIPPLE_BL}
-                onPress={() => webviewRef.current?.goBack()}
-                hitSlop={S.sm}
-                style={s.navRowBtn}
-              >
-                <Ionicons name="chevron-back" size={24} color={t.ink} />
-              </Pressable>
-              
-              <Text style={[s.browserTitle, { color: t.ink }]}>
-                {translate('browse', resolvedLanguage).toUpperCase()}
-              </Text>
-              
-              <Pressable
-                android_ripple={RIPPLE_BL}
-                onPress={scanBrowserPage}
-                hitSlop={S.sm}
-                style={[
-                  s.navRowBtn,
-                  (videoCount > 0 || mseActive) && {
-                    backgroundColor: 'rgba(168, 85, 247, 0.15)',
-                    borderRadius: 18,
-                  }
-                ]}
-              >
-                <Ionicons
-                  name="scan-outline"
-                  size={22}
-                  color={(videoCount > 0 || mseActive) ? '#A855F7' : t.ink}
-                />
-              </Pressable>
-            </View>
-            
-            {/* Row 2 */}
-            <View style={[s.addressFieldWrap, { backgroundColor: t.card2, borderColor: t.sep, borderWidth: 1 }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
-              <Ionicons name="search-outline" size={18} color={t.ink3} style={{ marginHorizontal: S.xs }} />
-              <TextInput
-                style={[s.addressField, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}
-                value={browserInput}
-                onChangeText={setBrowserInput}
-                onSubmitEditing={navigateBrowser}
-                placeholder={translate('searchOrEnterUrl', resolvedLanguage)}
-                placeholderTextColor={t.ink3}
-                returnKeyType="go"
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-                selectTextOnFocus
-              />
-              <Pressable
-                android_ripple={RIPPLE_BL}
-                style={s.nestedReloadBtn}
-                onPress={() => webviewRef.current?.reload()}
-                hitSlop={S.xs}
-              >
-                <Ionicons name="refresh" size={18} color={t.ink2} />
-              </Pressable>
-            </View>
+          <View style={[s.navBar, { backgroundColor: t.bg, borderBottomColor: t.sep }]}>
+            <TextInput
+              style={[s.addressField, { backgroundColor: t.card, color: t.ink, fontSize: fs(14) }]}
+              value={browserInput}
+              onChangeText={setBrowserInput}
+              onSubmitEditing={navigateBrowser}
+              placeholder="Search or enter URL"
+              placeholderTextColor={t.ink3}
+              returnKeyType="go"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              selectTextOnFocus
+            />
+            <Pressable android_ripple={RIPPLE_BL} style={[s.navBtn, { backgroundColor: t.card }]}
+              onPress={() => webviewRef.current?.reload()} hitSlop={S.sm}>
+              <Text style={[s.navBtnIcon, { color: t.ink }]}>↻</Text>
+            </Pressable>
           </View>
 
           <View style={s.flex}>
             {loadedUrl === 'about:blank' ? (
               <View style={[s.flex, s.center, { backgroundColor: t.bg }]}>
                 <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14) }]}>
-                  {translate('enterUrlToBrowse', resolvedLanguage)}
+                  Enter a URL above to start browsing
                 </Text>
               </View>
             ) : (
               <BrowserView ref={webviewRef} initialUrl={loadedUrl} key={loadedUrl}
                 onMessage={onMessage}
                 onNavigationChange={(url) => { setBrowserInput(url); onPageChange(url); }}
-                onExtractPage={extractBrowserPage}
-                onLoadEnd={(e) => handleBrowserLoadEnd(e.nativeEvent.url)}
                 style={StyleSheet.absoluteFill} />
             )}
 
@@ -835,11 +646,7 @@ export default function App() {
               <Pressable android_ripple={RIPPLE} style={[s.floatingBadge, { backgroundColor: t.btn }]}
                 onPress={() => setVideosOpen(true)}>
                 <Text style={[s.floatingBadgeLabel, { color: t.btnTxt }]}>
-                  {mediaCount > 0
-                    ? (mediaCount === 1
-                      ? translate('mediaItemFound', resolvedLanguage)
-                      : translate('mediaItemsFound', resolvedLanguage, { count: mediaCount }))
-                    : translate('streamDetected', resolvedLanguage)}
+                  {videoCount > 0 ? `${videoCount} video${videoCount !== 1 ? 's' : ''} found` : 'Stream detected'}
                 </Text>
               </Pressable>
             )}
@@ -856,11 +663,9 @@ export default function App() {
                 }]}
                 onPress={() => toggleBM(loadedUrl, getPageTitle(loadedUrl))}
               >
-                <Ionicons
-                  name={isSaved(loadedUrl, bookmarks) ? 'bookmark' : 'bookmark-outline'}
-                  size={22}
-                  color={isSaved(loadedUrl, bookmarks) ? t.btnTxt : t.ink2}
-                />
+                <Text style={[s.bmFabIcon, { color: isSaved(loadedUrl, bookmarks) ? t.btnTxt : t.ink2 }]}>
+                  {isSaved(loadedUrl, bookmarks) ? '★' : '☆'}
+                </Text>
               </Pressable>
             )}
           </View>
@@ -872,14 +677,13 @@ export default function App() {
                 <View style={[s.activeStripFill, { backgroundColor: t.btn,
                   width: `${Math.round((active[0]?.progress ?? 0) * 100)}%` as `${number}%` }]} />
               </View>
-              <Text style={[s.activeStripLabel, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                {translate('inProgress', resolvedLanguage)}: {activeCount}
+              <Text style={[s.activeStripLabel, { color: t.ink2, fontSize: fs(11) }]}>
+                {activeCount} download{activeCount !== 1 ? 's' : ''} in progress
               </Text>
             </Pressable>
           )}
         </View>
       )}
-
 
       {/* ══════════════════════════════════════════════════ */}
       {/*  LIBRARY TAB                                      */}
@@ -889,87 +693,45 @@ export default function App() {
           <View style={[s.topBar, { backgroundColor: t.bg, borderBottomColor: t.sep }]}>
             {libSelectMode ? (
               <>
-                <Pressable
-                  onPress={exitLibSelectMode}
-                  hitSlop={S.sm}
-                  android_ripple={RIPPLE_BL}
-                  style={s.librarySelectEdge}>
-                  <Text style={[{ color: t.ink, fontSize: fs(15) }]}>{translate('cancel', resolvedLanguage)}</Text>
+                <Pressable onPress={exitLibSelectMode} hitSlop={S.sm} android_ripple={RIPPLE_BL}>
+                  <Text style={[{ color: t.ink, fontSize: fs(15) }]}>Cancel</Text>
                 </Pressable>
-                <Pressable
-                  onPress={selectAllLib}
-                  hitSlop={S.sm}
-                  android_ripple={RIPPLE_BL}
-                  style={s.librarySelectCenter}>
+                <Pressable onPress={selectAllLib} hitSlop={S.sm} android_ripple={RIPPLE_BL} style={{ flex: 1, alignItems: 'center' }}>
                   <Text style={[{ color: t.btn, fontSize: fs(15), fontWeight: '500' }]}>
-                    {libSelected.size === history.length && history.length > 0 ? translate('deselectAll', resolvedLanguage) : translate('selectAll', resolvedLanguage)}
+                    {libSelected.size === history.length && history.length > 0 ? 'Deselect All' : 'Select All'}
                   </Text>
                 </Pressable>
-                <Pressable
-                  onPress={deleteLibSelected}
-                  hitSlop={S.sm}
-                  android_ripple={RIPPLE_BL}
-                  disabled={libSelected.size === 0}
-                  style={[s.librarySelectEdge, { alignItems: 'flex-end' }]}>
+                <Pressable onPress={deleteLibSelected} hitSlop={S.sm} android_ripple={RIPPLE_BL}
+                  disabled={libSelected.size === 0}>
                   <Text style={[{ fontSize: fs(15), fontWeight: '500',
                     color: libSelected.size > 0 ? t.red : t.ink3 }]}>
-                    {translate('delete', resolvedLanguage)}
+                    Delete
                   </Text>
                 </Pressable>
               </>
             ) : (
               <>
                 {IS_IOS
-                  ? <Text style={[s.largeTitleIOS, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('library', resolvedLanguage)}</Text>
-                  : <Text style={[s.titleAndroid, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('library', resolvedLanguage)}</Text>
+                  ? <Text style={[s.largeTitleIOS, { color: t.ink }]}>Library</Text>
+                  : <Text style={[s.titleAndroid, { color: t.ink }]}>Library</Text>
                 }
                 {history.length > 0 && (
                   <Pressable onPress={() => { setLibSelectMode(true); setLibSelected(new Set()); }}
                     hitSlop={S.sm} android_ripple={RIPPLE_BL}>
-                    <Text style={[{ color: t.ink2, fontSize: fs(14), fontWeight: '600' }]}>{editLabel}</Text>
+                    <Text style={[{ color: t.ink2, fontSize: fs(14) }]}>Select</Text>
                   </Pressable>
                 )}
               </>
             )}
           </View>
 
-          {/* Scrolling category filter chips */}
-          {allTasks.length > 0 && (
-            <View style={s.chipContainer}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chipScroll}>
-                {(['all', 'videos', 'audio', 'failed'] as const).map((filterVal) => {
-                  const isActive = libFilter === filterVal;
-                  const label = translate(filterVal as TranslationKey, resolvedLanguage) || filterVal;
-                  return (
-                    <Pressable
-                      key={filterVal}
-                      onPress={() => setLibFilter(filterVal)}
-                      style={[
-                        s.chip,
-                        {
-                          backgroundColor: isActive ? t.ink : t.card,
-                          borderColor: t.sep,
-                          borderWidth: 1,
-                        }
-                      ]}
-                    >
-                      <Text style={[s.chipText, { color: isActive ? t.bg : t.ink }]}>
-                        {label.toUpperCase()}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          )}
-
           {allTasks.length === 0 ? (
             <View style={[s.flex, s.center, { backgroundColor: t.bg }]}>
               <Text style={[s.emptyHomeIcon, { color: t.ink3 }]}>⊘</Text>
-              <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14) }]}>{translate('noDownloads', resolvedLanguage)}</Text>
+              <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14) }]}>No downloads yet</Text>
               <Pressable onPress={() => setTab('home')} hitSlop={S.xs} style={{ marginTop: S.sm }}>
                 <Text style={[s.browseLinkLabel, { color: t.ink2, fontSize: fs(13) }]}>
-                  {translate('goHome', resolvedLanguage)}
+                  Go to Home →
                 </Text>
               </Pressable>
             </View>
@@ -978,86 +740,65 @@ export default function App() {
               showsVerticalScrollIndicator={false}>
 
               {/* Active downloads */}
-              {filteredActive.length > 0 && (
+              {active.length > 0 && (
                 <>
-                  <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.sm, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                    {translate('inProgress', resolvedLanguage).toUpperCase()}
+                  <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.sm }]}>
+                    IN PROGRESS
                   </Text>
-                  {filteredActive.map((task) => {
-                    const resolution = getMediaResolution(task.media);
-                    const statusText = task.status === 'downloading' && task.totalSegments > 0
-                      ? translate('parts', resolvedLanguage, { downloaded: task.downloadedSegments, total: task.totalSegments })
-                      : task.status === 'assembling'        ? translate('assembling', resolvedLanguage)
-                      : task.status === 'fetching_manifest' ? translate('readingStream', resolvedLanguage)
-                      : translate('starting', resolvedLanguage);
-                    const showThumbnail = getMediaKind(task.media) === 'video' || getMediaKind(task.media) === 'image';
-                    const source = getSourceName(task.media.url);
-                    return (
-                      <View key={task.id} style={[s.libraryCard, { backgroundColor: t.card }, subtleShadow]}>
-                        <View style={s.libraryCardLeft}>
-                          {showThumbnail && task.media.thumbnailUrl ? (
-                            <View style={s.thumbnailContainer}>
-                              <Image source={{ uri: task.media.thumbnailUrl }} style={s.libraryThumbnail} />
-                            </View>
-                          ) : (
-                            <View style={[s.sourceAvatar, { backgroundColor: t.card2 }]}>
-                              <Text style={[s.sourceAvatarText, { color: t.ink, fontSize: fs(18) }]}>
-                                {getInitial(source)}
-                              </Text>
-                            </View>
-                          )}
-                        </View>
-                        <View style={s.libraryCardBody}>
-                          <View style={s.libraryCardRow}>
-                            <Text style={[s.libraryCardTitle, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
-                              {source}
-                            </Text>
-                          </View>
-                          <View style={[s.progressTrack, { backgroundColor: t.card2, marginVertical: S.xs }]}>
-                            <View style={[s.progressFill, { backgroundColor: t.btn,
-                              width: `${Math.round(task.progress * 100)}%` as `${number}%` }]} />
-                          </View>
-                          <Text style={[s.libraryCardSub, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                            {compactMediaDetails(statusText, resolution)}
+                  {active.map((task) => (
+                    <View key={task.id} style={[s.libraryCard, { backgroundColor: t.card }, subtleShadow]}>
+                      <View style={s.libraryCardLeft}>
+                        <View style={[s.sourceAvatar, { backgroundColor: t.card2 }]}>
+                          <Text style={[s.sourceAvatarText, { color: t.ink, fontSize: fs(18) }]}>
+                            {getInitial(getSourceName(task.media.url))}
                           </Text>
                         </View>
-                        <View style={s.libraryCardRight}>
-                          <View style={[s.statusCircle, { borderColor: t.progress, borderWidth: 2 }]}>
-                            <Text style={{ fontSize: 9, fontWeight: '700', color: t.progress }}>
-                              {Math.round(task.progress * 100)}%
-                            </Text>
-                          </View>
-                          <Pressable android_ripple={RIPPLE_BL} onPress={() => cancel(task.id)} hitSlop={S.xs}>
-                            <Text style={{ color: t.ink2, fontSize: 11, fontWeight: '600', marginTop: S.xs }}>
-                              {translate('cancel', resolvedLanguage)}
-                            </Text>
-                          </Pressable>
-                        </View>
                       </View>
-                    );
-                  })}
-                  {filteredHistory.length > 0 && <View style={[s.sep, { backgroundColor: t.sep }]} />}
+                      <View style={s.libraryCardBody}>
+                        <View style={s.libraryCardRow}>
+                          <Text style={[s.libraryCardTitle, { color: t.ink, fontSize: fs(14) }]}>
+                            {getSourceName(task.media.url)}
+                          </Text>
+                          <Text style={[s.libraryCardPct, { color: t.ink2, fontSize: fs(13) }]}>
+                            {Math.round(task.progress * 100)}%
+                          </Text>
+                        </View>
+                        <View style={[s.progressTrack, { backgroundColor: t.card2, marginVertical: S.xs }]}>
+                          <View style={[s.progressFill, { backgroundColor: t.btn,
+                            width: `${Math.round(task.progress * 100)}%` as `${number}%` }]} />
+                        </View>
+                        <Text style={[s.libraryCardSub, { color: t.ink2, fontSize: fs(11) }]}>
+                          {task.status === 'downloading' && task.totalSegments > 0
+                            ? `${task.downloadedSegments} / ${task.totalSegments} parts`
+                            : task.status === 'assembling'        ? 'Assembling…'
+                            : task.status === 'fetching_manifest' ? 'Reading stream…'
+                            : 'Starting…'}
+                        </Text>
+                        <Pressable android_ripple={RIPPLE_BL} onPress={() => cancel(task.id)}
+                          style={[s.outlineBtn, { borderColor: t.sep, marginTop: S.xs }]}>
+                          <Text style={[s.outlineBtnLabel, { color: t.ink2, fontSize: fs(12) }]}>Cancel</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ))}
+                  {history.length > 0 && <View style={[s.sep, { backgroundColor: t.sep }]} />}
                 </>
               )}
 
               {/* Completed / failed / cancelled */}
-              {filteredHistory.length > 0 && filteredActive.length > 0 && (
-                <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.sm, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                  {translate('completed', resolvedLanguage).toUpperCase()}
+              {history.length > 0 && active.length > 0 && (
+                <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.sm }]}>
+                  COMPLETED
                 </Text>
               )}
-              {filteredHistory.map((task) => {
+              {history.map((task) => {
                 const source      = getSourceName(task.media.url);
                 const quality     = getQuality(task.media.url, task.media.label);
-                const resolution  = getMediaResolution(task.media);
                 const size        = fileSizes[task.id];
                 const isDone      = task.status === 'completed';
                 const isFail      = task.status === 'failed';
-                const isPlayable  = !!task.localPlaylistPath && getMediaKind(task.media) === 'video' && /\.(mp4|ts|mov|webm|m4v)$/i.test(task.localPlaylistPath);
-                const canSaveToLibrary = !!task.localPlaylistPath && getMediaKind(task.media) !== 'audio';
+                const isVideo     = !!task.localPlaylistPath && /\.(mp4|ts|mov|webm|m4v)$/i.test(task.localPlaylistPath);
                 const isSelected  = libSelected.has(task.id);
-                const showThumbnail = getMediaKind(task.media) === 'video' || getMediaKind(task.media) === 'image';
-                const isVideo = getMediaKind(task.media) === 'video';
 
                 const cardContent = (
                   <>
@@ -1069,31 +810,18 @@ export default function App() {
                           {isSelected && <Text style={{ color: t.btnTxt, fontSize: fs(13), fontWeight: '700' }}>✓</Text>}
                         </View>
                       ) : (
-                        showThumbnail && task.media.thumbnailUrl ? (
-                          <View style={s.thumbnailContainer}>
-                            <Image source={{ uri: task.media.thumbnailUrl }} style={s.libraryThumbnail} />
-                            {isVideo && isDone && (
-                              <View style={s.thumbnailPlayOverlay}>
-                                <View style={s.playCircle}>
-                                  <Ionicons name="play" size={10} color="#000000" style={{ marginLeft: 2 }} />
-                                </View>
-                              </View>
-                            )}
-                          </View>
-                        ) : (
-                          <View style={[s.sourceAvatar,
-                            { backgroundColor: isDone ? t.card2 : isFail ? t.redBg : t.card2 }]}>
-                            <Text style={[s.sourceAvatarText,
-                              { color: isFail ? t.red : t.ink, fontSize: fs(18) }]}>
-                              {getInitial(source)}
-                            </Text>
-                          </View>
-                        )
+                        <View style={[s.sourceAvatar,
+                          { backgroundColor: isDone ? t.card2 : isFail ? t.redBg : t.card2 }]}>
+                          <Text style={[s.sourceAvatarText,
+                            { color: isFail ? t.red : t.ink, fontSize: fs(18) }]}>
+                            {getInitial(source)}
+                          </Text>
+                        </View>
                       )}
                     </View>
                     <View style={s.libraryCardBody}>
                       <View style={s.libraryCardRow}>
-                        <Text style={[s.libraryCardTitle, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
+                        <Text style={[s.libraryCardTitle, { color: t.ink, fontSize: fs(14) }]}>
                           {source}
                         </Text>
                         {quality && (
@@ -1103,43 +831,31 @@ export default function App() {
                         )}
                       </View>
                       <Text style={[s.libraryCardSub,
-                        { color: isFail ? t.red : t.ink2, fontSize: fs(12), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
-                        {isDone   ? `${translate('saved', resolvedLanguage)}${size ? `  ·  ${size}` : ''}`
-                         : isFail ? (
-                             task.errorCode === 'AUTH_REQUIRED' ? translate('authRequired', resolvedLanguage) :
-                             task.errorCode === 'GEO_BLOCKED'   ? translate('geoBlocked', resolvedLanguage) :
-                             task.errorCode === 'RATE_LIMITED'  ? translate('rateLimited', resolvedLanguage) :
-                             (task.error ?? translate('failedError', resolvedLanguage, { error: '' }).replace(': ', '').replace('：', ''))
-                           )
-                         : translate('cancel', resolvedLanguage)}
+                        { color: isFail ? t.red : t.ink2, fontSize: fs(12) }]} numberOfLines={1}>
+                        {isDone   ? `Saved${size ? `  ·  ${size}` : ''}`
+                         : isFail ? (task.error ?? 'Failed')
+                         : 'Cancelled'}
                       </Text>
-                      {resolution && (
-                        <Text style={[s.libraryCardSub, { color: t.ink2, fontSize: fs(11), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
-                          {resolution}
-                        </Text>
-                      )}
 
                       {!libSelectMode && (
-                        <View style={[s.libraryActions, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
+                        <View style={s.libraryActions}>
                           {isDone && task.localPlaylistPath && (
                             <>
-                              {isPlayable && (
-                                <Pressable android_ripple={RIPPLE_BL}
-                                  style={[s.outlineBtn, { borderColor: t.sep }]}
-                                  onPress={() => setPlayingPath(task.localPlaylistPath!)}>
-                                  <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>{translate('play', resolvedLanguage)}</Text>
-                                </Pressable>
-                              )}
+                              <Pressable android_ripple={RIPPLE_BL}
+                                style={[s.outlineBtn, { borderColor: t.sep }]}
+                                onPress={() => setPlayingPath(task.localPlaylistPath!)}>
+                                <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>Play</Text>
+                              </Pressable>
                               <Pressable android_ripple={RIPPLE_BL}
                                 style={[s.outlineBtn, { borderColor: t.sep }]}
                                 onPress={() => handleExport(task)}>
-                                <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>{translate('share', resolvedLanguage)}</Text>
+                                <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>Share</Text>
                               </Pressable>
-                              {canSaveToLibrary && (
+                              {isVideo && (
                                 <Pressable android_ripple={RIPPLE_BL}
                                   style={[s.outlineBtn, { borderColor: t.sep }]}
                                   onPress={() => handleGallery(task)}>
-                                  <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>{translate('gallery', resolvedLanguage)}</Text>
+                                  <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>Gallery</Text>
                                 </Pressable>
                               )}
                             </>
@@ -1148,45 +864,20 @@ export default function App() {
                             <Pressable android_ripple={RIPPLE_BL}
                               style={[s.outlineBtn, { borderColor: t.sep }]}
                               onPress={() => handleRetry(task)}>
-                              <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>{translate('retry', resolvedLanguage)}</Text>
+                              <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>Retry</Text>
                             </Pressable>
                           )}
                           <Pressable android_ripple={RIPPLE_BL}
                             style={[s.outlineBtn, { borderColor: t.redBg }]}
-                            onPress={() => Alert.alert(translate('delete', resolvedLangRef.current), translate('removeBookmarkConfirm', resolvedLangRef.current, { title: source }), [
-                              { text: translate('cancel', resolvedLangRef.current), style: 'cancel' },
-                              { text: translate('delete', resolvedLangRef.current), style: 'destructive', onPress: () => remove(task.id) },
+                            onPress={() => Alert.alert('Delete', 'Remove this download?', [
+                              { text: 'Cancel', style: 'cancel' },
+                              { text: 'Delete', style: 'destructive', onPress: () => remove(task.id) },
                             ])}>
-                            <Text style={[s.outlineBtnLabel, { color: t.red, fontSize: fs(12) }]}>{translate('delete', resolvedLanguage)}</Text>
+                            <Text style={[s.outlineBtnLabel, { color: t.red, fontSize: fs(12) }]}>Delete</Text>
                           </Pressable>
                         </View>
                       )}
                     </View>
-
-                    {!libSelectMode && (
-                      <View style={s.libraryCardRight}>
-                        {isDone ? (
-                          <View style={[s.statusCircle, { backgroundColor: t.greenBg, borderColor: t.green, borderWidth: 1 }]}>
-                            <Ionicons name="checkmark" size={16} color={t.green} />
-                          </View>
-                        ) : isFail ? (
-                          <>
-                            <View style={[s.statusCircle, { backgroundColor: t.redBg, borderColor: t.red, borderWidth: 1 }]}>
-                              <Ionicons name="alert" size={16} color={t.red} />
-                            </View>
-                            <Pressable onPress={() => handleRetry(task)} style={s.retryTextBtn}>
-                              <Text style={{ color: t.red, fontSize: 11, fontWeight: '600', marginTop: S.xs }}>
-                                {translate('retry', resolvedLanguage)}
-                              </Text>
-                            </Pressable>
-                          </>
-                        ) : (
-                          <View style={[s.statusCircle, { backgroundColor: t.card2, borderColor: t.sep, borderWidth: 1 }]}>
-                            <Ionicons name="close" size={16} color={t.ink3} />
-                          </View>
-                        )}
-                      </View>
-                    )}
                   </>
                 );
 
@@ -1215,19 +906,13 @@ export default function App() {
         <View style={s.flex}>
           <View style={[s.topBar, { backgroundColor: t.bg, borderBottomColor: t.sep }]}>
             {IS_IOS
-              ? <Text style={[s.largeTitleIOS, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('bookmarks', resolvedLanguage)}</Text>
-              : <Text style={[s.titleAndroid, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('bookmarks', resolvedLanguage)}</Text>
+              ? <Text style={[s.largeTitleIOS, { color: t.ink }]}>Bookmarks</Text>
+              : <Text style={[s.titleAndroid, { color: t.ink }]}>Bookmarks</Text>
             }
             {bookmarks.length > 0 && (
-              <Pressable
-                onPress={() => setBmEditMode(!bmEditMode)}
-                hitSlop={S.sm}
-                android_ripple={RIPPLE_BL}
-              >
-                <Text style={{ color: t.btn, fontSize: fs(14), fontWeight: '600' }}>
-                  {bmEditMode ? translate('done', resolvedLanguage) : editLabel}
-                </Text>
-              </Pressable>
+              <Text style={[s.topBarCount, { color: t.ink2, fontSize: fs(13) }]}>
+                {bookmarks.length}
+              </Text>
             )}
           </View>
 
@@ -1235,11 +920,11 @@ export default function App() {
             <View style={[s.flex, s.center, { backgroundColor: t.bg }]}>
               <Text style={[s.emptyHomeIcon, { color: t.ink3 }]}>☆</Text>
               <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14) }]}>
-                {translate('noBookmarks', resolvedLanguage)}
+                No bookmarks yet
               </Text>
               <Pressable onPress={() => setTab('browser')} hitSlop={S.xs} style={{ marginTop: S.sm }}>
                 <Text style={[s.browseLinkLabel, { color: t.ink2, fontSize: fs(13) }]}>
-                  {translate('browseToSave', resolvedLanguage)}
+                  Browse and tap ★ to save →
                 </Text>
               </Pressable>
             </View>
@@ -1249,156 +934,60 @@ export default function App() {
               {bookmarks.map((bm) => {
                 let domain = '';
                 try { domain = new URL(bm.url).hostname.replace(/^www\./, ''); } catch {}
-                
-                const domainLower = domain.toLowerCase();
-                const isInstagram = domainLower.includes('instagram');
-                const initials = getBookmarkInitials(domain);
-                const avatarBg = getBookmarkColor(domain);
-
-                const avatarContent = (
-                  <Text style={[s.bmRowAvatarText, { color: '#FFFFFF', fontSize: fs(15), fontWeight: '700' }]}>
-                    {initials}
-                  </Text>
-                );
-
-                const avatarView = isInstagram ? (
-                  <LinearGradient
-                    colors={['#F91A7F', '#B528BA', '#FF8A00']}
-                    start={{ x: 0, y: 1 }}
-                    end={{ x: 1, y: 0 }}
-                    style={s.bmRowAvatar}
-                  >
-                    {avatarContent}
-                  </LinearGradient>
-                ) : (
-                  <View style={[s.bmRowAvatar, { backgroundColor: avatarBg }]}>
-                    {avatarContent}
-                  </View>
-                );
-
                 return (
                   <Pressable key={bm.id} android_ripple={RIPPLE}
                     style={[s.bmRow, { backgroundColor: t.card }, subtleShadow]}
-                    onPress={() => {
-                      if (bmEditMode) {
-                        Alert.alert(translate('removeBookmark', resolvedLangRef.current), translate('removeBookmarkConfirm', resolvedLangRef.current, { title: bm.title || domain }), [
-                          { text: translate('cancel', resolvedLangRef.current), style: 'cancel' },
-                          { text: translate('remove', resolvedLangRef.current), style: 'destructive', onPress: () => removeBM(bm.id) },
-                        ]);
-                      } else {
-                        setLoadedUrl(bm.url);
-                        setBrowserInput(bm.url);
-                        setTab('browser');
-                      }
-                    }}>
-                    {avatarView}
+                    onPress={() => { setLoadedUrl(bm.url); setBrowserInput(bm.url); setTab('browser'); }}
+                    onLongPress={() => Alert.alert('Remove Bookmark', `Remove "${bm.title || domain}"?`, [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Remove', style: 'destructive', onPress: () => removeBM(bm.id) },
+                    ])}>
+                    <View style={[s.bmRowAvatar, { backgroundColor: t.card2 }]}>
+                      <Text style={[s.bmRowAvatarText, { color: t.ink, fontSize: fs(16) }]}>
+                        {getInitial(bm.title || domain)}
+                      </Text>
+                    </View>
                     <View style={s.bmRowBody}>
-                      <Text style={[s.bmRowTitle, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
+                      <Text style={[s.bmRowTitle, { color: t.ink, fontSize: fs(14) }]} numberOfLines={1}>
                         {bm.title || domain}
                       </Text>
                       {domain ? (
-                        <Text style={[s.bmRowUrl, { color: t.ink2, fontSize: fs(12), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
+                        <Text style={[s.bmRowUrl, { color: t.ink2, fontSize: fs(12) }]} numberOfLines={1}>
                           {domain}
                         </Text>
                       ) : null}
                     </View>
-                    {bmEditMode ? (
-                      <Pressable
-                        onPress={() => {
-                          Alert.alert(translate('removeBookmark', resolvedLangRef.current), translate('removeBookmarkConfirm', resolvedLangRef.current, { title: bm.title || domain }), [
-                            { text: translate('cancel', resolvedLangRef.current), style: 'cancel' },
-                            { text: translate('remove', resolvedLangRef.current), style: 'destructive', onPress: () => removeBM(bm.id) },
-                          ]);
-                        }}
-                        hitSlop={S.xs}
-                        style={{ padding: S.xs }}
-                      >
-                        <Ionicons name="trash-outline" size={20} color={t.red} />
-                      </Pressable>
-                    ) : (
-                      <Ionicons name="chevron-forward" size={18} color={t.ink3} />
-                    )}
+                    <Text style={[s.bmRowChevron, { color: t.ink3 }]}>›</Text>
                   </Pressable>
                 );
               })}
-              
-              <Text style={[s.browseHint, { color: t.ink3, fontSize: fs(12), marginTop: S.md, textAlign: 'center' }]}>
-                Tap ☆ in the browser to save sites
-              </Text>
             </ScrollView>
           )}
         </View>
       )}
 
-      {tab === 'settings' && (
-        <SettingsSheet
-          inline
-          theme={theme}
-          fontSize={fontSize}
-          language={language}
-          onThemeChange={setTheme}
-          onFontSizeChange={setFontSize}
-          onLanguageChange={setLanguage}
-          removeWatermark={removeWatermark}
-          onRemoveWatermarkChange={saveRemoveWatermark}
-          preferredQuality={preferredQuality}
-          onQualityChange={savePreferredQuality}
-          resolvedLanguage={resolvedLanguage}
-          t={t}
-        />
-      )}
-
       {/* ── Tab bar ─────────────────────────────────────── */}
-      <View style={[
-        s.tabBar,
-        {
-          backgroundColor: t.glass.tabBg,
-          borderColor: t.glass.tabBorder,
-          borderWidth: 1,
-          bottom: BOTTOM_PAD + 16,
-        },
-        resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }
-      ]}>
-        {(['home', 'library', 'bookmarks', 'browser', 'settings'] as Tab[]).map((id) => {
+      <View style={[s.tabBar, { backgroundColor: t.bg, borderTopColor: t.sep, paddingBottom: BOTTOM_PAD }]}>
+        {(['home', 'browser', 'library', 'bookmarks'] as Tab[]).map((id, idx) => {
+          const labels: Record<Tab, string> = {
+            home:      activeCount > 0 ? `Home  ${activeCount}` : 'Home',
+            browser:   videoCount  > 0 ? `Browse  ${videoCount}` : 'Browse',
+            library:   allTasks.length > 0 ? `Library  ${allTasks.length}` : 'Library',
+            bookmarks: bookmarks.length > 0 ? `Saved  ${bookmarks.length}` : 'Saved',
+          };
           const isActive = tab === id;
-          let iconName: React.ComponentProps<typeof Ionicons>['name'];
-          switch (id) {
-            case 'home':
-              iconName = isActive ? 'home' : 'home-outline';
-              break;
-            case 'library':
-              iconName = isActive ? 'download' : 'download-outline';
-              break;
-            case 'bookmarks':
-              iconName = isActive ? 'bookmark' : 'bookmark-outline';
-              break;
-            case 'browser':
-              iconName = isActive ? 'globe' : 'globe-outline';
-              break;
-            case 'settings':
-              iconName = isActive ? 'settings' : 'settings-outline';
-              break;
-          }
           return (
-            <Pressable
-              key={id}
-              android_ripple={RIPPLE_BL}
-              style={s.tabItem}
-              onPress={() => setTab(id)}
-            >
-              {isActive ? (
-                <View style={[
-                  s.tabPill,
-                  {
-                    backgroundColor: t.glass.pillActive,
-                  }
-                ]}>
-                  <Ionicons name={iconName} size={22} color={t.glass.pillActiveTxt} />
-                </View>
-              ) : (
-                <Ionicons name={iconName} size={22} color={t.ink2} />
-              )}
-            </Pressable>
+            <React.Fragment key={id}>
+              {idx > 0 && <View style={[s.tabSep, { backgroundColor: t.sep }]} />}
+              <Pressable android_ripple={RIPPLE} style={s.tabItem} onPress={() => setTab(id)}>
+                {IS_ANDROID && isActive && <View style={[s.tabPill, { backgroundColor: `${t.btn}12` }]} />}
+                <Text style={[s.tabLabel, { color: isActive ? t.ink : t.ink2,
+                  fontWeight: isActive ? '600' : '400', fontSize: fs(13) }]}>
+                  {labels[id]}
+                </Text>
+                {IS_IOS && isActive && <View style={[s.tabDot, { backgroundColor: t.ink }]} />}
+              </Pressable>
+            </React.Fragment>
           );
         })}
       </View>
@@ -1415,9 +1004,9 @@ export default function App() {
           {previewItem ? (
             /* ── Preview detail view ── */
             <>
-              <View style={[s.sheetHead, { backgroundColor: t.bg }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
+              <View style={[s.sheetHead, { backgroundColor: t.bg }]}>
                 <Pressable android_ripple={RIPPLE_BL} onPress={() => setPreviewItem(null)} hitSlop={S.sm}>
-                  <Text style={[s.sheetBackLabel, { color: t.ink2, fontSize: fs(14) }]}>{translate('back', resolvedLanguage)}</Text>
+                  <Text style={[s.sheetBackLabel, { color: t.ink2, fontSize: fs(14) }]}>← Back</Text>
                 </Pressable>
                 <Pressable android_ripple={RIPPLE_BL}
                   style={[s.closeRound, { backgroundColor: t.card }]}
@@ -1448,81 +1037,39 @@ export default function App() {
 
                 {/* Metadata */}
                 {getQuality(previewItem.url, previewItem.label) && (
-                  <View style={[s.metaRow, { borderBottomColor: t.sep }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
-                    <Text style={[s.metaKey, { color: t.ink2, fontSize: fs(13) }]}>{translate('quality', resolvedLanguage)}</Text>
+                  <View style={[s.metaRow, { borderBottomColor: t.sep }]}>
+                    <Text style={[s.metaKey, { color: t.ink2, fontSize: fs(13) }]}>Quality</Text>
                     <Text style={[s.metaVal, { color: t.ink, fontSize: fs(13) }]}>
                       {getQuality(previewItem.url, previewItem.label)}
                     </Text>
                   </View>
                 )}
-                <View style={[s.metaRow, { borderBottomColor: t.sep }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
-                  <Text style={[s.metaKey, { color: t.ink2, fontSize: fs(13) }]}>{translate('format', resolvedLanguage)}</Text>
+                <View style={[s.metaRow, { borderBottomColor: t.sep }]}>
+                  <Text style={[s.metaKey, { color: t.ink2, fontSize: fs(13) }]}>Format</Text>
                   <Text style={[s.metaVal, { color: t.ink, fontSize: fs(13) }]}>
-                    {getMediaFormat(previewItem)}
+                    {previewItem.url.includes('.m3u8') ? 'HLS Stream'
+                     : previewItem.url.includes('.mpd') ? 'DASH Stream'
+                     : previewItem.url.includes('.mp4') ? 'MP4'
+                     : 'Video'}
                   </Text>
                 </View>
-                {getMediaResolution(previewItem) && (
-                  <View style={[s.metaRow, { borderBottomColor: t.sep }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
-                    <Text style={[s.metaKey, { color: t.ink2, fontSize: fs(13) }]}>{translate('resolution', resolvedLanguage)}</Text>
-                    <Text style={[s.metaVal, { color: t.ink, fontSize: fs(13) }]}>
-                      {getMediaResolution(previewItem)}
-                    </Text>
-                  </View>
-                )}
-
-                {previewItem.availableFormats && previewItem.availableFormats.length > 0 && (
-                  <View style={{ marginTop: S.md }}>
-                    <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.xs, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                      {translate('formats', resolvedLanguage)}
-                    </Text>
-                    {previewItem.availableFormats.slice(0, 8).map((format) => {
-                      const selected = selectedFormatId === format.id || (!selectedFormatId && format.id === previewItem.formatId);
-                      return (
-                        <Pressable
-                          key={format.id}
-                          android_ripple={RIPPLE}
-                          onPress={() => setSelectedFormatId(format.id)}
-                          style={[s.metaRow, { borderBottomColor: t.sep }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
-                          <Text style={[s.metaKey, { color: selected ? t.ink : t.ink2, fontSize: fs(13) }]}>
-                            {selected ? translate('selected', resolvedLanguage) : format.id}
-                          </Text>
-                          <Text style={[s.metaVal, { color: t.ink, fontSize: fs(13) }]} numberOfLines={2}>
-                            {formatOptionLabel(format)}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                )}
 
                 <Pressable
                   android_ripple={{ color: 'rgba(255,255,255,0.15)', borderless: false }}
                   style={[s.primaryBtn, { backgroundColor: t.btn, marginTop: S.lg }]}
                   onPress={() => handleDetectedDownload(previewItem)}>
                   <Text style={[s.primaryBtnLabel, { color: t.btnTxt, fontSize: fs(16) }]}>
-                    {translate('download', resolvedLanguage)}
+                    Download
                   </Text>
                 </Pressable>
-                {getMediaKind(previewItem) !== 'image' && (
-                  <Pressable
-                    android_ripple={RIPPLE}
-                    style={[s.secondaryBtn, { borderColor: t.sep, marginTop: S.sm }]}
-                    onPress={() => handleDetectedAudioDownload(previewItem)}>
-                    <Text style={[s.secondaryBtnLabel, { color: t.ink, fontSize: fs(15) }]}>
-                      {translate('downloadAudio', resolvedLanguage)}
-                    </Text>
-                  </Pressable>
-                )}
               </ScrollView>
             </>
           ) : (
             /* ── Video list ── */
             <>
-              <View style={[s.sheetHead, { backgroundColor: t.bg }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
+              <View style={[s.sheetHead, { backgroundColor: t.bg }]}>
                 <Text style={[s.sheetTitle, { color: t.ink, fontSize: fs(20) }]}>
-                  {mediaCount > 0
-                    ? (mediaCount === 1 ? translate('mediaItemFound', resolvedLanguage) : translate('mediaItemsFound', resolvedLanguage, { count: mediaCount }))
-                    : translate('media', resolvedLanguage)}
+                  {videoCount > 0 ? `${videoCount} Video${videoCount !== 1 ? 's' : ''} Found` : 'Videos'}
                 </Text>
                 <Pressable android_ripple={RIPPLE_BL}
                   style={[s.closeRound, { backgroundColor: t.card }]}
@@ -1531,27 +1078,6 @@ export default function App() {
                 </Pressable>
               </View>
 
-              {allVideos.length > 0 && (
-                <View style={[s.bulkDownloadRow, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
-                  <Pressable android_ripple={RIPPLE}
-                    style={[s.secondaryBtn, s.bulkDownloadBtn, { borderColor: t.sep }]}
-                    onPress={handleDownloadAllDetected}>
-                    <Text style={[s.secondaryBtnLabel, { color: t.ink, fontSize: fs(13) }]}>
-                      {translate('downloadAll', resolvedLanguage)}
-                    </Text>
-                  </Pressable>
-                  {allVideos.some((item) => getMediaKind(item) !== 'image') && (
-                    <Pressable android_ripple={RIPPLE}
-                      style={[s.secondaryBtn, s.bulkDownloadBtn, { borderColor: t.sep }]}
-                      onPress={handleDownloadAllAudio}>
-                      <Text style={[s.secondaryBtnLabel, { color: t.ink, fontSize: fs(13) }]}>
-                        {translate('audioAll', resolvedLanguage)}
-                      </Text>
-                    </Pressable>
-                  )}
-                </View>
-              )}
-
               <ScrollView style={{ maxHeight: 360 }}
                 contentContainerStyle={{ paddingHorizontal: S.md, paddingBottom: S.sm }}
                 showsVerticalScrollIndicator={false}>
@@ -1559,33 +1085,32 @@ export default function App() {
                   <View style={s.center}>
                     <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14), textAlign: 'center',
                       paddingVertical: S.xl }]}>
-                      {translate('browseForMedia', resolvedLanguage)}
+                      Browse to a page with a video — it will appear here.
                     </Text>
                   </View>
                 )}
                 {allVideos.map((item) => {
                   const source  = getSourceName(item.url);
-                  const quality = getQuality(item.url, item.label) || getMediaFormat(item);
-                  const resolution = getMediaResolution(item);
+                  const quality = getQuality(item.url, item.label);
                   return (
                     <Pressable key={item.id} android_ripple={RIPPLE}
-                      style={[s.videoRow, { backgroundColor: t.card, borderBottomColor: t.sep }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}
+                      style={[s.videoRow, { backgroundColor: t.card, borderBottomColor: t.sep }]}
                       onPress={() => setPreviewItem(item)}>
                       <View style={[s.videoAvatar, { backgroundColor: t.card2 }]}>
                         <Text style={[s.videoAvatarText, { color: t.ink, fontSize: fs(15) }]}>
                           {getInitial(source)}
                         </Text>
                       </View>
-                      <View style={[s.videoMeta, resolvedLanguage === 'ar' && { alignItems: 'flex-end' }]}>
-                        <Text style={[s.videoSource, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{source}</Text>
-                        <Text style={[s.videoQuality, { color: t.ink2, fontSize: fs(12), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                          {compactMediaDetails(quality, resolution)}
-                        </Text>
+                      <View style={s.videoMeta}>
+                        <Text style={[s.videoSource, { color: t.ink, fontSize: fs(14) }]}>{source}</Text>
+                        {quality && (
+                          <Text style={[s.videoQuality, { color: t.ink2, fontSize: fs(12) }]}>{quality}</Text>
+                        )}
                       </View>
                       <Pressable android_ripple={RIPPLE}
                         style={[s.dlBtn, { backgroundColor: t.btn }]}
                         onPress={() => handleDetectedDownload(item)}>
-                        <Text style={[s.dlBtnLabel, { color: t.btnTxt, fontSize: fs(13) }]}>{translate('download', resolvedLanguage)}</Text>
+                        <Text style={[s.dlBtnLabel, { color: t.btnTxt, fontSize: fs(13) }]}>Download</Text>
                       </Pressable>
                     </Pressable>
                   );
@@ -1593,12 +1118,12 @@ export default function App() {
               </ScrollView>
 
               {/* Manual paste */}
-              <View style={[s.sheetPasteRow, { borderTopColor: t.sep, backgroundColor: t.bg }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
+              <View style={[s.sheetPasteRow, { borderTopColor: t.sep, backgroundColor: t.bg }]}>
                 <TextInput
-                  style={[s.sheetPasteInput, { backgroundColor: t.card, color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}
+                  style={[s.sheetPasteInput, { backgroundColor: t.card, color: t.ink, fontSize: fs(14) }]}
                   value={pasteUrl}
                   onChangeText={setPasteUrl}
-                  placeholder={translate('pasteMediaUrlPlaceholder', resolvedLanguage)}
+                  placeholder="Paste a video or page URL…"
                   placeholderTextColor={t.ink3}
                   autoCapitalize="none" autoCorrect={false}
                   keyboardType="url" returnKeyType="done"
@@ -1610,7 +1135,7 @@ export default function App() {
                   onPress={() => { setVideosOpen(false); handleHomeDownload(); }}
                   disabled={extracting}>
                   <Text style={[s.dlBtnLabel, { color: t.btnTxt, fontSize: fs(14) }]}>
-                    {extracting ? '…' : translate('add', resolvedLanguage)}
+                    {extracting ? '…' : 'Add'}
                   </Text>
                 </Pressable>
               </View>
@@ -1620,11 +1145,11 @@ export default function App() {
       </Modal>
 
       {/* ── Modals ──────────────────────────────────────── */}
-        {playingPath && <VideoPlayerModal path={playingPath} onClose={() => setPlayingPath(null)} language={resolvedLanguage} />}
-        <Toast message={toast} />
-      </SafeAreaView>
-      </LinearGradient>
-    </SafeAreaProvider>
+      <SettingsSheet visible={settingsOpen} onClose={() => setSettingsOpen(false)}
+        theme={theme} fontSize={fontSize} onThemeChange={setTheme} onFontSizeChange={setFontSize} t={t} />
+      {playingPath && <VideoPlayerModal path={playingPath} onClose={() => setPlayingPath(null)} />}
+      <Toast message={toast} />
+    </View>
   );
 }
 
@@ -1634,22 +1159,6 @@ const s = StyleSheet.create({
   flex:   { flex: 1 },
   center: { alignItems: 'center', justifyContent: 'center' },
   sep:    { height: StyleSheet.hairlineWidth, marginVertical: S.md },
-
-  // ── Background Glows ──────────────────────────────────────
-  bgGlow1: {
-    position: 'absolute',
-    width: 320,
-    height: 320,
-    borderRadius: 160,
-    opacity: 1.0,
-  },
-  bgGlow2: {
-    position: 'absolute',
-    width: 320,
-    height: 320,
-    borderRadius: 160,
-    opacity: 1.0,
-  },
 
   // ── Top bar ───────────────────────────────────────────────
   topBar: {
@@ -1668,37 +1177,12 @@ const s = StyleSheet.create({
 
   // ── Home ──────────────────────────────────────────────────
   homeScroll: { padding: S.md, gap: S.md },
-  homeLogoContainer: {
-    alignItems: 'center',
-    marginTop: S.xl * 1.5,
-    marginBottom: S.md,
-  },
-  logoGlowWrap: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowRadius: 20,
-    shadowOpacity: 0.6,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 5,
-  },
-  homeLogoImage: {
-    width: 80,
-    height: 80,
-    resizeMode: 'contain',
-  },
-  homeLogoTitle: {
-    fontSize: 22,
-    fontWeight: '700',
-    marginTop: S.sm,
-    letterSpacing: 0.5,
-  },
+
   pasteCard: {
     borderRadius: R.lg,
     padding: S.md,
     gap: S.sm,
+    ...(IS_IOS ? {} : {}),
   },
   pasteLabel: { fontWeight: '600', letterSpacing: 0.6, marginBottom: S.xs },
   pasteInput: {
@@ -1709,29 +1193,11 @@ const s = StyleSheet.create({
   },
   primaryBtn: {
     height: 52,
-    borderRadius: 26, // Perfect pill
+    borderRadius: R.md,
     alignItems: 'center',
     justifyContent: 'center',
   },
   primaryBtnLabel: { fontWeight: '600' },
-  secondaryBtn: {
-    height: 48,
-    borderRadius: R.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  secondaryBtnLabel: { fontWeight: '600' },
-  bulkDownloadRow: {
-    flexDirection: 'row',
-    gap: S.sm,
-    paddingHorizontal: S.md,
-    paddingBottom: S.sm,
-  },
-  bulkDownloadBtn: {
-    flex: 1,
-    height: 40,
-  },
   browseLink:      { alignItems: 'center', paddingVertical: S.xs },
   browseLinkLabel: { fontWeight: '400' },
   browseHint:      { alignSelf: 'center', textAlign: 'center', marginTop: 2, fontWeight: '400', opacity: 0.85 },
@@ -1739,23 +1205,31 @@ const s = StyleSheet.create({
   section:      { gap: S.sm },
   sectionLabel: { fontWeight: '600', letterSpacing: 0.6, textTransform: 'uppercase' },
 
-  homeActiveRow: {
+  compactCard: {
     borderRadius: R.md,
     padding: S.md,
     gap: S.xs,
-    marginBottom: S.sm,
   },
-  homeActiveHeader: {
+  compactRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: S.sm,
   },
-  homeActiveTitle: {
-    fontWeight: '600',
+  compactSource: { flex: 1, fontWeight: '500' },
+  compactPct:    { fontWeight: '400' },
+  cancelBtn: {
+    height: 28,
+    paddingHorizontal: S.sm,
+    borderRadius: R.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  cancelBtnLabel: { fontWeight: '400' },
+  compactStatus:  { fontWeight: '400' },
 
-  progressTrack: { height: 8, borderRadius: 4, overflow: 'hidden' }, // height 8, border radius 4
-  progressFill:  { height: 8, borderRadius: 4 },
+  progressTrack: { height: 3, borderRadius: 2, overflow: 'hidden' },
+  progressFill:  { height: 3, borderRadius: 2 },
 
   emptyHome:     { alignItems: 'center', paddingTop: S.xl * 2, gap: S.sm },
   emptyHomeIcon: { fontSize: 40, fontWeight: '200' },
@@ -1772,56 +1246,36 @@ const s = StyleSheet.create({
 
   // ── Browser ───────────────────────────────────────────────
   navBar: {
-    flexDirection: 'column',
+    flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: S.md,
     paddingVertical: S.sm,
     gap: S.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  navBarTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    width: '100%',
-    marginBottom: S.xs,
-  },
-  navRowBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  browserTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: 1,
-  },
-  addressFieldWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 20,
-    height: 40,
-    flex: 1,
-    paddingHorizontal: S.sm,
-  },
   addressField: {
     flex: 1,
     height: 40,
-    paddingHorizontal: S.sm,
+    borderRadius: R.md,
+    paddingHorizontal: S.md,
   },
-  nestedReloadBtn: {
-    padding: S.xs,
+  navBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: R.md,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  navBtnIcon: { fontSize: 18, lineHeight: 22 },
+
+
   floatingBadge: {
     position: 'absolute',
-    bottom: 20,
+    top: S.md,
     alignSelf: 'center',
     paddingHorizontal: S.md,
     paddingVertical: S.sm,
     borderRadius: 100,
-    zIndex: 10,
     ...(IS_IOS
       ? { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } }
       : { elevation: 4 }),
@@ -1835,24 +1289,7 @@ const s = StyleSheet.create({
 
   // ── Library ───────────────────────────────────────────────
   gridContent: { padding: S.md, gap: S.sm },
-  chipContainer: {
-    paddingVertical: S.sm,
-    paddingHorizontal: S.md,
-  },
-  chipScroll: {
-    gap: S.sm,
-    flexDirection: 'row',
-  },
-  chip: {
-    paddingHorizontal: S.md,
-    paddingVertical: 6,
-    borderRadius: 16,
-  },
-  chipText: {
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 0.5,
-  },
+
   libraryCard: {
     flexDirection: 'row',
     borderRadius: R.lg,
@@ -1869,68 +1306,12 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   sourceAvatarText: { fontWeight: '600' },
-  thumbnailContainer: {
-    width: 44,
-    height: 44,
-    borderRadius: R.md,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  libraryThumbnail: {
-    width: '100%',
-    height: '100%',
-  },
-  thumbnailPlayOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.25)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  playCircle: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: 'rgba(255, 255, 255, 0.8)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   libraryCardBody: { flex: 1, gap: S.xs },
   libraryCardRow: { flexDirection: 'row', alignItems: 'center', gap: S.sm },
   libraryCardTitle: { flex: 1, fontWeight: '600' },
   libraryCardPct:   { fontWeight: '400' },
   libraryCardSub:   { fontWeight: '400' },
   libraryActions: { flexDirection: 'row', flexWrap: 'wrap', gap: S.sm, marginTop: S.xs },
-  libraryCardRight: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 48,
-  },
-  statusCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  retryTextBtn: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  librarySelectEdge: {
-    width: 88,
-    minHeight: 36,
-    justifyContent: 'center',
-  },
-  librarySelectCenter: {
-    flex: 1,
-    minHeight: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 
   selectCircle: {
     width: 24,
@@ -1961,19 +1342,9 @@ const s = StyleSheet.create({
 
   // ── Tab bar ───────────────────────────────────────────────
   tabBar: {
-    position: 'absolute',
-    left: 24,
-    right: 24,
-    height: 56,
-    borderRadius: 28,
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
+    height: 52,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
   tabItem: {
     flex: 1,
@@ -1982,11 +1353,10 @@ const s = StyleSheet.create({
     overflow: 'hidden',
   },
   tabPill: {
-    height: 38,
-    borderRadius: 19,
-    width: 56,
-    alignItems: 'center',
-    justifyContent: 'center',
+    position: 'absolute',
+    height: 32,
+    borderRadius: 16,
+    width: '80%',
   },
   tabLabel: {},
   tabDot: {
@@ -2116,14 +1486,13 @@ const s = StyleSheet.create({
   // ── Floating bookmark FAB ─────────────────────────────────
   bmFab: {
     position: 'absolute',
-    bottom: 80,
+    bottom: S.lg,
     right: S.lg,
     width: 52,
     height: 52,
     borderRadius: 26,
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 10,
   },
   bmFabIcon: { fontSize: 22, lineHeight: 26 },
 

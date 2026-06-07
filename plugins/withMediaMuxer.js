@@ -150,8 +150,8 @@ function addToXcodeProject(project, appTargetName) {
   if (!target) {
     throw new Error(`[withMediaMuxer] could not find app target "${appTargetName}"`);
   }
-  project.addSourceFile(SWIFT_FILE, { target: target.uuid }, groupResult.uuid);
-  project.addSourceFile(OBJC_FILE,  { target: target.uuid }, groupResult.uuid);
+  project.addSourceFile(`${SUBDIR}/${SWIFT_FILE}`, { target: target.uuid });
+  project.addSourceFile(`${SUBDIR}/${OBJC_FILE}`,  { target: target.uuid });
 }
 
 // ── Plugin definition ─────────────────────────────────────────────────────────

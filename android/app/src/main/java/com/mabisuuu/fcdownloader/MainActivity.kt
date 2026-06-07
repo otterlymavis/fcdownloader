@@ -1,7 +1,5 @@
 package com.mabisuuu.fcdownloader
 
-import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 
@@ -18,29 +16,7 @@ class MainActivity : ReactActivity() {
     // coloring the background, status bar, and navigation bar.
     // This is required for expo-splash-screen.
     setTheme(R.style.AppTheme);
-    rewriteSendIntent(intent)
     super.onCreate(null)
-  }
-
-  override fun onNewIntent(intent: Intent) {
-    rewriteSendIntent(intent)
-    super.onNewIntent(intent)
-  }
-
-  /**
-   * When the app is opened from the system share sheet (ACTION_SEND, text/plain),
-   * Android delivers the shared text in EXTRA_TEXT — which React Native's Linking
-   * does NOT surface. Rewrite the intent into the fcdownloader://share?url=... deep
-   * link the JS already handles, so sharing a link from any app drops it straight
-   * into the paste box. Shared text like "caption https://..." is reduced to the URL.
-   */
-  private fun rewriteSendIntent(intent: Intent?) {
-    if (intent?.action != Intent.ACTION_SEND) return
-    val shared = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim() ?: return
-    if (shared.isEmpty()) return
-    val url = Regex("https?://\\S+").find(shared)?.value ?: shared
-    intent.action = Intent.ACTION_VIEW
-    intent.data = Uri.parse("fcdownloader://share?url=" + Uri.encode(url))
   }
 
   /**

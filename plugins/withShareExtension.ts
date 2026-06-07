@@ -22,17 +22,11 @@ import * as path from 'path';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const EXT_NAME       = 'ShareExtension';
-const BUNDLE_ID      = 'com.otterpia.fcdownloader';
+const BUNDLE_ID      = 'com.mabisuuu.fcdownloader';
 const EXT_BUNDLE_ID  = `${BUNDLE_ID}.ShareExtension`;
 const APP_GROUP      = `group.${BUNDLE_ID}`;
 const APP_SCHEME     = 'fcdownloader';
-const DEPLOYMENT_TARGET = '15.1';
-const VERSION = '1.5.20';
-const BUILD_NUMBER = '24';
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
-}
+const DEPLOYMENT_TARGET = '14.0';
 
 // ── Swift source ──────────────────────────────────────────────────────────────
 
@@ -93,7 +87,7 @@ class ShareViewController: UIViewController {
 
     private func showSheet(for url: URL) {
         let urlStr = url.absoluteString
-        let preview = urlStr.count > 80 ? String(urlStr.prefix(80)) + "..." : urlStr
+        let preview = urlStr.count > 80 ? String(urlStr.prefix(80)) + "\\u2026" : urlStr
 
         let sheet = UIAlertController(
             title:   "FC Downloader",
@@ -155,20 +149,6 @@ const EXT_INFO_PLIST = `\
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDisplayName</key>
-    <string>FC Downloader</string>
-    <key>CFBundleExecutable</key>
-    <string>$(EXECUTABLE_NAME)</string>
-    <key>CFBundleIdentifier</key>
-    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-    <key>CFBundleName</key>
-    <string>FC Downloader</string>
-    <key>CFBundlePackageType</key>
-    <string>XPC!</string>
-    <key>CFBundleShortVersionString</key>
-    <string>${VERSION}</string>
-    <key>CFBundleVersion</key>
-    <string>${BUILD_NUMBER}</string>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionAttributes</key>
@@ -252,6 +232,12 @@ function addExtensionToXcodeProject(
     'Sources',
     targetUuid,
   );
+  project.addBuildPhase(
+    ['Info.plist'],
+    'PBXResourcesBuildPhase',
+    'Resources',
+    targetUuid,
+  );
 
   // 5. Set build settings on the extension target's configurations
   const configurations: Record<string, any> = project.pbxXCBuildConfigurationSection();
@@ -280,7 +266,7 @@ function addExtensionToXcodeProject(
       s.IPHONEOS_DEPLOYMENT_TARGET   = DEPLOYMENT_TARGET;
       s.SKIP_INSTALL                 = 'YES';
       s.TARGETED_DEVICE_FAMILY       = '"1,2"';
-      s.PRODUCT_BUNDLE_IDENTIFIER    = EXT_BUNDLE_ID;
+      s.PRODUCT_BUNDLE_IDENTIFIER    = `"${EXT_BUNDLE_ID}"`;
     }
   }
 }
@@ -291,7 +277,8 @@ const withShareExtensionPlugin: ConfigPlugin = (config) => {
   // Add App Group entitlement to the main app so it can share UserDefaults
   // with the extension (used as fallback when deep link fires on cold start).
   config = withEntitlementsPlist(config, (c) => {
-    const existing = stringArray(c.modResults['com.apple.security.application-groups']);
+    const existing: string[] =
+      c.modResults['com.apple.security.application-groups'] ?? [];
     if (!existing.includes(APP_GROUP)) {
       c.modResults['com.apple.security.application-groups'] = [
         ...existing,

@@ -2,7 +2,6 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { File, Paths } from 'expo-file-system';
 import { fetch as expoFetch } from 'expo/fetch';
 import { extractSessionCookies } from './cookieManager';
-import { debugLog } from './releaseLogger';
 import { DetectedMedia, DownloadStatus } from '../types';
 
 export class DRMProtectedError extends Error {
@@ -20,7 +19,6 @@ export interface DownloadOptions {
 interface HLSKey { method: string; uri: string; iv?: string; }
 interface ParsedPlaylist {
   segments: string[];
-  byteRanges?: (string | null)[];
   extinf: string[];
   targetDuration: number;
   mediaSequence: number;
@@ -29,7 +27,7 @@ interface ParsedPlaylist {
   isFmp4: boolean;
 }
 
-const SEGMENT_BATCH = 12;
+const SEGMENT_BATCH = 4;
 const MUX_READ_CHUNK_SIZE = 1024 * 1024;
 
 function getTaskDir(taskId: string): string {
@@ -63,12 +61,10 @@ function parseMaster(content: string, baseUrl: string): string | null {
 
 function parseMedia(content: string, baseUrl: string): ParsedPlaylist {
   const lines = content.split('\n').map(l => l.trim());
-  const segments: string[] = [], extinf: string[] = [], byteRanges: (string | null)[] = [];
+  const segments: string[] = [], extinf: string[] = [];
   let targetDuration = 10, mediaSequence = 0, isFmp4 = false;
   let key: HLSKey | undefined, initSegmentUrl: string | undefined;
   let pendingExtinf = '';
-  let pendingByteRange: string | null = null;
-  let currentOffset = 0;
 
   for (const line of lines) {
     if (line.startsWith('#EXT-X-TARGETDURATION:'))
@@ -93,30 +89,16 @@ function parseMedia(content: string, baseUrl: string): ParsedPlaylist {
     } else if (line.startsWith('#EXT-X-MAP:')) {
       const u = line.match(/URI="([^"]+)"/)?.[1];
       if (u) { initSegmentUrl = resolveUrl(u, baseUrl); isFmp4 = true; }
-    } else if (line.startsWith('#EXT-X-BYTERANGE:')) {
-      pendingByteRange = line.split(':')[1].trim();
     } else if (line.startsWith('#EXTINF:')) {
       pendingExtinf = line;
     } else if (line && !line.startsWith('#')) {
       segments.push(resolveUrl(line, baseUrl));
       extinf.push(pendingExtinf || '#EXTINF:10.0,');
       pendingExtinf = '';
-
-      if (pendingByteRange) {
-        const parts = pendingByteRange.split('@');
-        const length = parseInt(parts[0], 10);
-        const offset = parts[1] ? parseInt(parts[1], 10) : currentOffset;
-        byteRanges.push(`${length}@${offset}`);
-        currentOffset = offset + length;
-        pendingByteRange = null;
-      } else {
-        byteRanges.push(null);
-      }
-
       if (line.includes('.m4s') || (line.includes('.mp4') && !line.includes('.m3u8'))) isFmp4 = true;
     }
   }
-  return { segments, byteRanges, extinf, targetDuration, mediaSequence, key, initSegmentUrl, isFmp4 };
+  return { segments, extinf, targetDuration, mediaSequence, key, initSegmentUrl, isFmp4 };
 }
 
 function makeHeaders(cookies: string, ua: string, referer: string): Record<string, string> {
@@ -134,42 +116,33 @@ async function fetchText(
 }
 
 async function downloadSegment(
-  url: string,
-  destPath: string,
-  headers: Record<string, string>,
+  url: string, destPath: string, headers: Record<string, string>,
   signal?: AbortSignal,
 ): Promise<void> {
+  const res = await expoFetch(url, { signal, headers });
   if (signal?.aborted) throw new Error('Cancelled');
-  debugLog('[downloadSegment] starting:', url.split('?')[0].split('/').pop(), 'range:', headers['Range']);
-  let lastErr: Error = new Error('Segment download failed');
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (signal?.aborted) throw new Error('Cancelled');
-    try {
-      const result = await FileSystem.downloadAsync(url, destPath, { headers });
-      if (signal?.aborted) {
-        try { await FileSystem.deleteAsync(destPath, { idempotent: true }); } catch {}
-        throw new Error('Cancelled');
-      }
-      if (!result || result.status < 200 || result.status >= 300) {
-        throw new Error(`HTTP ${result?.status ?? 'unknown'} downloading segment`);
-      }
-      const info = await FileSystem.getInfoAsync(destPath);
-      if (!info.exists || (info.size ?? 0) === 0) {
-        throw new Error(`Empty segment - ${url.split('?')[0].split('/').pop()}`);
-      }
-      debugLog('[downloadSegment] success:', destPath.split('/').pop(), 'size:', info.size);
-      return;
-    } catch (err: any) {
-      lastErr = err as Error;
-      if (signal?.aborted || lastErr.message === 'Cancelled') throw lastErr;
-      if (attempt < 2) {
-        debugLog('[downloadSegment] retrying after error:', lastErr.message);
-        await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
-      }
+  if (!res.ok) throw new Error(`HTTP ${res.status} - ${url.split('?')[0].split('/').pop()}`);
+
+  const bytes = await res.bytes();
+  if (signal?.aborted) throw new Error('Cancelled');
+  if (bytes.length === 0) throw new Error(`Empty segment - ${url.split('?')[0].split('/').pop()}`);
+
+  const file = new File(destPath);
+  file.create({ intermediates: true, overwrite: true });
+  file.write(bytes);
+}
+
+function appendFileBytes(outHandle: ReturnType<File['open']>, sourcePath: string): void {
+  const source = new File(sourcePath);
+  const sourceHandle = source.open();
+  try {
+    while ((sourceHandle.offset ?? 0) < (sourceHandle.size ?? 0)) {
+      const remaining = (sourceHandle.size ?? 0) - (sourceHandle.offset ?? 0);
+      outHandle.writeBytes(sourceHandle.readBytes(Math.min(MUX_READ_CHUNK_SIZE, remaining)));
     }
+  } finally {
+    sourceHandle.close();
   }
-  console.error('[downloadSegment] failed after 3 attempts:', lastErr.message);
-  throw lastErr;
 }
 
 async function muxSegments(
@@ -183,27 +156,18 @@ async function muxSegments(
   const outFile = new File(Paths.document, 'downloads', taskId, `video.${ext}`);
   outFile.create({ intermediates: true, overwrite: true });
 
-  debugLog(`[muxSegments] Started muxing ${segPaths.length} segments into video.${ext}`);
-
-  if (initPath) {
-    debugLog(`[muxSegments] Appending init segment: ${initPath}`);
-    const initFile = new File(initPath);
-    const bytes = await initFile.bytes();
-    outFile.write(bytes, { append: true });
-  }
-
-  for (let i = 0; i < segPaths.length; i++) {
-    if (i % 10 === 0 || i === segPaths.length - 1) {
-      debugLog(`[muxSegments] Appending segment ${i + 1}/${segPaths.length}`);
+  const handle = outFile.open();
+  try {
+    if (initPath) appendFileBytes(handle, initPath);
+    for (let i = 0; i < segPaths.length; i++) {
+      appendFileBytes(handle, segPaths[i]);
+      onProgress?.(i + 1, segPaths.length);
     }
-    const segFile = new File(segPaths[i]);
-    const bytes = await segFile.bytes();
-    outFile.write(bytes, { append: true });
-    onProgress?.(i + 1, segPaths.length);
+  } finally {
+    handle.close();
   }
 
   if (outFile.size === 0) throw new Error('Output file is empty - segments may be corrupted or the URL expired');
-  debugLog(`[muxSegments] Completed. Output size: ${outFile.size}`);
 
   return outFile.uri;
 }
@@ -253,20 +217,13 @@ export async function downloadHLS(
 
   // When the extractor stored headers (e.g. YouTube CDN context), use them verbatim.
   // Otherwise build from session cookies — skip cookies for googlevideo.com CDN URLs.
-  const makeResolvedHeaders = async (url: string): Promise<Record<string, string>> => {
-    const skipCookies = /googlevideo\.com\//i.test(url);
-    if (media.httpHeaders) {
-      const headers = { ...media.httpHeaders };
-      const hasCookie = Object.keys(headers).some((k) => k.toLowerCase() === 'cookie');
-      if (!hasCookie && !skipCookies) {
-        const cookies = await extractSessionCookies(media.pageUrl);
-        if (cookies) headers['Cookie'] = cookies;
-      }
-      return headers;
-    }
-    return makeHeaders(skipCookies ? '' : await extractSessionCookies(media.pageUrl), ua, media.pageUrl);
-  };
-  const resolvedHeaders = await makeResolvedHeaders(media.url);
+  const resolvedHeaders: Record<string, string> = media.httpHeaders
+    ? media.httpHeaders
+    : makeHeaders(
+        /googlevideo\.com\//i.test(media.url) ? '' : await extractSessionCookies(media.pageUrl),
+        ua,
+        media.pageUrl,
+      );
 
   let playlistUrl = media.url;
   let raw = await fetchText(playlistUrl, resolvedHeaders, signal);
@@ -280,7 +237,7 @@ export async function downloadHLS(
 
   if (signal?.aborted) throw new Error('Cancelled');
 
-  const { segments, byteRanges, extinf, targetDuration, mediaSequence, key, initSegmentUrl, isFmp4 } =
+  const { segments, extinf, targetDuration, mediaSequence, key, initSegmentUrl, isFmp4 } =
     parseMedia(raw, playlistUrl);
 
   if (segments.length === 0) throw new Error('No segments found in playlist');
@@ -306,25 +263,11 @@ export async function downloadHLS(
   for (let i = 0; i < segments.length; i += SEGMENT_BATCH) {
     if (signal?.aborted) throw new Error('Cancelled');
     const batch = segments.slice(i, i + SEGMENT_BATCH);
-    debugLog(`[downloadHLS] starting batch ${i / SEGMENT_BATCH + 1}/${Math.ceil(segments.length / SEGMENT_BATCH)}`);
     await Promise.all(batch.map((url, j) => {
       const idx = i + j;
-      const br = byteRanges?.[idx];
       segPaths[idx] = `${taskDir}seg${String(idx).padStart(6, '0')}.${segExt}`;
-
-      let segmentHeaders = resolvedHeaders;
-      if (br) {
-        const parts = br.split('@');
-        const length = parseInt(parts[0], 10);
-        const offset = parseInt(parts[1], 10);
-        segmentHeaders = {
-          ...resolvedHeaders,
-          'Range': `bytes=${offset}-${offset + length - 1}`,
-        };
-      }
-      return downloadSegment(url, segPaths[idx], segmentHeaders, signal);
+      return downloadSegment(url, segPaths[idx], resolvedHeaders, signal);
     }));
-    debugLog(`[downloadHLS] finished batch ${i / SEGMENT_BATCH + 1}/${Math.ceil(segments.length / SEGMENT_BATCH)}`);
     onProgress?.(Math.min(i + SEGMENT_BATCH, segments.length), segments.length);
   }
 

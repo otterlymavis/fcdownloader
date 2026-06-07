@@ -2,10 +2,10 @@
  * Native muxing of separate video + audio files into one mp4.
  *
  * Android: stdlib MediaMuxer (see android/.../MediaMuxerModule.kt).
- * iOS:     AVAssetExportSession (see plugins/withMediaMuxer.ts).
+ * iOS:     not yet implemented — throws so the caller can fall back.
  *
- * No external native libraries — both platform implementations use OS media
- * APIs to do a lossless `-c copy` style copy of the sample streams. Compatible
+ * No external native libraries — Android's MediaMuxer ships with the OS and
+ * does a lossless `-c copy` style copy of the sample streams. Compatible
  * containers required (mp4/m4a — both standard for YouTube adaptive formats).
  */
 import { NativeModules, Platform } from 'react-native';
@@ -26,9 +26,9 @@ export async function muxVideoAudio(
   audioPath: string,
   outputPath: string,
 ): Promise<void> {
-  if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || !MediaMuxerModule) {
+  if (Platform.OS !== 'android' || !MediaMuxerModule) {
     throw new MuxNotSupportedError(
-      `Mux not supported on ${Platform.OS}. Add a native MediaMuxer module ` +
+      `Mux not supported on ${Platform.OS}. Add a native AVAssetExport module ` +
       `or accept the video-only file.`,
     );
   }
