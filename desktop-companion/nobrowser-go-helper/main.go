@@ -305,25 +305,40 @@ func runYtDlpJSON(ctx context.Context, rawURL string) (map[string]interface{}, e
 	if err != nil {
 		return nil, err
 	}
+	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 5, Status: "extracting"})
 	data, err := runYtDlpJSONWithPath(ctx, ytDlp, rawURL)
-	if err == nil || !youtubeURL(rawURL) {
+	if err == nil {
+		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 10, Status: "extracted"})
+		return data, nil
+	}
+	if !youtubeURL(rawURL) {
 		return data, err
 	}
 	if channel == "nightly" {
 		logf("nightly yt-dlp failed for YouTube formats; retrying with stable: %v", err)
+		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: currentMediaPercent(rawURL), Status: "retrying"})
 		stable, stableErr := ytDlpStablePath(ctx)
 		if stableErr != nil {
 			return nil, fmt.Errorf("%v; stable fallback unavailable: %w", err, stableErr)
 		}
-		return runYtDlpJSONWithPath(ctx, stable, rawURL)
+		data, err = runYtDlpJSONWithPath(ctx, stable, rawURL)
+		if err == nil {
+			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 10, Status: "extracted"})
+		}
+		return data, err
 	}
 	if shouldRetryWithNightly(rawURL, err.Error()) {
 		logf("stable yt-dlp failed for YouTube formats; retrying with nightly: %v", err)
+		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: currentMediaPercent(rawURL), Status: "retrying"})
 		nightly, nightlyErr := ytDlpNightlyPath(ctx)
 		if nightlyErr != nil {
 			return nil, fmt.Errorf("%v; nightly fallback unavailable: %w", err, nightlyErr)
 		}
-		return runYtDlpJSONWithPath(ctx, nightly, rawURL)
+		data, err = runYtDlpJSONWithPath(ctx, nightly, rawURL)
+		if err == nil {
+			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 10, Status: "extracted"})
+		}
+		return data, err
 	}
 	return data, err
 }

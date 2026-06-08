@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -364,5 +365,29 @@ func TestToolsProgressEndpoint(t *testing.T) {
 	}
 	if body.Progress.UpdatedAt == "" {
 		t.Fatal("progress response should include updatedAt")
+	}
+}
+
+func TestDownloadProgressEndpointReturnsExtractingState(t *testing.T) {
+	const rawURL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+	setMediaProgress(rawURL, &mediaProgress{
+		URL:     rawURL,
+		Percent: 5,
+		Status:  "extracting",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8765/download/progress?url="+url.QueryEscape(rawURL), nil)
+	rr := httptest.NewRecorder()
+	handleDownloadProgress(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var body mediaProgress
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Status != "extracting" || body.Percent != 5 {
+		t.Fatalf("unexpected download progress payload: %+v", body)
 	}
 }

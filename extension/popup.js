@@ -183,7 +183,13 @@ function startProgressPolling(mediaUrl) {
         return;
       }
       const data = await r.json();
-      if (data.status === "downloading") {
+      if (data.status === "extracting") {
+        progressFloor = Math.max(progressFloor, Math.min(Number(data.percent) || 5, 20));
+        setProgress(progressFloor, "Companion is checking video formats...");
+      } else if (data.status === "extracted") {
+        progressFloor = Math.max(progressFloor, 12);
+        setProgress(progressFloor, "Companion found video formats...");
+      } else if (data.status === "downloading") {
         const rawPercent = Number(data.percent) || 0;
         progressFloor = Math.max(progressFloor, Math.min(rawPercent, 95));
         let label = `Downloading: ${progressFloor.toFixed(1)}%`;
