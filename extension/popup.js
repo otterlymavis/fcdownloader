@@ -39,6 +39,7 @@ let selectedItemKeys = new Set();
 let pinnedExtractResult = false;
 let currentGalleryInfo = null;
 let progressPollInterval = null;
+let toolProgressPollInterval = null;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -115,6 +116,49 @@ function formatBytes(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function stopToolProgressPolling() {
+  if (toolProgressPollInterval) {
+    clearInterval(toolProgressPollInterval);
+    toolProgressPollInterval = null;
+  }
+}
+
+function toolProgressLabel(progress) {
+  const name = progress?.tool ? String(progress.tool).replace(/^yt-dlp/, "YouTube downloader") : "video tools";
+  const attempt = progress?.attempt > 1 ? `, retry ${progress.attempt}` : "";
+  const downloaded = Number(progress?.downloaded || 0);
+  const total = Number(progress?.total || 0);
+  if (progress?.message === "complete") return `Installed ${name}`;
+  if (total > 0 && downloaded > 0) {
+    return `Installing ${name}${attempt}: ${formatBytes(downloaded)} / ${formatBytes(total)}`;
+  }
+  if (downloaded > 0) return `Installing ${name}${attempt}: ${formatBytes(downloaded)}`;
+  return `Installing ${name}${attempt}...`;
+}
+
+function startToolProgressPolling() {
+  stopToolProgressPolling();
+  setProgressIndeterminate("Installing video tools...");
+  toolProgressPollInterval = setInterval(async () => {
+    try {
+      const r = await fetch("http://127.0.0.1:8765/tools/progress");
+      if (!r.ok) return;
+      const data = await r.json();
+      const progress = data?.progress;
+      if (!progress?.tool) return;
+      const downloaded = Number(progress.downloaded || 0);
+      const total = Number(progress.total || 0);
+      if (total > 0 && downloaded >= 0 && progress.message !== "complete") {
+        setProgress(Math.min(99, (downloaded / total) * 100), toolProgressLabel(progress));
+      } else {
+        setProgressIndeterminate(toolProgressLabel(progress));
+      }
+    } catch {
+      // Helper may still be starting or the popup may be closing.
+    }
+  }, 700);
 }
 
 function startProgressPolling(mediaUrl) {
@@ -650,14 +694,20 @@ if (helperTools) {
   helperTools.addEventListener("click", async () => {
     helperTools.disabled = true;
     helperText.textContent = "Installing video tools...";
-    const resp = await sendMessage({ type: "fcdl:helper_ensure_tools" }, 10 * 60 * 1000);
-    helperTools.disabled = false;
-    await renderHelperStatus(true);
-    if (!resp?.ok) {
-      setErrorStatus(resp?.error, "Could not install Companion video tools.");
-      return;
+    startToolProgressPolling();
+    try {
+      const resp = await sendMessage({ type: "fcdl:helper_ensure_tools" }, 10 * 60 * 1000);
+      if (!resp?.ok) {
+        setErrorStatus(resp?.error, "Could not install Companion video tools.");
+        return;
+      }
+      setProgress(100, "Companion video tools are ready.");
+      setTimeout(() => setStatus("Companion video tools are ready.", "success"), 1200);
+    } finally {
+      stopToolProgressPolling();
+      helperTools.disabled = false;
+      await renderHelperStatus(true);
     }
-    setStatus("Companion video tools are ready.", "success");
   });
 }
 
