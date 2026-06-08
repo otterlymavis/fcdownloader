@@ -66,20 +66,39 @@ URLS = {
     "Xiaohongshu":   ("http://xhslink.com/o/AuDpBCMNn0z", "server /extract is gated -> FAIL here is expected; the APP extracts on-device (use --device)"),
     "Douyin":        ("https://www.douyin.com/video/6918273131559881997", "LOGIN-GATED: Douyin requires fresh cookies / auth from server IPs"),
     # ── Japanese / Korean Video & Streaming ──────────────────────────────
-    "NicoNico":      ("https://www.nicovideo.jp/watch/sm17517479", "some content login/geo-gated"),
-    "TVer":          ("https://tver.jp/episodes/epc1hdugbk", "GEO-LOCKED to Japan"),
+    "NicoNico":      ("https://www.nicovideo.jp/watch/sm9", "verified public sample; some content login/geo-gated"),
+    "TVer":          ("https://tver.jp/episodes/epc1hdugbk", "geo-sensitive; passes from a Japan IP"),
     "ABEMA":         ("https://abema.tv/video/episode/194-25_s2_p1", ""),
     "NHK":           ("https://www3.nhk.or.jp/nhkworld/en/shows/2049165/", ""),
     "TwitCasting":   ("https://twitcasting.tv/ivetesangalo/movie/2357609", ""),
-    "FC2 Video":     ("http://video.fc2.com/en/content/20121103kUan1KHs", ""),
+    "FC2 Video":     ("http://video.fc2.com/en/content/20121103kUan1KHs", "yt-dlp returns a playable HLS URL without a formats list"),
     "FC2 Live":      ("https://live.fc2.com/57892267/", ""),
-    "OpenREC":       ("https://www.openrec.tv/movie/nqz5xl5km8v", ""),
-    "TBS":           ("https://www.tbs.com/shows/american-dad/season-6/episode-12/you-debt-your-life", ""),
-    "FOD / Fuji TV": ("https://fod.fujitv.co.jp/title/5d40/5d40110076", ""),
+    "OpenREC":       ("https://www.openrec.tv/capture/l9nk2x4gn14", "verified public capture; some movies require auth"),
+    "TBS":           ("https://cu.tbs.co.jp/episode/11578", "GEO/AUTH/CURRENT-EPISODE: TBS FREE URLs expire or require current playback metadata"),
+    "FOD / Fuji TV": ("https://fod.fujitv.co.jp/title/5d40/5d40110076", "AUTH/CURRENT-EPISODE: sample now returns empty media JSON without a FOD session"),
     "Naver TV":      ("http://tv.naver.com/v/81652", ""),
     "Kakao TV":      ("http://tv.kakao.com/channel/2671005/cliplink/301965083", ""),
-    "Yahoo Japan video/news": ("https://news.yahoo.co.jp/articles/a70fe3a064f1cfec937e2252c7fc6c1ba3201c0e", "datacenter fetches often 403"),
-    "DMM":           ("https://www.dmm.co.jp/mono/dvd/-/detail/=/cid=3841h_015/", "GEO-LOCKED: DMM requires Japan IP"),
+    "Yahoo Japan video/news": ("https://news.yahoo.co.jp/articles/aa49a2a047b9bb814c4cf9cb07222a85da7db104", "video articles expire quickly; refresh from /ranking/access/video when stale"),
+    "DMM":           ("https://www.dmm.co.jp/mono/dvd/-/detail/=/cid=3841h_015/", "AGE-GATED/STALE SAMPLE: DMM/FANZA requires age confirmation and current product URLs"),
+    "Lemino":        ("https://lemino.docomo.ne.jp/", "AUTH/DRM/GEO: requires Japan IP plus current browser playback; DRM titles cannot be downloaded"),
+    "U-NEXT":        ("https://video.unext.jp/", "AUTH/DRM/GEO: requires logged-in Japan browser session; DRM titles cannot be downloaded"),
+    "Hulu Japan":    ("https://www.hulu.jp/", "AUTH/DRM/GEO: Hulu Japan is Japan-only and session/DRM restricted"),
+    "TELASA":        ("https://www.telasa.jp/", "AUTH/DRM/GEO: requires Japan IP plus current browser playback"),
+    "NHK Plus":      ("https://plus.nhk.jp/", "AUTH/GEO/CURRENT-EPISODE: use current browser playback capture"),
+    "NHK On Demand": ("https://www.nhk-ondemand.jp/", "AUTH/DRM/GEO: paid/current session required"),
+    "WOWOW On Demand": ("https://wod.wowow.co.jp/", "AUTH/DRM/GEO: paid/current session required"),
+    "d Anime Store": ("https://animestore.docomo.ne.jp/", "AUTH/DRM/GEO: paid/current session required"),
+    "Bandai Channel": ("https://www.b-ch.com/", "AUTH/DRM/GEO: paid/current session required"),
+    "Rakuten TV Japan": ("https://tv.rakuten.co.jp/", "AUTH/DRM/GEO: paid/current session required"),
+    "J SPORTS On Demand": ("https://jod.jsports.co.jp/", "AUTH/DRM/GEO: paid/current session required"),
+    "SPOOX":         ("https://spoox.skyperfectv.co.jp/", "AUTH/DRM/GEO: paid/current session required"),
+    "Locipo":        ("https://locipo.jp/", "GEO/CURRENT-EPISODE: broadcaster catch-up playback requires current Japan browser session"),
+    "MBS Dougaizm":  ("https://dougaizm.mbs.jp/", "GEO/CURRENT-EPISODE: broadcaster catch-up playback requires current Japan browser session"),
+    "ytv MyDo":      ("https://www.ytv.co.jp/mydo/", "GEO/CURRENT-EPISODE: broadcaster catch-up playback requires current Japan browser session"),
+    "TV Tokyo video": ("https://video.tv-tokyo.co.jp/", "GEO/CURRENT-EPISODE: broadcaster catch-up playback requires current Japan browser session"),
+    "TV Asahi Douga": ("https://douga.tv-asahi.co.jp/", "GEO/CURRENT-EPISODE: broadcaster catch-up playback requires current Japan browser session"),
+    "KTV Smart":     ("https://ktv-smart.jp/", "GEO/CURRENT-EPISODE: broadcaster catch-up playback requires current Japan browser session"),
+    "Nippon TV VOD": ("https://vod.ntv.co.jp/", "GEO/CURRENT-EPISODE: broadcaster catch-up playback requires current Japan browser session"),
     # ── Japanese / Korean News, Magazines, Blogs & Galleries ─────────────
     "Oricon":        ("https://www.oricon.co.jp/news/2285123/full/", "article with images"),
     "Modelpress":    ("https://mdpr.jp/photo/detail/20095233", "photo gallery"),
@@ -214,6 +233,19 @@ def test_server(url, backend, timeout=75, cookies=None):
         return ("FAIL", str(e)[:70], time.time() - t0)
 
 
+def is_expected_blocked(note):
+    note_upper = (note or "").upper()
+    return any(marker in note_upper for marker in (
+        "AUTH/",
+        "AGE-GATED",
+        "CURRENT-EPISODE",
+        "LOGIN-GATED",
+        "GEO-LOCKED",
+        "DRM",
+        "OFFLINE",
+    ))
+
+
 def inject_device(url):
     enc = urllib.parse.quote(url, safe="")
     subprocess.run(
@@ -256,16 +288,20 @@ def main():
     print(f"Testing {len(items)} platforms against {args.server}/extract\n")
     width = max(len(k) for k, _ in items)
     npass = 0
+    nexpected = 0
     for name, (url, note) in items:
         status, detail, dt = test_server(url, args.server, cookies=cookies)
         if status == "PASS":
             npass += 1
-        mark = "PASS" if status == "PASS" else "FAIL"
+        expected_blocked = status != "PASS" and is_expected_blocked(note)
+        if expected_blocked:
+            nexpected += 1
+        mark = "PASS" if status == "PASS" else ("EXPECTED" if expected_blocked else "FAIL")
         line = f"[{mark}] {name.ljust(width)}  {detail}  ({dt:.1f}s)"
         if note:
             line += f"  <{note}>"
         print(line)
-    print(f"\n{npass}/{len(items)} passed")
+    print(f"\n{npass}/{len(items)} passed ({nexpected} expected blocked)")
 
 
 if __name__ == "__main__":

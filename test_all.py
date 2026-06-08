@@ -16,7 +16,7 @@ URLS = {
     "Naver TV": "https://tv.naver.com/v/33215888",
     "Kakao TV": "https://tv.kakao.com/channel/3268481/cliplink/436329432",
     "Niconico": "https://www.nicovideo.jp/watch/1173108780",
-    "TVer": "https://tver.jp/episodes/epc1hdugbk",
+    "TVer": "https://tver.jp/episodes/epqbt0uzhh",
     "Abema": "https://abema.tv/video/episode/90-1869_s1_p1"
 }
 

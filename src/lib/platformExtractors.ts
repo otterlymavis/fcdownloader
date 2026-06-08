@@ -39,6 +39,14 @@ export function isJapaneseDomain(url: string): boolean {
       'eiga.com', 'realsound.jp', 'jprime.jp', 'smart-flash.jp',
       'pixiv.net', 'fanbox.cc',
       'gyao.jp', 'hulu.jp', 'openrec.tv', 'mildom.com',
+      'lemino.docomo.ne.jp', 'animestore.docomo.ne.jp', 'video.dmkt-sp.jp',
+      'unext.jp', 'video.unext.jp', 'telasa.jp', 'plus.nhk.jp',
+      'nhk-ondemand.jp', 'wowow.co.jp', 'wod.wowow.co.jp', 'b-ch.com',
+      'bandainamcoid.com', 'tv.rakuten.co.jp', 'jod.jsports.co.jp',
+      'jsports.co.jp', 'spoox.skyperfectv.co.jp', 'skyperfectv.co.jp',
+      'locipo.jp', 'dougaizm.mbs.jp', 'mbs.jp', 'ytv.co.jp',
+      'video.tv-tokyo.co.jp', 'douga.tv-asahi.co.jp', 'ktv-smart.jp',
+      'ktv.jp', 'vod.ntv.co.jp', 'cu.ntv.co.jp',
     ];
     return JAPANESE_DOMAINS.some(d => host === d || host.endsWith('.' + d));
   } catch {
@@ -553,11 +561,160 @@ async function extractYouTube(pageUrl: string): Promise<DetectedMedia[]> {
 }
 
 // ── TVer ──────────────────────────────────────────────────────────
+type TVerSession = {
+  result?: {
+    platform_uid?: string;
+    platform_token?: string;
+  };
+};
+
+type TVerEpisodeResponse = {
+  result?: {
+    episode?: {
+      content?: {
+        title?: string;
+        seriesTitle?: string;
+        version?: number | string;
+        duration?: number;
+      };
+    };
+  };
+};
+
+type TVerEpisodeInfo = {
+  title?: string;
+  description?: string;
+  duration?: number;
+  streaks?: {
+    videoRefID?: string;
+    projectID?: string;
+  };
+};
+
+type TVerStreaksInfo = Record<string, {
+  api_key?: Record<string, string>;
+}>;
+
+type TVerPlayback = {
+  name?: string;
+  duration?: number;
+  sources?: Array<{
+    src?: string;
+    type?: string;
+    key_systems?: unknown;
+  }>;
+};
+
+async function extractTVerViaStreaks(pageUrl: string, episodeId: string): Promise<DetectedMedia[]> {
+  const sessionRes = await fetch(
+    'https://platform-api.tver.jp/v2/api/platform_users/browser/create',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': DESKTOP_UA,
+      },
+      body: 'device_type=pc',
+    },
+  );
+  if (!sessionRes.ok) return [];
+  const session = (await sessionRes.json()) as TVerSession;
+  const platformUid = session.result?.platform_uid;
+  const platformToken = session.result?.platform_token;
+  if (!platformUid || !platformToken) return [];
+
+  const query = new URLSearchParams({
+    platform_uid: platformUid,
+    platform_token: platformToken,
+    require_data: `mylist,later[${episodeId}],good[${episodeId}],resume[${episodeId}]`,
+  });
+  const episodeRes = await fetch(
+    `https://platform-api.tver.jp/service/api/v1/callEpisode/${episodeId}?${query.toString()}`,
+    {
+      headers: {
+        'x-tver-platform-type': 'web',
+        'Origin': 'https://tver.jp',
+        'Referer': 'https://tver.jp/',
+        'User-Agent': DESKTOP_UA,
+      },
+    },
+  );
+  if (!episodeRes.ok) return [];
+  const episode = (await episodeRes.json()) as TVerEpisodeResponse;
+  const content = episode.result?.episode?.content;
+  const version = content?.version ?? 5;
+
+  const infoRes = await fetch(
+    `https://statics.tver.jp/content/episode/${episodeId}.json?v=${encodeURIComponent(String(version))}`,
+    {
+      headers: {
+        'Referer': 'https://tver.jp/',
+        'User-Agent': DESKTOP_UA,
+      },
+    },
+  );
+  if (!infoRes.ok) return [];
+  const episodeInfo = (await infoRes.json()) as TVerEpisodeInfo;
+  const projectId = episodeInfo.streaks?.projectID;
+  const videoRefId = episodeInfo.streaks?.videoRefID;
+  if (!projectId || !videoRefId) return [];
+
+  const streaksInfoRes = await fetch('https://player.tver.jp/player/streaks_info_v2.json', {
+    headers: { 'User-Agent': DESKTOP_UA },
+  });
+  if (!streaksInfoRes.ok) return [];
+  const streaksInfo = (await streaksInfoRes.json()) as TVerStreaksInfo;
+  const apiKeys = streaksInfo[projectId]?.api_key ?? {};
+  const jstMonth = new Date(Date.now() + 9 * 60 * 60 * 1000).getUTCMonth() + 1;
+  const preferredKeyName = `key0${jstMonth % 6 || 6}`;
+  const apiKeyEntries = [
+    [preferredKeyName, apiKeys[preferredKeyName]],
+    ...Object.entries(apiKeys).filter(([name]) => name !== preferredKeyName),
+  ].filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0);
+
+  for (const [, apiKey] of apiKeyEntries) {
+    const playbackRes = await fetch(
+      `https://playback.api.streaks.jp/v1/projects/${encodeURIComponent(projectId)}/medias/ref:${encodeURIComponent(videoRefId)}`,
+      {
+        headers: {
+          'Accept': 'application/json',
+          'Origin': 'https://tver.jp',
+          'Referer': 'https://tver.jp/',
+          'User-Agent': DESKTOP_UA,
+          'X-Streaks-Api-Key': apiKey,
+        },
+      },
+    );
+    if (!playbackRes.ok) continue;
+    const playback = (await playbackRes.json()) as TVerPlayback;
+    const sources = playback.sources ?? [];
+    const title = [content?.seriesTitle, content?.title].filter(Boolean).join(' ') || playback.name || episodeInfo.title || 'TVer';
+    return sources
+      .filter(source => source.src && !source.key_systems && /mpegurl|m3u8/i.test(`${source.type ?? ''} ${source.src}`))
+      .map(source => ({
+        ...makeItem(source.src!, pageUrl, 'TVer HLS', 'social-extractor', 0.92),
+        httpHeaders: {
+          'Origin': 'https://tver.jp',
+          'Referer': 'https://tver.jp/',
+          'User-Agent': DESKTOP_UA,
+        },
+        sourceTitle: title,
+        duration: playback.duration ?? episodeInfo.duration ?? content?.duration,
+        thumbnailUrl: `https://statics.tver.jp/images/content/thumbnail/episode/xlarge/${episodeId}.jpg?v=${version}`,
+      }));
+  }
+
+  return [];
+}
+
 async function extractTVer(pageUrl: string): Promise<DetectedMedia[]> {
   try {
     const episodeMatch = pageUrl.match(/tver\.jp\/episodes\/(ep[A-Za-z0-9]+)/);
     if (!episodeMatch) return [];
     const episodeId = episodeMatch[1];
+
+    const streaksResults = await extractTVerViaStreaks(pageUrl, episodeId);
+    if (streaksResults.length > 0) return streaksResults;
 
     const res = await fetch(
       `https://platform-api.tver.jp/service/api/v1/callEpisode/${episodeId}`,
@@ -1317,6 +1474,7 @@ const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[
   { re: /(?:mdpr\.jp\/|modelpress\.jp\/)/,                                         fn: extractModelpress  },
   { re: /(?:ameba\.jp\/[^/]+\/entry\/\d+|ameblo\.jp\/[^/]+\/entry-\d+)/,           fn: extractAmeba       },
   { re: /pixiv\.net\/(?:en\/)?artworks?\/\d+|pixiv\.net\/.*illust_id=\d+/,         fn: extractPixiv       },
+  { re: /(?:lemino\.docomo\.ne\.jp|animestore\.docomo\.ne\.jp|video\.dmkt-sp\.jp|unext\.jp|video\.unext\.jp|hulu\.jp|telasa\.jp|plus\.nhk\.jp|nhk-ondemand\.jp|wowow\.co\.jp|wod\.wowow\.co\.jp|b-ch\.com|bandainamcoid\.com|tv\.rakuten\.co\.jp|jod\.jsports\.co\.jp|jsports\.co\.jp|spoox\.skyperfectv\.co\.jp|skyperfectv\.co\.jp|locipo\.jp|dougaizm\.mbs\.jp|mbs\.jp\/douga|ytv\.co\.jp\/mydo|video\.tv-tokyo\.co\.jp|douga\.tv-asahi\.co\.jp|ktv-smart\.jp|ktv\.jp|vod\.ntv\.co\.jp|cu\.ntv\.co\.jp)/i, fn: extractJapaneseGeneric },
   { re: /(?:natalie\.mu|oricon\.co\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net|trilltrill\.jp|note\.com|lineblog\.me|hatenablog\.(?:com|jp)|hatenadiary\.(?:com|jp)|hatena\.ne\.jp|blog\.fc2\.com|gyazo\.com|seiga\.nicovideo\.jp|story\.kakao\.com)/i, fn: extractCuratedArticle },
 ];
 

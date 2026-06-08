@@ -466,6 +466,14 @@ _HEADERED_DIRECT_HOSTS = (
     "sanspo.com", "mainichi.jp", "asahi.com", "yomiuri.co.jp", "sankei.com",
     "tokyo-np.co.jp", "kyodo.co.jp", "47news.jp", "jiji.com", "itmedia.co.jp",
     "impress.co.jp", "mynavi.jp", "ascii.jp", "gigazine.net",
+    "lemino.docomo.ne.jp", "animestore.docomo.ne.jp", "video.dmkt-sp.jp",
+    "unext.jp", "video.unext.jp", "hulu.jp", "telasa.jp",
+    "plus.nhk.jp", "nhk-ondemand.jp", "wowow.co.jp", "wod.wowow.co.jp",
+    "b-ch.com", "bandainamcoid.com", "tv.rakuten.co.jp",
+    "jod.jsports.co.jp", "jsports.co.jp", "spoox.skyperfectv.co.jp",
+    "skyperfectv.co.jp", "locipo.jp", "dougaizm.mbs.jp", "mbs.jp",
+    "ytv.co.jp", "video.tv-tokyo.co.jp", "douga.tv-asahi.co.jp",
+    "ktv-smart.jp", "ktv.jp", "vod.ntv.co.jp", "cu.ntv.co.jp",
 )
 
 _SINA_CDN_SUFFIXES = ("sinaimg.cn", "weibocdn.com")
@@ -486,7 +494,15 @@ _MEDIA_HINT_HOST_RE = re.compile(
     r"brightcove\.net|boltdns\.net|bcovlive-a\.akamaihd\.net|bcovlive\.io|akamaihd\.net|"
     r"akamaized\.net|vod-abematv|linear-abematv|nimg\.jp|dmc\.nico|yimg\.jp|"
     r"gyao\.yahoo\.co\.jp|fod-sp\.fujitv\.co\.jp|streaming\.yahoo\.co\.jp|"
-    r"tver\.jp|tver\.co\.jp|edgekey\.net|edgesuite\.net|hdslb\.com|biliimg\.com)",
+    r"tver\.jp|tver\.co\.jp|(?:[a-z0-9-]+\.)*streaks\.jp|i\.fod\.fujitv\.co\.jp|"
+    r"free\.tbs\.co\.jp|dmm\.co\.jp|dmm\.com|fanza\.jp|lemino\.docomo\.ne\.jp|"
+    r"animestore\.docomo\.ne\.jp|video\.dmkt-sp\.jp|unext\.jp|video\.unext\.jp|"
+    r"hulu\.jp|telasa\.jp|plus\.nhk\.jp|nhk-ondemand\.jp|wowow\.co\.jp|"
+    r"wod\.wowow\.co\.jp|b-ch\.com|bandainamcoid\.com|tv\.rakuten\.co\.jp|"
+    r"jod\.jsports\.co\.jp|jsports\.co\.jp|spoox\.skyperfectv\.co\.jp|"
+    r"skyperfectv\.co\.jp|locipo\.jp|dougaizm\.mbs\.jp|mbs\.jp|ytv\.co\.jp|"
+    r"video\.tv-tokyo\.co\.jp|douga\.tv-asahi\.co\.jp|ktv-smart\.jp|ktv\.jp|"
+    r"vod\.ntv\.co\.jp|cu\.ntv\.co\.jp|edgekey\.net|edgesuite\.net|hdslb\.com|biliimg\.com)",
     re.I,
 )
 

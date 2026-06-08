@@ -112,9 +112,10 @@ const REGISTRY: SiteEntry[] = [
   {
     pattern: /tver\.jp\/episodes\//i,
     caps: {
-      preferredStrategies: ['server-download', 'hls-segments'],
+      preferredStrategies: ['hls-segments', 'server-download'],
       acceptLanguage: 'ja,en-US;q=0.9',
-      notes: 'Japanese AVOD service; platform API returns HLS manifests',
+      preferOnDevice: true,
+      notes: 'Japanese AVOD service; Streaks playback API returns HLS manifests and should use the device/VPN IP first',
     },
   },
   // ── NicoNico ──────────────────────────────────────────────────────────────
@@ -134,6 +135,62 @@ const REGISTRY: SiteEntry[] = [
       preferredStrategies: ['server-download', 'hls-segments'],
       acceptLanguage: 'ja,en-US;q=0.9',
       notes: 'DRM-free streams use HLS; yt-dlp with Japanese headers handles most content',
+    },
+  },
+  // ── Japanese video portals ────────────────────────────────────────────────
+  {
+    pattern: /(?:cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp)\//i,
+    caps: {
+      preferredStrategies: ['server-download', 'hls-segments'],
+      acceptLanguage: 'ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5',
+      preferOnDevice: true,
+      notes: 'TBS/TBS FREE pages are geo-sensitive and commonly require current episode URLs',
+    },
+  },
+  {
+    pattern: /(?:fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp)\//i,
+    caps: {
+      preferredStrategies: ['server-download', 'hls-segments'],
+      acceptLanguage: 'ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5',
+      preferOnDevice: true,
+      notes: 'FOD/Fuji TV pages are often auth, DRM, or current-episode restricted',
+    },
+  },
+  {
+    pattern: /(?:video\.yahoo\.co\.jp|news\.yahoo\.co\.jp|gyao\.yahoo\.co\.jp)\//i,
+    caps: {
+      preferredStrategies: ['server-download', 'hls-segments', 'direct'],
+      acceptLanguage: 'ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5',
+      preferOnDevice: true,
+      notes: 'Yahoo Japan video articles expire quickly; use current ranking/video URLs',
+    },
+  },
+  {
+    pattern: /(?:openrec\.tv|video\.fc2\.com|live\.fc2\.com|fc2\.com\/video|dmm\.co\.jp|dmm\.com|fanza\.jp)\//i,
+    caps: {
+      preferredStrategies: ['server-download', 'hls-segments'],
+      acceptLanguage: 'ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5',
+      preferOnDevice: true,
+      notes: 'Japanese video sites with auth, age-gate, live/offline, or geo-sensitive availability',
+    },
+  },
+  {
+    pattern: /(?:lemino\.docomo\.ne\.jp|animestore\.docomo\.ne\.jp|video\.dmkt-sp\.jp|unext\.jp|video\.unext\.jp|hulu\.jp|telasa\.jp|plus\.nhk\.jp|nhk-ondemand\.jp|wowow\.co\.jp|wod\.wowow\.co\.jp|b-ch\.com|bandainamcoid\.com|tv\.rakuten\.co\.jp|jod\.jsports\.co\.jp|jsports\.co\.jp|spoox\.skyperfectv\.co\.jp|skyperfectv\.co\.jp)\//i,
+    caps: {
+      preferredStrategies: ['hls-segments', 'server-download'],
+      requiresAuth: true,
+      acceptLanguage: 'ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5',
+      preferOnDevice: true,
+      notes: 'Japanese SVOD/paid streaming services usually require a Japan IP plus browser session; DRM-protected titles cannot be downloaded',
+    },
+  },
+  {
+    pattern: /(?:locipo\.jp|dougaizm\.mbs\.jp|mbs\.jp\/douga|ytv\.co\.jp\/mydo|video\.tv-tokyo\.co\.jp|douga\.tv-asahi\.co\.jp|ktv-smart\.jp|ktv\.jp|vod\.ntv\.co\.jp|cu\.ntv\.co\.jp)\//i,
+    caps: {
+      preferredStrategies: ['hls-segments', 'server-download', 'direct'],
+      acceptLanguage: 'ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5',
+      preferOnDevice: true,
+      notes: 'Japanese broadcaster catch-up portals are geo-sensitive and often expose playable HLS only after the browser player loads',
     },
   },
   // Naver
@@ -214,4 +271,3 @@ export function getSiteCapabilities(url: string): SiteCapabilities | undefined {
 export function getAcceptLanguage(url: string, fallback = 'en-US,en;q=0.9'): string {
   return getSiteCapabilities(url)?.acceptLanguage ?? acceptLanguageForUrl(url, fallback);
 }
-

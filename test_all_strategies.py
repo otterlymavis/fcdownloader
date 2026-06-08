@@ -557,7 +557,7 @@ PLATFORMS = [
     ], "🌐 browser-only: douyin live video extract"),
 
     # ── Japanese / Korean Video & Streaming ──────────────────────────────
-    ("NicoNico", "https://www.nicovideo.jp/watch/sm17517479", [
+    ("NicoNico", "https://www.nicovideo.jp/watch/sm9", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -599,13 +599,13 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: FC2 Live extraction"),
 
-    ("OpenREC", "https://www.openrec.tv/movie/nqz5xl5km8v", [
+    ("OpenREC", "https://www.openrec.tv/capture/l9nk2x4gn14", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: openrec VOD capture"),
 
-    ("TBS", "https://www.tbs.com/shows/american-dad/season-6/episode-12/you-debt-your-life", [
+    ("TBS", "https://cu.tbs.co.jp/episode/11578", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
         ("local helper",             strat_local_helper,  {}),
@@ -629,7 +629,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: Kakao video stream capture"),
 
-    ("Yahoo Japan video/news", "https://news.yahoo.co.jp/articles/a70fe3a064f1cfec937e2252c7fc6c1ba3201c0e", [
+    ("Yahoo Japan video/news", "https://news.yahoo.co.jp/articles/aa49a2a047b9bb814c4cf9cb07222a85da7db104", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -640,6 +640,42 @@ PLATFORMS = [
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: DMM video extraction"),
+
+    ("Lemino / docomo video", "https://lemino.docomo.ne.jp/", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "🌐 browser-only: Japan IP/session playback capture; DRM titles cannot be downloaded"),
+
+    ("U-NEXT", "https://video.unext.jp/", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "🌐 browser-only: Japan IP/session playback capture; DRM titles cannot be downloaded"),
+
+    ("Hulu Japan / TELASA", "https://www.hulu.jp/", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "🌐 browser-only: paid/current session; DRM titles cannot be downloaded"),
+
+    ("Locipo / broadcaster catch-up", "https://locipo.jp/", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "🌐 browser-only: current episode player capture after geo/session checks"),
+
+    ("MBS Dougaizm", "https://dougaizm.mbs.jp/", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "🌐 browser-only: current episode player capture after geo/session checks"),
+
+    ("NHK Plus / On Demand", "https://plus.nhk.jp/", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "🌐 browser-only: current episode/session capture; paid On Demand may be DRM"),
 
     # ── Japanese / Korean News, Magazines, Blogs & Galleries ─────────────
     ("Oricon", "https://www.oricon.co.jp/news/2285123/full/", [

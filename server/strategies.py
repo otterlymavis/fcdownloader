@@ -1825,9 +1825,73 @@ def run_extraction(
     _has_403 = "403" in reason_lower or "forbidden" in reason_lower
     _has_auth = any(k in reason_lower for k in ("sign in", "login", "auth", "cookie"))
     _has_geo = any(k in reason_lower for k in ("geo", "region", "country", "not available"))
+    _host = (urllib.parse.urlsplit(page_url).hostname or "").lower()
+    _is_fod = _host.endswith("fod.fujitv.co.jp") or _host.endswith("fod-sp.fujitv.co.jp") or _host.endswith("fujitv.co.jp")
+    _is_tbs_free = _host.endswith("cu.tbs.co.jp")
+    _is_dmm = _host.endswith("dmm.co.jp") or _host.endswith("dmm.com") or _host.endswith("fanza.jp")
+    _is_jp_svod = any(
+        _host.endswith(h)
+        for h in (
+            "lemino.docomo.ne.jp", "animestore.docomo.ne.jp", "video.dmkt-sp.jp",
+            "unext.jp", "video.unext.jp", "hulu.jp", "telasa.jp",
+            "plus.nhk.jp", "nhk-ondemand.jp", "wowow.co.jp", "wod.wowow.co.jp",
+            "b-ch.com", "bandainamcoid.com", "tv.rakuten.co.jp",
+            "jod.jsports.co.jp", "jsports.co.jp", "spoox.skyperfectv.co.jp",
+            "skyperfectv.co.jp",
+        )
+    )
+    _is_jp_catchup = any(
+        _host.endswith(h)
+        for h in (
+            "locipo.jp", "dougaizm.mbs.jp", "mbs.jp", "ytv.co.jp",
+            "video.tv-tokyo.co.jp", "douga.tv-asahi.co.jp", "ktv-smart.jp",
+            "ktv.jp", "vod.ntv.co.jp", "cu.ntv.co.jp",
+        )
+    )
 
     error_code: str | None = None
-    if _has_auth or (_has_403 and not cookies):
+    if _is_dmm:
+        error_code = "AUTH_REQUIRED"
+        detail = (
+            "DMM/FANZA pages are age-gated and many product URLs expire or move. "
+            "Open the current page in a browser, complete age confirmation, then "
+            "use the FCDownloader extension or bookmarklet so the extractor can "
+            "receive the browser session."
+        )
+    elif _is_fod:
+        error_code = "AUTH_REQUIRED"
+        detail = (
+            "FOD/Fuji TV playback commonly requires a current episode URL and a "
+            "browser session. Open the episode in your browser or in-app WebView, "
+            "wait for the player to load, then use FCDownloader so the session "
+            "and runtime stream URL can be captured."
+        )
+    elif _is_tbs_free:
+        error_code = "AUTH_REQUIRED"
+        detail = (
+            "TBS FREE episode pages now load playback metadata in the browser and "
+            "older episode URLs expire quickly. Open a current episode in the "
+            "browser, wait for playback, then use FCDownloader's browser/extension "
+            "capture path."
+        )
+    elif _is_jp_svod:
+        error_code = "AUTH_REQUIRED"
+        detail = (
+            "This Japanese streaming service usually requires a Japan IP, a current "
+            "logged-in browser session, and sometimes DRM. Open the title in the "
+            "browser, start playback, then use FCDownloader's browser/extension "
+            "capture path. If the captured stream is DRM-protected, FCDownloader "
+            "cannot download it."
+        )
+    elif _is_jp_catchup:
+        error_code = "AUTH_REQUIRED"
+        detail = (
+            "This Japanese catch-up TV portal is geo-sensitive and commonly exposes "
+            "playback URLs only after its browser player loads. Open a current episode "
+            "from Japan, start playback, then use FCDownloader's browser/extension "
+            "capture path."
+        )
+    elif _has_auth or (_has_403 and not cookies):
         error_code = "AUTH_REQUIRED"
         detail = (
             "This page requires you to be signed in, or the server's IP is "

@@ -101,7 +101,7 @@ _REGISTRY: list[ExtractorCapabilities] = [
         hls_common=True,
     ),
     ExtractorCapabilities(
-        hosts=("dmm.co.jp", "dmm.com"),
+        hosts=("dmm.co.jp", "dmm.com", "fanza.jp"),
         requires_ja_locale=True,
     ),
     ExtractorCapabilities(
@@ -195,6 +195,30 @@ _REGISTRY: list[ExtractorCapabilities] = [
         requires_referer=True,
     ),
     ExtractorCapabilities(
+        hosts=(
+            "lemino.docomo.ne.jp", "animestore.docomo.ne.jp", "video.dmkt-sp.jp",
+            "unext.jp", "video.unext.jp", "hulu.jp", "telasa.jp",
+            "plus.nhk.jp", "nhk-ondemand.jp", "wowow.co.jp", "wod.wowow.co.jp",
+            "b-ch.com", "bandainamcoid.com", "tv.rakuten.co.jp",
+            "jod.jsports.co.jp", "jsports.co.jp",
+            "spoox.skyperfectv.co.jp", "skyperfectv.co.jp",
+        ),
+        requires_auth_on_datacenter=True,
+        requires_ja_locale=True,
+        hls_common=True,
+        requires_referer=True,
+    ),
+    ExtractorCapabilities(
+        hosts=(
+            "locipo.jp", "dougaizm.mbs.jp", "mbs.jp/douga", "ytv.co.jp/mydo",
+            "video.tv-tokyo.co.jp", "douga.tv-asahi.co.jp", "ktv-smart.jp",
+            "ktv.jp", "vod.ntv.co.jp", "cu.ntv.co.jp",
+        ),
+        requires_ja_locale=True,
+        hls_common=True,
+        requires_referer=True,
+    ),
+    ExtractorCapabilities(
         hosts=("vimeo.com",),
         # Embed-only videos require the embedding page as Referer.
         requires_referer=True,
@@ -268,6 +292,14 @@ def is_japanese_domain(url: str) -> bool:
         "openrec.tv",
         "mildom.com",
         "pixiv.net", "fanbox.cc",
+        "lemino.docomo.ne.jp", "animestore.docomo.ne.jp", "video.dmkt-sp.jp",
+        "unext.jp", "video.unext.jp", "hulu.jp", "telasa.jp",
+        "plus.nhk.jp", "nhk-ondemand.jp", "wowow.co.jp", "wod.wowow.co.jp",
+        "b-ch.com", "bandainamcoid.com", "tv.rakuten.co.jp",
+        "jod.jsports.co.jp", "jsports.co.jp", "spoox.skyperfectv.co.jp",
+        "skyperfectv.co.jp", "locipo.jp", "dougaizm.mbs.jp", "mbs.jp",
+        "ytv.co.jp", "video.tv-tokyo.co.jp", "douga.tv-asahi.co.jp",
+        "ktv-smart.jp", "ktv.jp", "vod.ntv.co.jp", "cu.ntv.co.jp",
         # Japanese media sites with non-.jp TLDs
         "wwdjapan.com",
         "mdpr.jp",

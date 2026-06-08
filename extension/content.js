@@ -282,9 +282,9 @@
       [/"sd_src"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, "direct"],
       // General JSON image/media key names (note.com, trilltrill, API responses)
       [/"(?:article_photo_link|image_url|photo_url|src_url|original_url|cover_url|thumbnail_url|download_url|media_url|play_url|stream_url)"\s*:\s*"(https?:\\?\/\\?\/[^"]{10,})"/gi, "image"],
-      [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|vod\.pstatic\.net)[^"'\\<>\s]*\.(?:mp4|m3u8)[^"'\\<>\s]*)/g, "direct"],
+      [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:(?:[a-z0-9-]+\.)*streaks\.jp|i\.fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|free\.tbs\.co\.jp|dmm\.co\.jp|dmm\.com|fanza\.jp|lemino\.docomo\.ne\.jp|animestore\.docomo\.ne\.jp|video\.dmkt-sp\.jp|unext\.jp|video\.unext\.jp|hulu\.jp|telasa\.jp|plus\.nhk\.jp|nhk-ondemand\.jp|wowow\.co\.jp|wod\.wowow\.co\.jp|b-ch\.com|bandainamcoid\.com|tv\.rakuten\.co\.jp|jod\.jsports\.co\.jp|jsports\.co\.jp|spoox\.skyperfectv\.co\.jp|skyperfectv\.co\.jp|locipo\.jp|dougaizm\.mbs\.jp|video\.tv-tokyo\.co\.jp|douga\.tv-asahi\.co\.jp|ktv-smart\.jp|vod\.ntv\.co\.jp|cu\.ntv\.co\.jp|cdninstagram\.com|fbcdn\.net|threadscdn\.com|vod\.pstatic\.net)[^"'\\<>\s]*\.(?:mp4|m3u8)[^"'\\<>\s]*)/g, "direct"],
       [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|pinimg\.com|weibocdn\.com|sinaimg\.cn|xhscdn\.com|media\.trilltrill\.jp|obs\.line-scdn\.net|fashionsnap-assets\.com|i\.gyazo\.com)[^"'\\<>\s]*\.(?:jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/g, "image"],
-      [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:weibocdn\.com|xhscdn\.com)[^"'\\<>\s]*\.(?:mp4|m3u8|mov)[^"'\\<>\s]*)/g, "direct"],
+      [/(https?:\\?\/\\?\/[^"'\\<>\s]*(?:(?:[a-z0-9-]+\.)*streaks\.jp|i\.fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|free\.tbs\.co\.jp|dmm\.co\.jp|dmm\.com|fanza\.jp|lemino\.docomo\.ne\.jp|animestore\.docomo\.ne\.jp|video\.dmkt-sp\.jp|unext\.jp|video\.unext\.jp|hulu\.jp|telasa\.jp|plus\.nhk\.jp|nhk-ondemand\.jp|wowow\.co\.jp|wod\.wowow\.co\.jp|b-ch\.com|bandainamcoid\.com|tv\.rakuten\.co\.jp|jod\.jsports\.co\.jp|jsports\.co\.jp|spoox\.skyperfectv\.co\.jp|skyperfectv\.co\.jp|locipo\.jp|dougaizm\.mbs\.jp|video\.tv-tokyo\.co\.jp|douga\.tv-asahi\.co\.jp|ktv-smart\.jp|vod\.ntv\.co\.jp|cu\.ntv\.co\.jp|weibocdn\.com|xhscdn\.com)[^"'\\<>\s]*\.(?:mp4|m3u8|mov)[^"'\\<>\s]*)/g, "direct"],
     ];
     for (const [re, kind] of patterns) {
       let m;
@@ -597,6 +597,21 @@
       label: "Yahoo Japan",
       host: /(?:^|\.)(?:video\.yahoo\.co\.jp|news\.yahoo\.co\.jp)$/i,
       path: /\/(?:video|articles|pickup|feature)\//i,
+    },
+    {
+      label: "DMM/FANZA",
+      host: /(?:^|\.)(?:dmm\.co\.jp|dmm\.com|fanza\.jp)$/i,
+      path: /\/(?:mono|digital|monthly|video|age_check|-)(?:\/|$)/i,
+    },
+    {
+      label: "Japanese SVOD",
+      host: /(?:^|\.)(?:lemino\.docomo\.ne\.jp|animestore\.docomo\.ne\.jp|video\.dmkt-sp\.jp|unext\.jp|video\.unext\.jp|hulu\.jp|telasa\.jp|plus\.nhk\.jp|nhk-ondemand\.jp|wowow\.co\.jp|wod\.wowow\.co\.jp|b-ch\.com|bandainamcoid\.com|tv\.rakuten\.co\.jp|jod\.jsports\.co\.jp|jsports\.co\.jp|spoox\.skyperfectv\.co\.jp|skyperfectv\.co\.jp)$/i,
+      path: /\/(?:watch|video|vod|content|contents|title|program|episode|episodes|view|play|player|live|ondemand|anime|store)\//i,
+    },
+    {
+      label: "Japanese catch-up",
+      host: /(?:^|\.)(?:locipo\.jp|dougaizm\.mbs\.jp|mbs\.jp|ytv\.co\.jp|video\.tv-tokyo\.co\.jp|douga\.tv-asahi\.co\.jp|ktv-smart\.jp|ktv\.jp|vod\.ntv\.co\.jp|cu\.ntv\.co\.jp)$/i,
+      path: /\/(?:watch|video|vod|douga|mydo|catchup|content|contents|title|program|episode|episodes|view|play|player|live|movie)\//i,
     },
   ];
 
