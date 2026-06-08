@@ -138,23 +138,28 @@ function toolProgressLabel(progress) {
   return `Installing ${name}${attempt}...`;
 }
 
+async function updateToolProgressDisplay() {
+  const r = await fetch("http://127.0.0.1:8765/tools/progress");
+  if (!r.ok) return false;
+  const data = await r.json();
+  const progress = data?.progress;
+  if (!progress?.tool) return false;
+  const downloaded = Number(progress.downloaded || 0);
+  const total = Number(progress.total || 0);
+  if (total > 0 && downloaded >= 0 && progress.message !== "complete") {
+    setProgress(Math.min(99, (downloaded / total) * 100), toolProgressLabel(progress));
+  } else {
+    setProgressIndeterminate(toolProgressLabel(progress));
+  }
+  return true;
+}
+
 function startToolProgressPolling() {
   stopToolProgressPolling();
   setProgressIndeterminate("Installing video tools...");
   toolProgressPollInterval = setInterval(async () => {
     try {
-      const r = await fetch("http://127.0.0.1:8765/tools/progress");
-      if (!r.ok) return;
-      const data = await r.json();
-      const progress = data?.progress;
-      if (!progress?.tool) return;
-      const downloaded = Number(progress.downloaded || 0);
-      const total = Number(progress.total || 0);
-      if (total > 0 && downloaded >= 0 && progress.message !== "complete") {
-        setProgress(Math.min(99, (downloaded / total) * 100), toolProgressLabel(progress));
-      } else {
-        setProgressIndeterminate(toolProgressLabel(progress));
-      }
+      await updateToolProgressDisplay();
     } catch {
       // Helper may still be starting or the popup may be closing.
     }
@@ -174,6 +179,7 @@ function startProgressPolling(mediaUrl) {
       const checkUrl = `http://127.0.0.1:8765/download/progress?${new URLSearchParams({ url: mediaUrl }).toString()}`;
       const r = await fetch(checkUrl);
       if (!r.ok) {
+        await updateToolProgressDisplay();
         return;
       }
       const data = await r.json();
@@ -210,7 +216,11 @@ function startProgressPolling(mediaUrl) {
         progressPollInterval = null;
       }
     } catch (e) {
-      // Ignore network errors while polling
+      try {
+        await updateToolProgressDisplay();
+      } catch {
+        // Ignore network errors while polling
+      }
     }
   }, 1000);
 }
@@ -920,7 +930,7 @@ async function downloadItem(item) {
 
   const resp = await sendMessage(
     { type: "fcdl:download", tabId: currentTabId, item: itemWithDefaults },
-    90000,
+    isCompanion && helperIsReady ? 10 * 60 * 1000 : 90000,
   );
   if (!resp?.ok) {
     if (progressPollInterval) {
