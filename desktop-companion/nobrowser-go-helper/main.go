@@ -227,7 +227,10 @@ func ensureYtDlpTools(ctx context.Context) error {
 		return nil
 	}
 	if _, err := ytDlpNightlyPath(ctx); err != nil {
-		return fmt.Errorf("stable yt-dlp is ready, but YouTube nightly prewarm failed: %w", err)
+		if defaultYtDlpChannel() == "nightly" {
+			return fmt.Errorf("stable yt-dlp is ready, but forced nightly prewarm failed: %w", err)
+		}
+		logf("YouTube nightly prewarm failed; stable yt-dlp remains available: %v", err)
 	}
 	return nil
 }
@@ -913,7 +916,14 @@ func toolStatuses() []toolStatus {
 }
 
 func toolsNeedSetup() bool {
-	for _, tool := range toolStatuses() {
+	return toolsNeedSetupFromStatuses(toolStatuses())
+}
+
+func toolsNeedSetupFromStatuses(tools []toolStatus) bool {
+	for _, tool := range tools {
+		if tool.Name == "yt-dlp-nightly" && defaultYtDlpChannel() != "nightly" {
+			continue
+		}
 		if !tool.Installed || !tool.Verified {
 			return true
 		}

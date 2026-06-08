@@ -213,6 +213,29 @@ func TestToolStatusesIncludeNightlyYtDlp(t *testing.T) {
 	}
 }
 
+func TestToolsNeedSetupTreatsNightlyAsOptionalInAutoMode(t *testing.T) {
+	tools := []toolStatus{
+		{Name: "yt-dlp", Installed: true, Verified: true},
+		{Name: "yt-dlp-nightly", Installed: false, Verified: false},
+		{Name: "ffmpeg", Installed: true, Verified: true},
+	}
+	if toolsNeedSetupFromStatuses(tools) {
+		t.Fatal("auto mode should not require nightly yt-dlp to be prewarmed")
+	}
+}
+
+func TestToolsNeedSetupRequiresNightlyWhenForced(t *testing.T) {
+	t.Setenv("FCDL_YTDLP_CHANNEL", "nightly")
+	tools := []toolStatus{
+		{Name: "yt-dlp", Installed: true, Verified: true},
+		{Name: "yt-dlp-nightly", Installed: false, Verified: false},
+		{Name: "ffmpeg", Installed: true, Verified: true},
+	}
+	if !toolsNeedSetupFromStatuses(tools) {
+		t.Fatal("forced nightly mode should require nightly yt-dlp")
+	}
+}
+
 func TestMediaProgressDoesNotMoveBackward(t *testing.T) {
 	mediaProgressMu.Lock()
 	mediaDownloads = make(map[string]*mediaProgress)
