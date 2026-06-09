@@ -293,6 +293,32 @@ def _attach_source_audit(
     return response
 
 
+def _localize_ytdl_stream_urls(response: dict[str, Any], request: Request) -> dict[str, Any]:
+    """Return same-server ytdl-stream URLs for the current request host."""
+    base = str(request.base_url).rstrip("/")
+
+    def localize(value: Any) -> Any:
+        if not isinstance(value, str) or "/ytdl-stream?" not in value:
+            return value
+        parsed = urllib.parse.urlparse(value)
+        if parsed.path != "/ytdl-stream":
+            return value
+        return urllib.parse.urlunparse((
+            urllib.parse.urlparse(base).scheme,
+            urllib.parse.urlparse(base).netloc,
+            parsed.path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        ))
+
+    localized = dict(response)
+    for key in ("url", "videoUrl", "audioUrl"):
+        if key in localized:
+            localized[key] = localize(localized[key])
+    return localized
+
+
 def _to_response(info: dict[str, Any]) -> dict[str, Any]:
     requested = info.get("requested_formats")
     if requested and len(requested) == 2:
@@ -488,7 +514,7 @@ _REPLAY_HEADER_ALLOW = {
 }
 
 _MEDIA_HINT_HOST_RE = re.compile(
-    r"(?:\.m3u8|\.mpd|\.mp4|\.m4v|\.webm|\.mov|\.mp3|\.m4a|\.aac|\.wav|\.ogg|\.opus|\.flac)(?:[?#]|$)|"
+    r"(?:\.m3u8?|\.mpd|\.mp4|\.m4v|\.webm|\.mov|\.mp3|\.m4a|\.aac|\.wav|\.ogg|\.opus|\.flac)(?:[?#]|$)|"
     r"(?:v\.redd\.it|cdninstagram\.com|fbcdn\.net|threadscdn\.com|bilivideo\.com|xhscdn\.com|"
     r"kakaocdn\.net|daumcdn\.net|pstatic\.net|naver\.net|abema(?:tv)?\.akamaized\.net|"
     r"brightcove\.net|boltdns\.net|bcovlive-a\.akamaihd\.net|bcovlive\.io|akamaihd\.net|"
@@ -533,7 +559,7 @@ def _decode_replay_headers(encoded: str | None) -> dict[str, str]:
 def _direct_media_url_kind(url: str) -> str:
     parsed = urllib.parse.urlparse(url)
     path = parsed.path.lower()
-    if looks_like_hls(url, None) or path.endswith(".m3u8"):
+    if looks_like_hls(url, None) or path.endswith((".m3u", ".m3u8")):
         return "hls"
     if path.endswith((".mp4", ".m4v", ".webm", ".mov", ".mp3", ".m4a", ".aac", ".wav", ".ogg", ".opus", ".flac")):
         return "direct"
@@ -1369,7 +1395,7 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
             json.dumps(req.sourceAudit[:80], sort_keys=True, default=str).encode("utf-8")
         ).hexdigest()[:16]
     if (cached := _cache_get(cache_key_str)) is not None:
-        return cached
+        return _localize_ytdl_stream_urls(cached, request)
 
     ctx = make_context("/extract", req.pageUrl, auth_provided=bool(req.cookies))
 
@@ -1419,6 +1445,8 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
         if subs or auto:
             response["subtitles"]         = subs
             response["automaticCaptions"] = auto
+
+    response = _localize_ytdl_stream_urls(response, request)
 
     if response.get("kind") == "paired":
         rf = info.get("requested_formats", [{}, {}])

@@ -319,6 +319,8 @@ test_all_urls.py              Server /extract only — fast overview
 test_all_strategies.py        All strategies: server + browser simulation + local helper
 test_browser_strategies.py    Browser-side strategies only (no server calls)
 test_server.py                Backend health + individual endpoint tests
+npm run test:strategy-matrices
+                              No-network app/backend strategy matrix drift check
 ```
 
 ```bash
@@ -330,6 +332,9 @@ python test_all_strategies.py reddit bilibili xhs
 
 # Use a different backend
 python test_all_strategies.py --backend https://my-instance.fly.dev
+
+# Verify strategy matrices without network calls
+npm run test:strategy-matrices
 ```
 
 Note: browser-side strategy simulation from Python is limited — it runs from the test machine's IP without real session cookies. Reddit and auth-gated platforms (XHS, Weibo private posts) will fail in Python but work correctly in the real browser extension.

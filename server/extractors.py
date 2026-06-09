@@ -415,6 +415,72 @@ def extract_instagram(page_url: str, cookies: str | None) -> dict[str, Any] | No
     return extract_meta_page(page_url, cookies, "instagram")
 
 
+def extract_dailymotion(page_url: str, cookies: str | None) -> dict[str, Any] | None:
+    """Extract public Dailymotion streams from player metadata."""
+    page_url = normalize_url(page_url)
+    match = re.search(r"dailymotion\.com/video/([A-Za-z0-9]+)", page_url)
+    if not match:
+        return None
+    video_id = match.group(1)
+    metadata_url = f"https://www.dailymotion.com/player/metadata/video/{video_id}"
+    try:
+        req = urllib.request.Request(
+            metadata_url,
+            headers=safe_headers({
+                "User-Agent": _WEIBO_DESKTOP_UA,
+                "Accept": "application/json,text/plain,*/*",
+                "Accept-Language": languages.accept_language_for_url(page_url, "en-US,en;q=0.9"),
+                "Referer": "https://www.dailymotion.com/",
+                **({"Cookie": cookies} if cookies else {}),
+            }),
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[dailymotion] metadata fetch failed: {str(exc)[:200]}")
+        return None
+
+    qualities = data.get("qualities") if isinstance(data, dict) else None
+    if not isinstance(qualities, dict):
+        return None
+
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for quality, items in qualities.items():
+        if not isinstance(items, list):
+            continue
+        q_score = int(quality) if str(quality).isdigit() else (10000 if str(quality).lower() == "auto" else 0)
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            url = safe_text(item.get("url"))
+            if not url.startswith("http"):
+                continue
+            mime = safe_text(item.get("type")).lower()
+            is_hls = ".m3u8" in url.lower() or "mpegurl" in mime
+            ext = "m3u8" if is_hls else guess_ext_from_url(url) or "mp4"
+            candidates.append((q_score + (5000 if is_hls else 0), {
+                "url": url,
+                "ext": ext,
+                "protocol": "m3u8_native" if is_hls else "https",
+                "http_headers": {
+                    "User-Agent": _WEIBO_DESKTOP_UA,
+                    "Referer": page_url,
+                },
+                "title": data.get("title"),
+                "thumbnail": data.get("poster_url") or data.get("thumbnail_url"),
+                "duration": data.get("duration"),
+                "id": video_id,
+                "extractor": "dailymotion-metadata",
+                "format_note": f"{quality}p" if str(quality).isdigit() else str(quality),
+            }))
+
+    if not candidates:
+        return None
+    info = sorted(candidates, key=lambda entry: entry[0])[-1][1]
+    print(f"[dailymotion] metadata: {info['url'][:100]}")
+    return info
+
+
 # ── Modelpress ───────────────────────────────────────────────────────────────
 
 
@@ -1825,9 +1891,9 @@ def extract_curated_site(
         fetch_url = url
         if profile["label"] == "Oricon":
             fetch_url = re.sub(
-                r"^https?://(?:www\.)?oricon\.co\.jp/",
-                "https://contents.oricon.co.jp/",
-                url,
+                r"^https?://(?:www\.)?oricon\.co\.jp/(news/\d+/(?:photo/\d+/|full/)?)",
+                r"https://contents.oricon.co.jp/\1",
+                fetch_url,
                 flags=re.I,
             )
         body, status = fetch_with_retry(

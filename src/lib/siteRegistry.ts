@@ -254,6 +254,37 @@ const REGISTRY: SiteEntry[] = [
       notes: 'hd_src / sd_src in page JSON; mobile UA needed',
     },
   },
+  // General-purpose video/audio platforms supported well by yt-dlp or generic
+  // page scanning. These hints make pasted page URLs route through the broader
+  // extractor instead of being treated like opaque HLS manifests.
+  {
+    pattern: /(?:soundcloud\.com|snd\.sc)\//i,
+    caps: {
+      preferredStrategies: ['server-download', 'direct'],
+      notes: 'Audio pages expose transcoding manifests; yt-dlp handles playlist and track metadata',
+    },
+  },
+  {
+    pattern: /(?:streamable\.com|loom\.com\/share|wistia\.(?:com|net)|fast\.wistia\.net|jwplayer\.com|jwplatform\.com|kaltura\.com|brightcove\.net|players\.brightcove\.net|mux\.com|mux\.dev)\//i,
+    caps: {
+      preferredStrategies: ['server-download', 'hls-segments', 'direct'],
+      notes: 'Embedded player platforms usually expose HLS/DASH or signed MP4 URLs after page/player JSON discovery',
+    },
+  },
+  {
+    pattern: /(?:vk\.com\/(?:video|clip)|ok\.ru\/video|rutube\.ru\/video|rumble\.com\/v|bitchute\.com\/video|odysee\.com\/|lbry\.tv\/)/i,
+    caps: {
+      preferredStrategies: ['server-download', 'hls-segments', 'direct'],
+      notes: 'Regional/social video hosts are best handled by yt-dlp first, with generic manifest scanning as fallback',
+    },
+  },
+  {
+    pattern: /(?:twitch\.tv\/(?:videos|[^/]+\/clip)|clips\.twitch\.tv|kick\.com\/video|kick\.com\/[^/]+\?clip=)/i,
+    caps: {
+      preferredStrategies: ['server-download', 'hls-segments'],
+      notes: 'Live/VOD platforms generally return HLS; clips and VODs may require player-token extraction',
+    },
+  },
 ];
 
 /**

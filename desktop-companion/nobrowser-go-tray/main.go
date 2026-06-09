@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -55,7 +56,6 @@ const (
 	colorWindow     = 5
 	wmCreate        = 0x0001
 	wmClose         = 0x0010
-
 )
 
 var (
@@ -66,7 +66,9 @@ var (
 	procRegisterClassEx  = user32.NewProc("RegisterClassExW")
 	procCreateWindowEx   = user32.NewProc("CreateWindowExW")
 	procDefWindowProc    = user32.NewProc("DefWindowProcW")
+	procFindWindow       = user32.NewProc("FindWindowW")
 	procLoadIcon         = user32.NewProc("LoadIconW")
+	procPostMessage      = user32.NewProc("PostMessageW")
 	procDestroyWindow    = user32.NewProc("DestroyWindow")
 	procPostQuitMessage  = user32.NewProc("PostQuitMessage")
 	procGetMessage       = user32.NewProc("GetMessageW")
@@ -81,8 +83,10 @@ var (
 	procMessageBox       = user32.NewProc("MessageBoxW")
 	procShellNotifyIcon  = shell32.NewProc("Shell_NotifyIconW")
 	procShellExecute     = shell32.NewProc("ShellExecuteW")
+	helperMu             sync.Mutex
 	helperProcess        *exec.Cmd
 	helperLog            *os.File
+	helperAutoRestart    = true
 	windowHandle         uintptr
 )
 
@@ -170,6 +174,10 @@ func main() {
 		trayLog("handled command line")
 		return
 	}
+	if signalExistingTray() {
+		trayLog("existing tray signaled")
+		return
+	}
 	runtime.LockOSThread()
 	hwnd := createWindow()
 	windowHandle = hwnd
@@ -177,8 +185,19 @@ func main() {
 	startHelper()
 	ensureToolsSilently()
 	addTray(hwnd)
+	startHelperSupervisor()
 	trayLog("tray icon added")
 	messageLoop()
+}
+
+func signalExistingTray() bool {
+	className, _ := syscall.UTF16PtrFromString("FCDownloaderNoBrowserTray")
+	hwnd, _, _ := procFindWindow.Call(uintptr(unsafe.Pointer(className)), 0)
+	if hwnd == 0 {
+		return false
+	}
+	procPostMessage.Call(hwnd, wmCommand, uintptr(idStart), 0)
+	return true
 }
 
 func createWindow() uintptr {
@@ -228,7 +247,7 @@ func updateTray() {
 	status := "Stopped"
 	if info, ok := fetchHealth(); ok && info.OK {
 		status = "Ready - " + toolsSummary(info.Tools)
-	} else if helperProcess != nil {
+	} else if helperTracked() {
 		status = "Starting"
 	}
 	nid := notifyIconData{
@@ -270,16 +289,16 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 	case wmCreate:
 		hinst, _, _ := procGetModuleHandle.Call(0)
 		btnClass, _ := syscall.UTF16PtrFromString("BUTTON")
-		
+
 		btn1, _ := syscall.UTF16PtrFromString("▶")
 		procCreateWindowEx.Call(0, uintptr(unsafe.Pointer(btnClass)), uintptr(unsafe.Pointer(btn1)), uintptr(wsChild|wsVisible|bsPushButton), 20, 20, 40, 40, hwnd, uintptr(idStart), hinst, 0)
-		
+
 		btn2, _ := syscall.UTF16PtrFromString("⏹")
 		procCreateWindowEx.Call(0, uintptr(unsafe.Pointer(btnClass)), uintptr(unsafe.Pointer(btn2)), uintptr(wsChild|wsVisible|bsPushButton), 70, 20, 40, 40, hwnd, uintptr(idStop), hinst, 0)
-		
+
 		btn3, _ := syscall.UTF16PtrFromString("📝")
 		procCreateWindowEx.Call(0, uintptr(unsafe.Pointer(btnClass)), uintptr(unsafe.Pointer(btn3)), uintptr(wsChild|wsVisible|bsPushButton), 120, 20, 40, 40, hwnd, uintptr(idLog), hinst, 0)
-		
+
 		return 0
 	case wmClose:
 		procDestroyWindow.Call(hwnd)
@@ -362,16 +381,22 @@ func messageLoop() {
 
 func startHelper() {
 	trayLog("start requested")
+	helperMu.Lock()
+	helperAutoRestart = true
+	helperMu.Unlock()
 	if healthy() {
 		trayLog("helper already healthy")
 		updateTray()
 		return
 	}
+	helperMu.Lock()
 	if helperProcess != nil && helperProcess.Process != nil {
+		helperMu.Unlock()
 		trayLog("helper process already tracked")
 		updateTray()
 		return
 	}
+	helperMu.Unlock()
 	exe, err := os.Executable()
 	if err != nil {
 		trayLog("executable lookup failed: %v", err)
@@ -397,30 +422,78 @@ func startHelper() {
 		return
 	}
 	trayLog("helper process started: %d", cmd.Process.Pid)
+	helperMu.Lock()
 	helperProcess = cmd
 	helperLog = logFile
+	helperMu.Unlock()
 	go func() {
 		err := cmd.Wait()
 		trayLog("helper process exited: %v", err)
-		helperProcess = nil
-		if helperLog != nil {
-			_ = helperLog.Close()
+		helperMu.Lock()
+		if helperProcess == cmd {
+			helperProcess = nil
+		}
+		if helperLog == logFile {
 			helperLog = nil
 		}
+		helperMu.Unlock()
+		_ = logFile.Close()
 	}()
 	updateTray()
 }
 
 func stopHelper() {
-	if helperProcess != nil && helperProcess.Process != nil {
-		_ = helperProcess.Process.Kill()
-		helperProcess = nil
+	helperMu.Lock()
+	helperAutoRestart = false
+	cmd := helperProcess
+	logFile := helperLog
+	helperProcess = nil
+	helperLog = nil
+	helperMu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
 	}
-	if helperLog != nil {
-		_ = helperLog.Close()
-		helperLog = nil
+	if logFile != nil {
+		_ = logFile.Close()
 	}
 	updateTray()
+}
+
+func helperTracked() bool {
+	helperMu.Lock()
+	defer helperMu.Unlock()
+	return helperProcess != nil && helperProcess.Process != nil
+}
+
+func helperShouldAutoRestart() bool {
+	helperMu.Lock()
+	defer helperMu.Unlock()
+	return helperAutoRestart
+}
+
+func startHelperSupervisor() {
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			if windowHandle == 0 {
+				return
+			}
+			if !helperShouldAutoRestart() {
+				continue
+			}
+			if healthy() {
+				updateTray()
+				continue
+			}
+			if helperTracked() {
+				updateTray()
+				continue
+			}
+			trayLog("helper is not healthy; restarting")
+			procPostMessage.Call(windowHandle, wmCommand, uintptr(idStart), 0)
+		}
+	}()
 }
 
 func healthy() bool {
@@ -473,7 +546,7 @@ func showStatus() {
 			"Tools: " + toolsSummary(info.Tools),
 		}
 		status = strings.Join(lines, "\r\n")
-	} else if helperProcess != nil {
+	} else if helperTracked() {
 		status = "Starting\r\nVideo tools may download on first use."
 	}
 	message("FCDownloader Companion", status)

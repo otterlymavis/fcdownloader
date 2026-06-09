@@ -25,12 +25,16 @@ const moreList    = $("more-list");
 const bulkActions = $("bulk-actions");
 const selectAllBtn = $("select-all");
 const downloadSelectedBtn = $("download-selected");
-const EXPECTED_HELPER_VERSION = "0.3.0-go";
+const MIN_HELPER_VERSION = "0.3.0-go";
+const HELPER_STATUS_TIMEOUT_MS = 2500;
+const HELPER_START_TIMEOUT_MS = 26000;
+const HELPER_READY_GRACE_MS = 10000;
 
 let currentTabId   = null;
 let currentPageUrl = "";
 let helperTimer = null;
 let helperIsReady = false;
+let helperLastReadyAt = 0;
 let helperNeedsSetup = false;
 let preferCapturedMedia = false;
 let waitingForCapturedMedia = false;
@@ -386,6 +390,21 @@ function isCompanionHdItem(item) {
   return item?.source === "youtube-hd-local";
 }
 
+function helperVersionAtLeast(version, minimum = MIN_HELPER_VERSION) {
+  const got = String(version || "").match(/(\d+)\.(\d+)\.(\d+)/)?.slice(1).map(Number);
+  const min = String(minimum || "").match(/(\d+)\.(\d+)\.(\d+)/)?.slice(1).map(Number);
+  if (!got || !min) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (got[i] > min[i]) return true;
+    if (got[i] < min[i]) return false;
+  }
+  return true;
+}
+
+function helperReadyForOrdering() {
+  return helperIsReady || (helperLastReadyAt && Date.now() - helperLastReadyAt < HELPER_READY_GRACE_MS);
+}
+
 function companionReadyOrder(items) {
   const companionItems = items.filter(isCompanionHdItem);
   if (!companionItems.length) return items;
@@ -408,7 +427,7 @@ function capturedOrder(items) {
 }
 
 function displayedItems(items) {
-  if (helperIsReady) return companionReadyOrder(items);
+  if (helperReadyForOrdering()) return companionReadyOrder(items);
   const visibleItems = standaloneOrder(items);
   return preferCapturedMedia ? capturedOrder(visibleItems) : visibleItems;
 }
@@ -494,17 +513,21 @@ async function renderHelperStatus(show) {
     return;
   }
   helperEl.hidden = false;
-  const resp = await sendMessage({ type: "fcdl:helper_status" }, 2500);
+  const wasReadyForOrdering = helperReadyForOrdering();
+  const resp = await sendMessage({ type: "fcdl:helper_status" }, HELPER_STATUS_TIMEOUT_MS);
   const ready = Boolean(resp?.ok && resp.ready);
   const health = resp?.health || null;
   const needsSetup = Boolean(health?.needsSetup);
-  const changed = helperIsReady !== ready;
+  if (ready) helperLastReadyAt = Date.now();
+  else if (health?.ok && !helperVersionAtLeast(health.version)) helperLastReadyAt = 0;
+  const effectiveReady = helperReadyForOrdering();
+  const changed = wasReadyForOrdering !== effectiveReady;
   helperIsReady = ready;
-  helperNeedsSetup = ready && needsSetup;
-  helperEl.classList.toggle("ready", ready);
-  helperEl.classList.toggle("missing", !ready);
-  helperText.textContent = helperStatusText(ready, health);
-  helperOpen.hidden = ready;
+  helperNeedsSetup = effectiveReady && needsSetup;
+  helperEl.classList.toggle("ready", effectiveReady);
+  helperEl.classList.toggle("missing", !effectiveReady);
+  helperText.textContent = helperStatusText(effectiveReady, health);
+  helperOpen.hidden = effectiveReady;
   if (helperTools) helperTools.hidden = false;
   if (changed && currentTabId != null) {
     lastItemsKey = "";
@@ -513,13 +536,22 @@ async function renderHelperStatus(show) {
 }
 
 function helperStatusText(ready, health) {
+  if (health?.ok && !helperVersionAtLeast(health.version)) return "Companion outdated: update required";
   if (!ready) return "Companion optional: 360p works";
-  if (health?.version && health.version !== EXPECTED_HELPER_VERSION) return "Companion outdated: update recommended";
   if (health?.needsSetup) return "Companion ready: install tools for HD";
   const toolBits = Array.isArray(health?.tools)
     ? health.tools.filter((tool) => tool.installed).length + "/" + health.tools.length
     : "";
   return toolBits ? `Companion ready: HD enabled (${toolBits} tools)` : "Companion ready: HD enabled";
+}
+
+async function launchCompanionFromPopup() {
+  try {
+    await chrome.tabs.create({
+      url: "fcdownloader-companion://start",
+      active: false,
+    });
+  } catch {}
 }
 
 // ---------------------------------------------------------------------------
@@ -633,7 +665,7 @@ function refresh() {
       setStatus("Media found from page playback.", "success");
     }
     const visibleItems = displayedItems(items);
-    const key = `${helperIsReady ? "helper:" : "standalone:"}${preferCapturedMedia ? "capture:" : ""}${visibleItems.map((i) => i.url).join("|")}`;
+    const key = `${helperReadyForOrdering() ? "helper:" : "standalone:"}${preferCapturedMedia ? "capture:" : ""}${visibleItems.map((i) => i.url).join("|")}`;
     if (key !== lastItemsKey) {
       lastItemsKey = key;
       render(visibleItems);
@@ -665,27 +697,12 @@ function refresh() {
     return;
   }
 
-  // First-run gate: only triggers when neither storage NOR the build-time
-  // default has a backend URL (i.e. someone built from source without
-  // setting EXTENSION_DEFAULT_BACKEND). Public-distribution builds bake in
-  // the URL and never hit this branch.
+  // A backend is optional when the local companion or direct browser captures
+  // can handle the page. Keep the popup usable for companion-only installs.
   try {
     const { settings } = (await sendMessage({ type: "fcdl:list", tabId: currentTabId }, 3000)) || {};
     if (!settings?.backend?.trim()) {
-      primaryEl.hidden = true;
-      moreEl.hidden = true;
-      emptyEl.hidden = false;
-      const text = emptyEl.querySelector(".empty-text");
-      if (text) text.textContent = "Backend URL isn't set yet.";
-      if (extractBtn) {
-        extractBtn.title = "Open settings";
-        extractBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
-        extractBtn.onclick = (e) => {
-          e.preventDefault();
-          if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
-        };
-      }
-      return;  // skip the refresh loop: nothing to fetch
+      setStatus("Backend not set; Companion and direct downloads still work.");
     }
   } catch {}
 
@@ -697,7 +714,8 @@ if (helperOpen) {
   helperOpen.addEventListener("click", async () => {
     helperOpen.disabled = true;
     helperText.textContent = "Opening companion...";
-    const resp = await sendMessage({ type: "fcdl:helper_start" }, 12000);
+    await launchCompanionFromPopup();
+    const resp = await sendMessage({ type: "fcdl:helper_start" }, HELPER_START_TIMEOUT_MS);
     helperOpen.disabled = false;
     renderHelperStatus(true);
     if (!resp?.ready) {
@@ -787,8 +805,9 @@ extractBtn.addEventListener("click", async () => {
     // through /download (which would throw the URL away and double-extract).
     const isYtdlStream = typeof info.url === "string" && info.url.includes("/ytdl-stream?");
     if (isYtdlStream && !helperIsReady) {
-      const helperResp = await sendMessage({ type: "fcdl:helper_status" }, 2500);
+      const helperResp = await sendMessage({ type: "fcdl:helper_status" }, HELPER_STATUS_TIMEOUT_MS);
       helperIsReady = Boolean(helperResp?.ok && helperResp.ready);
+      if (helperIsReady) helperLastReadyAt = Date.now();
       if (!helperIsReady) {
         setStatus("Companion is optional: play this video for a detected 360p download, or open Companion for HD.");
         refresh();
@@ -930,13 +949,14 @@ async function downloadItem(item) {
   setStatus("Starting download...");
   
   const isCompanion = isCompanionHdItem(item);
-  if (isCompanion && helperIsReady) {
+  const helperLikelyReady = helperReadyForOrdering();
+  if (isCompanion && helperLikelyReady) {
     startProgressPolling(item.url || currentPageUrl);
   }
 
   const resp = await sendMessage(
     { type: "fcdl:download", tabId: currentTabId, item: itemWithDefaults },
-    isCompanion && helperIsReady ? 10 * 60 * 1000 : 90000,
+    isCompanion && helperLikelyReady ? 10 * 60 * 1000 : 90000,
   );
   if (!resp?.ok) {
     if (progressPollInterval) {
@@ -947,7 +967,7 @@ async function downloadItem(item) {
     return;
   }
   
-  if (!isCompanion || !helperIsReady) {
+  if (!isCompanion || !helperLikelyReady) {
     if (resp.downloadId) {
       startDownloadTracking(resp.downloadId);
     } else {

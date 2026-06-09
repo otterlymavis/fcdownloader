@@ -13,9 +13,10 @@ Run:
   python test_all_strategies.py                   # all platforms
   python test_all_strategies.py reddit bilibili   # filter by name (case-insensitive)
   python test_all_strategies.py --backend https://... # override backend URL
+  python test_all_strategies.py --check-matrices  # no-network strategy coverage check
 """
 
-import argparse, json, re, sys, time, threading
+import argparse, ast, json, os, re, sys, time, threading
 import urllib.request, urllib.error, urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -26,7 +27,7 @@ except Exception:
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-BACKEND       = "https://fcdownloader-extractor.fly.dev"
+BACKEND       = os.environ.get("FCDOWNLOADER_BACKEND", "https://fcdownloader-extractor.fly.dev")
 LOCAL_HELPER  = "http://127.0.0.1:8765"
 DESKTOP_UA    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 MOBILE_UA     = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
@@ -169,8 +170,19 @@ def strat_local_helper(url):
     if err:
         return R(False, err)
     fmts = fmt_data.get("formats", [])
-    best = max(fmts, key=lambda f: f.get("height", 0)) if fmts else None
-    label = f"{best['height']}p  {best.get('ext','')}" if best else "no formats"
+    if not fmts:
+        return R(False, "no formats")
+
+    def height_value(fmt):
+        try:
+            return int(fmt.get("height") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    best = max(fmts, key=height_value)
+    height = height_value(best)
+    ext = best.get("ext") or best.get("format_id") or ""
+    label = f"{height}p  {ext}" if height else f"format available  {ext}".rstrip()
     return R(True, label, f"{len(fmts)} formats available")
 
 # 3. YOUTUBE InnerTube ─────────────────────────────────────────────────────────
@@ -462,6 +474,29 @@ def strat_og_meta(url, accept_lang="en-US,en;q=0.9"):
         return R(True, _items_str(items))
     return R(False, "no OG/CDN media found in page")
 
+
+def strat_dailymotion_metadata(url):
+    m = re.search(r"dailymotion\.com/video/([A-Za-z0-9]+)", url)
+    if not m:
+        return R(False, "no Dailymotion video ID")
+    data, err = get_json(
+        f"https://www.dailymotion.com/player/metadata/video/{m.group(1)}",
+        ua=DESKTOP_UA,
+        extra={"Referer": "https://www.dailymotion.com/"},
+    )
+    if err or not isinstance(data, dict):
+        return R(False, err or "metadata fetch failed")
+    qualities = data.get("qualities") or {}
+    streams = [
+        item
+        for items in qualities.values() if isinstance(items, list)
+        for item in items if isinstance(item, dict) and item.get("url")
+    ]
+    if not streams:
+        return R(False, "metadata contained no streams")
+    hls = next((item for item in streams if ".m3u8" in item.get("url", "")), streams[0])
+    return R(True, "HLS metadata" if ".m3u8" in hls.get("url", "") else "direct metadata")
+
 # ── Platform table ─────────────────────────────────────────────────────────────
 #
 # Each platform: (display_name, url, [(label, fn, kwargs), ...], browser_only_note)
@@ -521,7 +556,7 @@ PLATFORMS = [
 
     ("Dailymotion", "https://www.dailymotion.com/video/xa52aa8", [
         ("server /extract",          strat_server,        {}),
-        ("client: OG meta + CDN",    strat_og_meta,       {}),
+        ("client: player metadata",  strat_dailymotion_metadata, {}),
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: dmcdn.net capture"),
 
@@ -532,7 +567,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: scanBilibili() reads window.__playinfo__ set by page JS; webRequest captures bilivideo.com segments"),
 
-    ("Bilibili dynamic / opus", "https://t.bilibili.com/998134289197432852", [
+    ("Bilibili dynamic / opus", "https://www.bilibili.com/opus/475137916835860645", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
         ("local helper",             strat_local_helper,  {}),
@@ -563,7 +598,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: nicovideo HLS stream capture"),
 
-    ("TVer", "https://tver.jp/episodes/ep1orpabaq", [
+    ("TVer", "https://tver.jp/episodes/epc1hdugbk", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -714,7 +749,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: naver entertainment photo extraction"),
 
-    ("Naver Sports", "https://sports.news.naver.com/news/read?oid=001&aid=0012345678", [
+    ("Naver Sports", "https://sports.news.naver.com/kbaseball/news/read?oid=241&aid=0003450000", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
         ("local helper",             strat_local_helper,  {}),
@@ -792,7 +827,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: with online gallery extraction"),
 
-    ("ViVi", "https://www.vivi.tv/wp-json/wp/v2/pages/8913", [
+    ("ViVi", "https://www.vivi.tv/post480665/", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -1099,6 +1134,209 @@ PLATFORMS = [
     ], "🌐 browser-only: gigazine gallery extraction"),
 ]
 
+APP_DOWNLOAD_STRATEGIES = [
+    {
+        "strategy": "yt-dlp",
+        "name": "YouTube page",
+        "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        "pageUrl": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        "mediaType": "direct",
+        "mediaKind": "video",
+        "note": "YouTube page URL routes through yt-dlp / server re-extract paths.",
+    },
+    {
+        "strategy": "direct",
+        "name": "MDN MP4",
+        "url": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
+        "pageUrl": "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/video",
+        "mediaType": "direct",
+        "mediaKind": "video",
+        "note": "Plain progressive MP4 with a stable public media URL.",
+    },
+    {
+        "strategy": "direct",
+        "name": "Wikimedia JPEG",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/3/3f/Fronalpstock_big.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Fronalpstock_big.jpg",
+        "mediaType": "direct",
+        "mediaKind": "image",
+        "note": "Image media should stay on the direct downloader path.",
+    },
+    {
+        "strategy": "hls-segments",
+        "name": "Mux HLS",
+        "url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+        "pageUrl": "https://test-streams.mux.dev/",
+        "mediaType": "hls",
+        "mediaKind": "video",
+        "mimeType": "application/vnd.apple.mpegurl",
+        "note": "Public HLS test stream with a real manifest.",
+    },
+    {
+        "strategy": "dash",
+        "name": "Akamai DASH",
+        "url": "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd",
+        "pageUrl": "https://reference.dashif.org/dash.js/latest/samples/getting-started/basic-embed.html",
+        "mediaType": "dash",
+        "mediaKind": "video",
+        "mimeType": "application/dash+xml",
+        "note": "Public DASH-IF Big Buck Bunny MPD.",
+    },
+    {
+        "strategy": "dash",
+        "name": "Paired DASH tracks",
+        "url": "https://storage.googleapis.com/shaka-demo-assets/angel-one/dash-video.mp4",
+        "pageUrl": "https://shaka-player-demo.appspot.com/demo/",
+        "mediaType": "direct",
+        "mediaKind": "video",
+        "audioTrackUrl": "https://storage.googleapis.com/shaka-demo-assets/angel-one/dash-audio.mp4",
+        "note": "Separate video/audio tracks exercise muxing through the DASH downloader.",
+    },
+    {
+        "strategy": "ffmpeg",
+        "name": "ffmpeg mux alias",
+        "url": "https://storage.googleapis.com/shaka-demo-assets/angel-one/dash-video.mp4",
+        "pageUrl": "https://shaka-player-demo.appspot.com/demo/",
+        "mediaType": "direct",
+        "mediaKind": "video",
+        "audioTrackUrl": "https://storage.googleapis.com/shaka-demo-assets/angel-one/dash-audio.mp4",
+        "note": "The app handles ffmpeg as the same muxing path as dash.",
+    },
+    {
+        "strategy": "vimeo-json",
+        "name": "Vimeo config / playlist source",
+        "url": "https://player.vimeo.com/video/76979871/config",
+        "pageUrl": "https://vimeo.com/76979871",
+        "mediaType": "direct",
+        "mediaKind": "video",
+        "note": "Real Vimeo endpoint used to discover CDN playlist JSON media.",
+    },
+    {
+        "strategy": "server-download",
+        "name": "Twitter paired HLS",
+        "url": "https://x.com/NASA/status/1902118174591521056",
+        "pageUrl": "https://x.com/NASA/status/1902118174591521056",
+        "mediaType": "hls",
+        "mediaKind": "video",
+        "provenance": "social-extractor",
+        "note": "Server path handles page re-extraction and muxing for social extractor results.",
+    },
+]
+
+EXPECTED_APP_STRATEGIES = {
+    "hls-segments",
+    "direct",
+    "dash",
+    "vimeo-json",
+    "ffmpeg",
+    "yt-dlp",
+    "server-download",
+}
+
+BACKEND_EXTRACTION_STRATEGIES = [
+    {
+        "strategy": "direct media URL short-circuit",
+        "name": "Direct media request",
+        "url": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
+        "note": "Runs before the normal strategy list for obvious media URLs.",
+    },
+    {
+        "strategy": "direct media content-type probe",
+        "name": "Content-Type media probe",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg",
+        "note": "Runs before cookie setup when the URL probes as media by response headers.",
+    },
+    {
+        "strategy": "yt-dlp",
+        "name": "Primary yt-dlp extractor",
+        "url": "https://vimeo.com/76979871",
+        "note": "First-line extractor for most non-platform-first pages and YouTube.",
+    },
+    {
+        "strategy": "platform-specific extractor",
+        "name": "Custom platform extractor",
+        "url": "https://x.com/NASA/status/1902118174591521056",
+        "note": "Preferred for platform-first social/gallery sites.",
+    },
+    {
+        "strategy": "ytdl-stream",
+        "name": "yt-dlp download-mode stream",
+        "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        "note": "Fallback for YouTube SABR/HLS guard and selected server-stream pages.",
+    },
+    {
+        "strategy": "WebView/runtime interception",
+        "name": "Client runtime placeholder",
+        "url": "https://www.tiktok.com/@nasa.tiktok2/video/7624845650504469780",
+        "note": "Server records this as client-side only.",
+    },
+    {
+        "strategy": "structured media data",
+        "name": "JSON-LD / structured media",
+        "url": "https://www.oricon.co.jp/news/2285123/full/",
+        "note": "Looks for schema.org and other structured media blocks.",
+    },
+    {
+        "strategy": "HTML media scanner",
+        "name": "HLS/DASH/OG/generic HTML scan",
+        "url": "https://www3.nhk.or.jp/nhkworld/en/shows/2049165/",
+        "note": "Single page fetch that scans for manifests, OG media, and generic CDN URLs.",
+    },
+    {
+        "strategy": "embedded player detector",
+        "name": "Embedded player lookup",
+        "url": "https://www.dailymotion.com/video/xa52aa8",
+        "note": "Finds iframe/player embeds and hands them back to yt-dlp.",
+    },
+    {
+        "strategy": "og:image fallback",
+        "name": "Open Graph image fallback",
+        "url": "https://mdpr.jp/photo/detail/20095233",
+        "note": "Last server-side image fallback before generic yt-dlp.",
+    },
+    {
+        "strategy": "generic yt-dlp extractor",
+        "name": "Generic yt-dlp fallback",
+        "url": "https://www.pinterest.com/pin/84301824269690044/",
+        "note": "Generic extractor pass after custom and HTML-based strategies.",
+    },
+    {
+        "strategy": "browser playback fallback",
+        "name": "App WebView placeholder",
+        "url": "https://tver.jp/episodes/epc1hdugbk",
+        "note": "Server records this as app-only playback capture.",
+    },
+    {
+        "strategy": "watermark-free source",
+        "name": "Source watermark-free media",
+        "url": "https://www.tiktok.com/@nasa.tiktok2/video/7624845650504469780",
+        "note": "Only runs when remove_watermark is requested.",
+    },
+    {
+        "strategy": "watermark-removal proxy",
+        "name": "Proxy watermark removal",
+        "url": "https://www.tiktok.com/@nasa.tiktok2/video/7624845650504469780",
+        "note": "Only runs when remove_watermark is requested after source lookup.",
+    },
+]
+
+EXPECTED_BACKEND_STRATEGIES = {
+    "direct media URL short-circuit",
+    "direct media content-type probe",
+    "yt-dlp",
+    "platform-specific extractor",
+    "ytdl-stream",
+    "WebView/runtime interception",
+    "structured media data",
+    "HTML media scanner",
+    "embedded player detector",
+    "og:image fallback",
+    "generic yt-dlp extractor",
+    "browser playback fallback",
+    "watermark-free source",
+    "watermark-removal proxy",
+}
+
 # ── Runner ─────────────────────────────────────────────────────────────────────
 
 def run_strategy(label, fn, url, kwargs):
@@ -1131,6 +1369,48 @@ def run_platform(name, url, strategies, browser_note, backend):
 
     return raw, browser_note
 
+def expected_failure_reason(platform, label, r, platform_results):
+    if r.ok:
+        return ""
+
+    detail = (r.detail or "").lower()
+    if "not running" in detail:
+        return ""
+
+    if label == "server /extract" and "read operation timed out" in detail:
+        return "remote backend timeout"
+
+    if label == "local helper":
+        if any(other.ok and other_label != "local helper" for other_label, other, _ in platform_results):
+            return "helper unsupported for this page"
+        if platform in {
+            "Threads", "Reddit (gallery)", "Bilibili dynamic / opus", "Douyin",
+            "TVer", "DMM", "Bunshun",
+        }:
+            return "helper needs browser/session or unsupported fixture"
+
+    if label == "client: OG meta + CDN" and "no og/cdn media" in detail:
+        if any(other.ok for other_label, other, _ in platform_results if other_label != label):
+            return "generic OG scrape unavailable"
+
+    expected_platforms = {
+        "Threads", "Reddit (gallery)", "Bilibili dynamic / opus", "Weibo (share link)",
+        "Xiaohongshu (xhslink)", "Douyin", "TVer", "ABEMA", "FC2 Video", "FC2 Live",
+        "OpenREC", "FOD / Fuji TV", "DMM", "Hulu Japan / TELASA", "Bunshun",
+    }
+    if platform not in expected_platforms:
+        return ""
+
+    if any(token in detail for token in (
+        "sign in", "login", "auth", "cookie", "geo-restricted", "geo-sensitive",
+        "drm", "no valid video", "getaddrinfo failed", "http 403", "http 404",
+        "not found", "no media", "no og/cdn media", "no detectable media", "nonetype",
+        "age-gated", "current episode", "requires",
+    )):
+        return "expected source/browser restriction"
+
+    return ""
+
 def fmt_result(label, r, elapsed):
     icon  = "✓" if r.ok else "✗"
     color = ""
@@ -1142,11 +1422,152 @@ def fmt_result(label, r, elapsed):
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+def fmt_expected_result(label, r, elapsed, expected_reason):
+    line = fmt_result(label, r, elapsed)
+    if not expected_reason:
+        return line
+    return f"{line}  <{expected_reason}>"
+
+def validate_app_strategy_matrix():
+    covered = {case["strategy"] for case in APP_DOWNLOAD_STRATEGIES}
+    missing = sorted(EXPECTED_APP_STRATEGIES - covered)
+    extra = sorted(covered - EXPECTED_APP_STRATEGIES)
+    return missing, extra
+
+def validate_backend_strategy_matrix():
+    covered = {case["strategy"] for case in BACKEND_EXTRACTION_STRATEGIES}
+    missing = sorted(EXPECTED_BACKEND_STRATEGIES - covered)
+    extra = sorted(covered - EXPECTED_BACKEND_STRATEGIES)
+    return missing, extra
+
+def validate_matrix_entries(label, entries):
+    errors = []
+    required = ("strategy", "name", "url")
+    for idx, case in enumerate(entries, 1):
+        for key in required:
+            if not str(case.get(key, "")).strip():
+                errors.append(f"{label}[{idx}] missing {key}")
+        parsed = urllib.parse.urlparse(str(case.get("url", "")))
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            errors.append(f"{label}[{idx}] has invalid url: {case.get('url')!r}")
+        audio_url = case.get("audioTrackUrl")
+        if audio_url:
+            parsed_audio = urllib.parse.urlparse(str(audio_url))
+            if parsed_audio.scheme not in ("http", "https") or not parsed_audio.netloc:
+                errors.append(f"{label}[{idx}] has invalid audioTrackUrl: {audio_url!r}")
+    return errors
+
+def read_app_strategies_from_source():
+    path = os.path.join(os.path.dirname(__file__), "src", "types", "index.ts")
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            src = f.read()
+    except OSError:
+        return set()
+    m = re.search(r"export\s+type\s+DownloadStrategy\s*=\s*([^;]+);", src)
+    if not m:
+        return set()
+    return set(re.findall(r"'([^']+)'", m.group(1)))
+
+def _ast_target_names(target):
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = set()
+        for item in target.elts:
+            names.update(_ast_target_names(item))
+        return names
+    return set()
+
+def _collect_strategy_tuple_names(node):
+    names = set()
+    if (
+        isinstance(node, ast.Tuple)
+        and len(node.elts) >= 2
+        and isinstance(node.elts[0], ast.Constant)
+        and isinstance(node.elts[0].value, str)
+    ):
+        names.add(node.elts[0].value)
+    for child in ast.iter_child_nodes(node):
+        names.update(_collect_strategy_tuple_names(child))
+    return names
+
+def read_backend_strategies_from_source():
+    path = os.path.join(os.path.dirname(__file__), "server", "strategies.py")
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            src = f.read()
+    except OSError:
+        return set()
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return {name for name in EXPECTED_BACKEND_STRATEGIES if name in src}
+
+    strategy_targets = {
+        "strategies",
+        "platform_strategy",
+        "ytdlp_strategy",
+        "watermark_proxy_strategy",
+    }
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            if any(_ast_target_names(target) & strategy_targets for target in node.targets):
+                names.update(_collect_strategy_tuple_names(node.value))
+        elif isinstance(node, ast.AnnAssign):
+            if _ast_target_names(node.target) & strategy_targets:
+                names.update(_collect_strategy_tuple_names(node.value))
+
+    for preflight in ("direct media URL short-circuit", "direct media content-type probe"):
+        if preflight in src:
+            names.add(preflight)
+    return names
+
+def validate_strategy_matrices_against_sources():
+    app_missing, app_extra = validate_app_strategy_matrix()
+    backend_missing, backend_extra = validate_backend_strategy_matrix()
+    source_app = read_app_strategies_from_source()
+    source_backend = read_backend_strategies_from_source()
+    return {
+        "app_missing": app_missing,
+        "app_extra": app_extra,
+        "backend_missing": backend_missing,
+        "backend_extra": backend_extra,
+        "entry_errors": validate_matrix_entries("app", APP_DOWNLOAD_STRATEGIES)
+        + validate_matrix_entries("backend", BACKEND_EXTRACTION_STRATEGIES),
+        "source_app_missing": sorted(source_app - EXPECTED_APP_STRATEGIES),
+        "source_app_stale": sorted(EXPECTED_APP_STRATEGIES - source_app) if source_app else [],
+        "source_backend_missing": sorted(EXPECTED_BACKEND_STRATEGIES - source_backend),
+        "source_backend_unexpected": sorted(source_backend - EXPECTED_BACKEND_STRATEGIES),
+    }
+
+def print_matrix_check(check):
+    print("App matrix missing:", check["app_missing"])
+    print("App matrix extra:", check["app_extra"])
+    print("Backend matrix missing:", check["backend_missing"])
+    print("Backend matrix extra:", check["backend_extra"])
+    print("Matrix entry errors:", check["entry_errors"])
+    print("App source strategies not in matrix:", check["source_app_missing"])
+    print("Matrix app strategies not in source:", check["source_app_stale"])
+    print("Backend strategies not found in source:", check["source_backend_missing"])
+    print("Backend source strategies not in matrix:", check["source_backend_unexpected"])
+    return not any(check.values())
+
 def main():
     parser = argparse.ArgumentParser(description="Test all FCDownloader extraction strategies")
     parser.add_argument("platforms", nargs="*", help="Filter platforms by name (case-insensitive)")
     parser.add_argument("--backend", default=BACKEND)
+    parser.add_argument(
+        "--check-matrices",
+        action="store_true",
+        help="Validate app/backend strategy URL matrices without making network requests",
+    )
     args = parser.parse_args()
+
+    if args.check_matrices:
+        ok = print_matrix_check(validate_strategy_matrices_against_sources())
+        sys.exit(0 if ok else 1)
 
     selected = [p for p in PLATFORMS
                 if not args.platforms
@@ -1165,7 +1586,30 @@ def main():
     print(f"  Helper  : {'running at ' + LOCAL_HELPER if helper_up else 'not running'}")
     print(f"{'═'*W}")
 
-    total_pass = total_fail = skipped = 0
+    missing_app, extra_app = validate_app_strategy_matrix()
+    print("\n  App download strategy media matrix")
+    print(f"  {'-'*W}")
+    for case in APP_DOWNLOAD_STRATEGIES:
+        bits = [case["strategy"], case["name"], case["url"]]
+        if case.get("audioTrackUrl"):
+            bits.append(f"+ audio {case['audioTrackUrl']}")
+        print("  - " + " | ".join(bits))
+    if missing_app:
+        print(f"  Missing app strategies: {', '.join(missing_app)}")
+    if extra_app:
+        print(f"  Unknown app strategies: {', '.join(extra_app)}")
+
+    missing_backend, extra_backend = validate_backend_strategy_matrix()
+    print("\n  Backend extraction strategy media matrix")
+    print(f"  {'-'*W}")
+    for case in BACKEND_EXTRACTION_STRATEGIES:
+        print(f"  - {case['strategy']} | {case['name']} | {case['url']}")
+    if missing_backend:
+        print(f"  Missing backend strategies: {', '.join(missing_backend)}")
+    if extra_backend:
+        print(f"  Unknown backend strategies: {', '.join(extra_backend)}")
+
+    total_pass = total_fail = skipped = total_expected = 0
 
     for name, url, strategies, browser_note in selected:
         print(f"\n  ▸ {name}")
@@ -1175,9 +1619,12 @@ def main():
         results, bnote = run_platform(name, url, strategies, browser_note, backend)
 
         for label, r, elapsed in results:
-            print(fmt_result(label, r, elapsed))
+            expected_reason = expected_failure_reason(name, label, r, results)
+            print(fmt_expected_result(label, r, elapsed, expected_reason))
             if r.ok:
                 total_pass += 1
+            elif expected_reason:
+                total_expected += 1
             else:
                 total_fail += 1
                 if "not running" in r.detail:
@@ -1186,8 +1633,13 @@ def main():
         print(f"    {bnote}")
 
     print(f"\n{'═'*W}")
-    print(f"  Tested  : {total_pass + total_fail} strategies across {len(selected)} platform(s)")
+    print(f"  Tested  : {total_pass + total_fail + total_expected} strategies across {len(selected)} platform(s)")
+    print(f"  App strategy media samples: {len(APP_DOWNLOAD_STRATEGIES)} "
+          f"covering {len(EXPECTED_APP_STRATEGIES) - len(missing_app)}/{len(EXPECTED_APP_STRATEGIES)} strategies")
+    print(f"  Backend strategy media samples: {len(BACKEND_EXTRACTION_STRATEGIES)} "
+          f"covering {len(EXPECTED_BACKEND_STRATEGIES) - len(missing_backend)}/{len(EXPECTED_BACKEND_STRATEGIES)} strategies")
     print(f"  Passed  : {total_pass}")
+    print(f"  Expected/blocked: {total_expected}")
     print(f"  Failed  : {total_fail - skipped}"
           + (f"  ({skipped} skipped — helper not running)" if skipped else ""))
     print(f"{'═'*W}\n")

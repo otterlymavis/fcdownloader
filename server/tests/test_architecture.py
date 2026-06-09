@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 import os
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -392,10 +393,12 @@ class TestModels:
 class TestUtils:
     def test_guess_ext(self):
         assert guess_ext_from_url("https://cdn.example.com/video.mp4?token=abc") == "mp4"
+        assert guess_ext_from_url("https://cdn.example.com/master.m3u?token=abc") == "m3u"
         assert guess_ext_from_url("https://cdn.example.com/stream.m3u8") == "m3u8"
         assert guess_ext_from_url("https://cdn.example.com/no-ext") == ""
 
     def test_looks_like_hls(self):
+        assert looks_like_hls("https://cdn.example.com/master.m3u", None)
         assert looks_like_hls("https://cdn.example.com/stream.m3u8", None)
         assert looks_like_hls("https://cdn.example.com/stream", "m3u8_native")
         assert not looks_like_hls("https://cdn.example.com/video.mp4", None)
@@ -779,6 +782,51 @@ class TestWatermarkFreeSourceExtractor:
 
 
 class TestCuratedSiteExtractor:
+    def test_dailymotion_metadata_extractor_returns_hls(self, monkeypatch):
+        import extractors
+        import strategies
+
+        payload = {
+            "title": "Sample DM",
+            "poster_url": "https://s1.dmcdn.net/poster.jpg",
+            "duration": 42,
+            "qualities": {
+                "auto": [
+                    {
+                        "type": "application/vnd.apple.mpegurl",
+                        "url": "https://cdn.example.com/manifest.m3u8",
+                    }
+                ],
+                "480": [
+                    {
+                        "type": "video/mp4",
+                        "url": "https://cdn.example.com/video-480.mp4",
+                    }
+                ],
+            },
+        }
+
+        class FakeResponse:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return json.dumps(payload).encode("utf-8")
+
+        def fake_urlopen(req, *args, **kwargs):
+            assert "player/metadata/video/xa52aa8" in req.full_url
+            return FakeResponse()
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        info = extractors.extract_dailymotion("https://www.dailymotion.com/video/xa52aa8", None)
+        assert info is not None
+        assert info["url"] == "https://cdn.example.com/manifest.m3u8"
+        assert info["protocol"] == "m3u8_native"
+        assert info["extractor"] == "dailymotion-metadata"
+
+        result = strategies._strategy_platform_extractors("https://www.dailymotion.com/video/xa52aa8", None)
+        assert result["success"]
+        assert result["media"]["url"] == "https://cdn.example.com/manifest.m3u8"
+
     def test_oricon_photo_page_expands_full_gallery(self, monkeypatch):
         pages = {
             "https://contents.oricon.co.jp/news/2452025/photo/1/": """
@@ -1034,6 +1082,19 @@ class TestHtmlMediaScannerStrategy:
         })
 
         assert response["thumbnail"] == "https://cdn.example.com/poster.jpg"
+
+    def test_ytdl_stream_url_uses_request_host(self):
+        from main import _localize_ytdl_stream_urls
+
+        class FakeRequest:
+            base_url = "http://127.0.0.1:8080/"
+
+        response = _localize_ytdl_stream_urls({
+            "kind": "direct",
+            "url": "https://fcdownloader-extractor.fly.dev/ytdl-stream?page_url=https%3A%2F%2Fyoutu.be%2Fabc",
+        }, FakeRequest())
+
+        assert response["url"] == "http://127.0.0.1:8080/ytdl-stream?page_url=https%3A%2F%2Fyoutu.be%2Fabc"
 
 
 class TestEmbeddedPlayerDetectorStrategy:

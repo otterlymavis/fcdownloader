@@ -28,7 +28,7 @@ export interface BrowserSessionSnapshot {
 function guessType(url: string): MediaType {
   const u = url.toLowerCase();
   if (u.includes('.mpd')) return 'dash';
-  if (u.includes('.m3u8')) return 'hls';
+  if (u.includes('.m3u8') || u.includes('.m3u')) return 'hls';
   return 'direct';
 }
 

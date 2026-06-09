@@ -60,7 +60,7 @@ class ExtractionProfile:
 # ── Heuristics ────────────────────────────────────────────────────────────────
 
 _DIRECT_MEDIA_RE_PARTS = (
-    ".mp4", ".webm", ".mov", ".m4v", ".m3u8", ".mpd",
+    ".mp4", ".webm", ".mov", ".m4v", ".m3u", ".m3u8", ".mpd",
     "bilivideo.com/", "weibocdn.com/", "xhscdn.com/",
     "cdninstagram.com/", "scontent", ".cdninstagram.com/",
     "fbcdn.net/", "threadscdn.com/",
@@ -68,7 +68,7 @@ _DIRECT_MEDIA_RE_PARTS = (
 
 _LIVESTREAM_SIGNALS = (
     "/live", "/stream", "is_live=", "live_chat", "live_from_start",
-    "/hls/", "/manifest/hls", ".m3u8",
+    "/hls/", "/manifest/hls", ".m3u", ".m3u8",
 )
 
 

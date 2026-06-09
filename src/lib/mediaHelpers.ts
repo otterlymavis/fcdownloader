@@ -19,8 +19,15 @@ const SOURCE_NAMES: Array<[RegExp, string]> = [
 
 const MIME_BY_EXT: Record<string, string> = {
   mp4: 'video/mp4',
+  m4v: 'video/mp4',
   webm: 'video/webm',
   mov: 'video/quicktime',
+  avi: 'video/x-msvideo',
+  mkv: 'video/x-matroska',
+  flv: 'video/x-flv',
+  mpg: 'video/mpeg',
+  mpeg: 'video/mpeg',
+  '3gp': 'video/3gpp',
   ts: 'video/mp2t',
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
@@ -32,15 +39,18 @@ const MIME_BY_EXT: Record<string, string> = {
   m4a: 'audio/mp4',
   wav: 'audio/wav',
   ogg: 'audio/ogg',
+  opus: 'audio/opus',
+  flac: 'audio/flac',
+  aac: 'audio/aac',
 };
 
 const SEGMENT_RE = /\.(ts|m4s|cmfv|cmfa)(\?|#|$)/i;
 const VIMEO_RANGE_RE = /vimeocdn\.com\/.*\/v2\/range\/.*\/avf\//i;
-const USEFUL_EXT_RE = /\.(m3u8|mpd|mp4|m4v|webm|mov|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)(\?|#|$)/i;
+const USEFUL_EXT_RE = /\.(m3u8|m3u|mpd|mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)(\?|#|$)/i;
 const VIMEO_JSON_RE = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i;
-const VIDEO_CDN_RE = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|threadscdn\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|fbcdn\.net\/videos|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/|weibocdn\.com\/|xhscdn\.com\/)/i;
+const VIDEO_CDN_RE = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|threadscdn\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|fbcdn\.net\/videos|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/|weibocdn\.com\/|xhscdn\.com\/|akamaized\.net\/|cloudfront\.net\/|jwpcdn\.com\/|jwplatform\.com\/|kaltura\.com\/|mux\.com\/|mux\.dev\/|streamable\.com\/)/i;
 const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(\?|#|$)/i;
-const VIDEO_EXT_RE = /\.(m3u8|mpd|mp4|m4v|webm|mov)(\?|#|$)/i;
+const VIDEO_EXT_RE = /\.(m3u8|m3u|mpd|mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp)(\?|#|$)/i;
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|avif|heic)(\?|#|$)/i;
 const IMAGE_CDN_RE = /(?:cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|pinimg\.com\/(?:originals|736x|1200x|564x)\/|sinaimg\.cn\/|xhscdn\.com\/|pstatic\.net\/|imgur\.com\/|i\.redd\.it\/|pbs\.twimg\.com\/media\/)/i;
 const XHS_MEDIA_MARKERS = [
@@ -275,7 +285,7 @@ export function isNonContentMediaUrl(url: string, mimeType?: string | null): boo
 export function guessMediaType(url: string): DetectedMedia['mediaType'] {
   const lower = url.toLowerCase();
   if (lower.includes('.mpd')) return 'dash';
-  if (lower.includes('.m3u8')) return 'hls';
+  if (lower.includes('.m3u8') || lower.includes('.m3u')) return 'hls';
   return 'direct';
 }
 
@@ -329,6 +339,6 @@ function getQualityScore(url: string): number {
   if (resolution) return parseInt(resolution[1], 10) * parseInt(resolution[2], 10) + (/\.m3u8/i.test(url) ? 1 : 0);
   const lower = url.toLowerCase();
   if (/\.mpd/.test(lower)) return 3_000_000;
-  if (/\.(mp4|m4v|webm|mov)/.test(lower)) return 100;
+  if (/\.(mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp)/.test(lower)) return 100;
   return 50;
 }

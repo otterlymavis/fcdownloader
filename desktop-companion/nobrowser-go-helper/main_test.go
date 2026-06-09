@@ -145,6 +145,33 @@ func TestYtDlpDownloadArgsUseSteadierDefaults(t *testing.T) {
 	}
 }
 
+func TestYouTubeHDFormatDoesNotSilentlyFallBackTo360p(t *testing.T) {
+	if strings.Contains(youtubeFormat, "/18") || strings.Contains(youtubeFormat, "height<=360") || strings.Contains(youtubeFormat, "height<720") {
+		t.Fatalf("youtube HD format should fail instead of silently downloading 360p: %q", youtubeFormat)
+	}
+	if !strings.Contains(youtubeFormat, "height<=1080") || !strings.Contains(youtubeFormat, "height>=720") {
+		t.Fatalf("youtube HD format should explicitly stay in the HD range: %q", youtubeFormat)
+	}
+}
+
+func TestMediaFileCandidatesIgnoreHTMLArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "error.htm"), []byte(strings.Repeat("x", 200)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "video.mp4"), []byte("media"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates := mediaFileCandidates(dir, files)
+	if len(candidates) != 1 || filepath.Base(candidates[0]) != "video.mp4" {
+		t.Fatalf("expected only media candidate, got %#v", candidates)
+	}
+}
+
 func TestYtDlpPrimaryPathHonorsStableOverride(t *testing.T) {
 	t.Setenv("FCDL_YTDLP_CHANNEL", "stable")
 	t.Setenv("FCDL_YTDLP_EXE", "/tmp/custom-ytdlp")

@@ -13,7 +13,7 @@ export { DRMProtectedError };
 
 const VIMEO_PLAYLIST_JSON = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i;
 const DASH_MIME = /application\/(dash|x-mpegdash)\+xml/i;
-const DIRECT_MEDIA_RE = /\.(?:mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)|googlevideo\.com\/videoplayback/i;
+const DIRECT_MEDIA_RE = /\.(?:mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)|googlevideo\.com\/videoplayback/i;
 
 /**
  * Determine download strategy purely by manifest type, not by platform.
@@ -70,7 +70,7 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
   // video.twimg.com/.../pl/ renditions) can't be muxed by the on-device DASH
   // downloader — it expects MP4 segments. The server muxes them reliably via
   // ffmpeg, so route HLS-paired video to the proxy instead of a doomed DASH try.
-  const isHlsTrack = (u: string) => /\.m3u8(\?|#|$)/i.test(u) || /\/pl\//i.test(u);
+  const isHlsTrack = (u: string) => /\.m3u8?(?:[?#]|$)/i.test(u) || /\/pl\//i.test(u);
   if (media.audioTrackUrl && (isHlsTrack(url) || isHlsTrack(media.audioTrackUrl))) {
     return 'server-download';
   }
@@ -88,10 +88,10 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
   if (/manifest\.googlevideo\.com\/api\/manifest\/dash/i.test(url)) return 'dash';
 
   // Explicit HLS manifest
-  if (/\.m3u8(\?|#|$)/i.test(url) || /mpegurl/i.test(mime)) return 'hls-segments';
+  if (/\.m3u8?(?:[?#]|$)/i.test(url) || /mpegurl/i.test(mime)) return 'hls-segments';
 
   // Direct video file
-  if (/\.(mp4|webm|mov|avi|mkv|m4v|flv)(\?|$)/i.test(url)) return 'direct';
+  if (/\.(mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp)(?:[?#]|$)/i.test(url)) return 'direct';
 
   // YouTube progressive CDN URL (muxed itag, single file)
   if (/googlevideo\.com\/videoplayback/i.test(url)) return 'direct';
@@ -101,7 +101,7 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
 
   // Meta/TikTok/Twitter direct CDN URLs are usually signed MP4/WebM responses
   // even when the URL path does not expose a file extension.
-  if (/(?:cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|video\.twimg\.com|tiktokcdn\.com|tiktokcdn-us\.com|v\d+-webapp\.tiktok\.com|weibocdn\.com|xhscdn\.com)/i.test(url)) {
+  if (/(?:cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|video\.twimg\.com|tiktokcdn\.com|tiktokcdn-us\.com|v\d+-webapp\.tiktok\.com|weibocdn\.com|xhscdn\.com|akamaized\.net|cloudfront\.net|jwpcdn\.com|jwplatform\.com|kaltura\.com|mux\.com|mux\.dev)/i.test(url)) {
     return 'direct';
   }
 

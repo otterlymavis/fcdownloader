@@ -1,8 +1,11 @@
 import urllib.request
 import urllib.error
+import os
+
+BACKEND = os.environ.get("FCDOWNLOADER_BACKEND", "https://fcdownloader-extractor.fly.dev").rstrip("/")
 
 req = urllib.request.Request(
-    'https://fcdownloader-extractor.fly.dev/extract',
+    f'{BACKEND}/extract',
     method='OPTIONS',
     headers={
         'Origin': 'http://localhost:8081',

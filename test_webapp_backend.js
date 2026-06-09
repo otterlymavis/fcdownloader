@@ -1,6 +1,9 @@
 const fetch = globalThis.fetch || (() => { try { return require('node-fetch'); } catch(e) { return null; } })();
 if (!fetch) { console.error("Error: fetch is not available in your Node.js environment."); process.exit(1); }
 
+const BACKEND = (process.env.FCDOWNLOADER_BACKEND || "https://fcdownloader-extractor.fly.dev").replace(/\/+$/, "");
+const REQUEST_TIMEOUT_MS = Number(process.env.FCDOWNLOADER_TEST_TIMEOUT_MS || 5000);
+const LIMIT = Number(process.env.FCDOWNLOADER_TEST_LIMIT || 10);
 
 const URLS = {
   // ── Global / Social ───────────────────────────────────────────────────
@@ -16,6 +19,11 @@ const URLS = {
   "Pinterest":     "https://www.pinterest.com/pin/84301824269690044/",
   "Vimeo":         "https://vimeo.com/76979871",
   "Dailymotion":   "https://www.dailymotion.com/video/xa52aa8",
+  "Direct MP4":    "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
+  "Direct Image":  "https://upload.wikimedia.org/wikipedia/commons/3/3f/Fronalpstock_big.jpg",
+  "Direct Audio":  "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg",
+  "HLS Manifest":  "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+  "DASH Manifest": "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd",
   // ── Chinese ───────────────────────────────────────────────────────────
   "Bilibili":      "https://www.bilibili.com/video/BV1PkR2BkEUt",
   "Bilibili-large":"https://www.bilibili.com/video/BV1ux411U7Dp/",
@@ -112,16 +120,26 @@ const URLS = {
 };
 
 async function testBackend() {
-  console.log("--- TESTING DEPLOYED BACKEND FOR WEB APP ---");
-  for (const [name, url] of Object.entries(URLS)) {
+  console.log(`--- TESTING BACKEND FOR WEB APP: ${BACKEND} ---`);
+  const entries = Number.isFinite(LIMIT) && LIMIT > 0
+    ? Object.entries(URLS).slice(0, LIMIT)
+    : Object.entries(URLS);
+  if (entries.length < Object.keys(URLS).length) {
+    console.log(`--- Limited to ${entries.length} URLs. Set FCDOWNLOADER_TEST_LIMIT=0 for the full sweep. ---`);
+  }
+  for (const [name, url] of entries) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const res = await fetch("https://fcdownloader-extractor.fly.dev/extract", {
+      const res = await fetch(`${BACKEND}/extract`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pageUrl: url })
+        body: JSON.stringify({ pageUrl: url }),
+        signal: controller.signal,
       });
       if (!res.ok) {
-        console.log(`[${name}] -> FAIL (HTTP ${res.status}):`, await res.text());
+        const body = await res.text();
+        console.log(`[${name}] -> FAIL (HTTP ${res.status}):`, body.length > 500 ? `${body.slice(0, 500)}...` : body);
       } else {
         const data = await res.json();
         const urlStr = data.url || data.videoUrl || "";
@@ -135,6 +153,8 @@ async function testBackend() {
       }
     } catch (e) {
       console.log(`[${name}] -> ERROR:`, e.message);
+    } finally {
+      clearTimeout(timer);
     }
   }
 }

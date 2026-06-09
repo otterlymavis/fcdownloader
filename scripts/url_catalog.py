@@ -11,16 +11,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 EXTRA_URLS: dict[str, tuple[str, str]] = {
     "Direct-MP4": (
-        "https://www.w3schools.com/html/mov_bbb.mp4",
+        "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
         "stable direct MP4 smoke test",
     ),
+    "Direct-Audio": (
+        "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg",
+        "stable direct audio smoke test",
+    ),
     "Direct-HLS": (
-        "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/"
-        "bipbop_16x9_variant.m3u8",
-        "Apple sample HLS manifest",
+        "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+        "Mux sample HLS manifest",
     ),
     "Direct-DASH": (
-        "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.mpd",
+        "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd",
         "DASH manifest smoke test",
     ),
 }

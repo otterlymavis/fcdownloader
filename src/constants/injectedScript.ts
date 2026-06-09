@@ -61,7 +61,7 @@ export const INJECTED_SCRIPT = `
   function detectType(url, mime) {
     if (!url) return null;
     var u = url.split('?')[0].toLowerCase();
-    if (u.indexOf('.m3u8') !== -1) return 'hls';
+    if (/\.m3u8?(?:$|[?#])/.test(u)) return 'hls';
     if (u.indexOf('.mpd')  !== -1) return 'dash';
     if (/\\.(ts|m4s|aac|m4a)$/.test(u)) return null;
     if (/\\.(mp4|webm|mov|avi|m4v|jpe?g|png|webp|gif|avif|heic|mp3|wav|ogg|opus|flac)$/.test(u)) return 'direct';
@@ -177,7 +177,7 @@ export const INJECTED_SCRIPT = `
     if (!base) base = 0.5;
     if (!url) return base;
     var u = url.toLowerCase();
-    if (/\\.m3u8(\\?|$)/.test(u) || /mpegurl/i.test(mime || '')) return Math.max(base, 0.85);
+    if (/\\.m3u8?(?:\\?|$)/.test(u) || /mpegurl/i.test(mime || '')) return Math.max(base, 0.85);
     if (/\\.mpd(\\?|$)/.test(u) || /dash\\+xml/i.test(mime || '')) return Math.max(base, 0.85);
     if (/\\.mp4(\\?|$)/.test(u)) return Math.max(base, 0.75);
     if (/vimeocdn\\.com.*playlist\\.json/.test(u)) return Math.max(base, 0.88);
@@ -228,7 +228,7 @@ export const INJECTED_SCRIPT = `
       text.replace(/\\\\\\/g, '/').replace(/\\\\u0026/g, '&').replace(/\\\\u003d/g, '=')
            .replace(/\\\\u002F/gi, '/'),
     ];
-    var extRe = /https?:\\/\\/[^"'\\\\\\s<>]{4,}?\\.(m3u8|mpd|mp4|webm|mov|m4v|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)[^"'\\\\\\s<>]*/gi;
+    var extRe = /https?:\\/\\/[^"'\\\\\\s<>]{4,}?\\.(m3u8?|mpd|mp4|webm|mov|m4v|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)[^"'\\\\\\s<>]*/gi;
     var cdnRe = /https?:\\/\\/[^"'\\\\\\s<>]*(?:(?:[a-z0-9-]+\\.)*streaks\\.jp|i\\.fod\\.fujitv\\.co\\.jp|fod-sp\\.fujitv\\.co\\.jp|free\\.tbs\\.co\\.jp|dmm\\.co\\.jp|dmm\\.com|fanza\\.jp|lemino\\.docomo\\.ne\\.jp|animestore\\.docomo\\.ne\\.jp|video\\.dmkt-sp\\.jp|unext\\.jp|video\\.unext\\.jp|hulu\\.jp|telasa\\.jp|plus\\.nhk\\.jp|nhk-ondemand\\.jp|wowow\\.co\\.jp|wod\\.wowow\\.co\\.jp|b-ch\\.com|bandainamcoid\\.com|tv\\.rakuten\\.co\\.jp|jod\\.jsports\\.co\\.jp|jsports\\.co\\.jp|spoox\\.skyperfectv\\.co\\.jp|skyperfectv\\.co\\.jp|locipo\\.jp|dougaizm\\.mbs\\.jp|mbs\\.jp|ytv\\.co\\.jp|video\\.tv-tokyo\\.co\\.jp|douga\\.tv-asahi\\.co\\.jp|ktv-smart\\.jp|ktv\\.jp|vod\\.ntv\\.co\\.jp|cu\\.ntv\\.co\\.jp|video\\.twimg\\.com|tiktokcdn\\.com|tiktokcdn-us\\.com|v\\d+-webapp\\.tiktok\\.com|cdninstagram\\.com|scontent[-\\w]*\\.cdninstagram\\.com|v\\.redd\\.it|fbcdn\\.net|threadscdn\\.com|vimeocdn\\.com\\/video|googlevideo\\.com\\/videoplayback|pinimg\\.com\\/(?:videos|originals|736x|1200x|564x)|dmcdn\\.net|usher\\.twitch\\.tv|bilivideo\\.com|weibocdn\\.com|xhscdn\\.com|vod\\.pstatic\\.net)[^"'\\\\\\s<>]{4,}/gi;
     variants.forEach(function (body) {
       var m;
@@ -742,7 +742,7 @@ export const INJECTED_SCRIPT = `
     // Inline scripts
     document.querySelectorAll('script').forEach(function (s) {
       var text = s.textContent || '';
-      var re = /["'](https?:\\/\\/[^"'\\s]{8,}\\.(m3u8|mpd|mp4|webm|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)[^"'\\s]*)/gi;
+      var re = /["'](https?:\\/\\/[^"'\\s]{8,}\\.(m3u8?|mpd|mp4|webm|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)[^"'\\s]*)/gi;
       var re2 = /"(?:src|file|url|source|stream|manifest|playAddr|play_addr|videoUrl|video_url|image|image_url|display_url|thumbnail|hls_url|dash_url)"\s*:\s*"(https?:\\/\\/[^"]{8,})"/gi;
       [re, re2].forEach(function (r) { var m; while ((m = r.exec(text))) emit(m[1], null); });
     });

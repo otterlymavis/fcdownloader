@@ -11,6 +11,7 @@ import { debugLog, debugWarn } from './releaseLogger';
 
 let _seq = 0;
 const genId = () => `ext_${Date.now()}_${_seq++}`;
+const MAX_GENERIC_SCAN_RESULTS = 80;
 
 const DESKTOP_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
@@ -95,7 +96,7 @@ function makeItem(url: string, pageUrl: string, label?: string, provenance: Prov
     pageUrl,
     userAgent: '',
     timestamp: Date.now(),
-    mediaType: lower.includes('.mpd') ? 'dash' : lower.includes('.m3u8') ? 'hls' : 'direct',
+    mediaType: lower.includes('.mpd') ? 'dash' : /\.m3u8?(?:[?#]|$)/i.test(lower) ? 'hls' : 'direct',
     mediaKind: mediaKindFromUrl(clean),
     label,
     confidence,
@@ -105,6 +106,10 @@ function makeItem(url: string, pageUrl: string, label?: string, provenance: Prov
 
 function pushUnique(results: DetectedMedia[], item: DetectedMedia): void {
   if (!results.some(r => r.url === item.url)) results.push(item);
+}
+
+function capGenericResults(items: DetectedMedia[]): DetectedMedia[] {
+  return items.slice(0, MAX_GENERIC_SCAN_RESULTS);
 }
 
 type ExtractorResult = {
@@ -149,20 +154,37 @@ function extractUrls(text: string, re: RegExp): string[] {
   return results;
 }
 
+function extractUrlCandidates(text: string, re: RegExp): string[] {
+  const results: string[] = [];
+  let m: RegExpExecArray | null;
+  re.lastIndex = 0;
+  while ((m = re.exec(text)) !== null) {
+    const raw = String(m[1] ?? m[0] ?? '')
+      .replace(/&amp;/g, '&')
+      .replace(/\\u0026/g, '&')
+      .replace(/\\\//g, '/')
+      .replace(/\\/g, '')
+      .trim();
+    if (!raw || /^(?:data:|blob:|javascript:|mailto:|#)/i.test(raw)) continue;
+    if (!results.includes(raw)) results.push(raw);
+  }
+  return results;
+}
+
 function _scanHtml(html: string, pageUrl: string, mode: 'hls' | 'dash' | 'generic'): DetectedMedia[] {
   const results: DetectedMedia[] = [];
   const patterns =
-    mode === 'hls' ? [/(https?:\/\/[^"'\\<>\s]+?\.m3u8[^"'\\<>\s]*)/gi]
+    mode === 'hls' ? [/(https?:\/\/[^"'\\<>\s]+?\.m3u8?[^"'\\<>\s]*)/gi]
     : mode === 'dash' ? [/(https?:\/\/[^"'\\<>\s]+?\.mpd[^"'\\<>\s]*)/gi]
     : [
-        /(https?:\/\/[^"'\\<>\s]+?\.(?:m3u8|mpd|mp4|m4v|webm|mov|mp3|m4a|ogg|opus|aac|flac|wav|jpe?g|png|webp|gif|avif)[^"'\\<>\s]*)/gi,
-        /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.(?:com|cn)|weibocdn\.com|xhscdn\.com|ci\.xiaohongshu\.com|biliimg\.com|hdslb\.com|pximg\.net|yimg\.jp|kakaocdn\.net)[^"'\\<>\s]*)/gi,
+        /(https?:\/\/[^"'\\<>\s]+?\.(?:m3u8|m3u|mpd|mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp|mp3|m4a|ogg|opus|aac|flac|wav|jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/gi,
+        /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.(?:com|cn)|weibocdn\.com|xhscdn\.com|ci\.xiaohongshu\.com|biliimg\.com|hdslb\.com|pximg\.net|yimg\.jp|kakaocdn\.net|akamaized\.net|cloudfront\.net|jwpcdn\.com|jwplatform\.com|kaltura\.com|mux\.com|mux\.dev)[^"'\\<>\s]*)/gi,
         /<(?:video|audio|source)\b[^>]{0,400}?\bsrc=["']([^"'<>\\\s]{2,})["']/gi,
         /<(?:video|source)\b[^>]{0,400}?\bdata-src=["']([^"'<>\\\s]{2,})["']/gi,
-        /<[a-z][a-z0-9-]*\b[^>]{0,600}?\bdata-(?:video-url|stream-url|media-url|video-src|stream-src|hls-url|mp4-url|mp4|m3u8|hls)=["']([^"'<>\\\s]{2,})["']/gi,
+        /<[a-z][a-z0-9-]*\b[^>]{0,600}?\bdata-(?:video-url|stream-url|media-url|video-src|stream-src|hls-url|mp4-url|mp4|m3u8|hls|download-url|file)=["']([^"'<>\\\s]{2,})["']/gi,
       ];
   patterns.forEach((re) => {
-    extractUrls(html, re)
+    extractUrlCandidates(html, re)
       .filter((u) => !/^(?:data:|blob:|javascript:|mailto:|#)/i.test(u))
       .filter((u) => !isLikelyNonContentMediaUrl(u))
       .forEach((u) => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.65)));
@@ -210,6 +232,7 @@ function _scanPageThumbnail(html: string, pageUrl: string): string | undefined {
 function _scanStructuredMediaData(html: string, pageUrl: string): DetectedMedia[] {
   const results: DetectedMedia[] = [];
   const thumbnails: string[] = [];
+  const mediaUrlKey = /(?:video|audio|media|stream|play|file|download|hls|mp4|dash|manifest|content|source|src)(?:url|src|file|path|link)?$/i;
   const add = (url?: unknown) => {
     if (typeof url !== 'string') return;
     const raw = url.replace(/\\u0026/g, '&').replace(/\\\//g, '/').trim();
@@ -247,11 +270,42 @@ function _scanStructuredMediaData(html: string, pageUrl: string): DetectedMedia[
       if (key in record) walkSchema(record[key], isMedia);
     });
   };
+  const walkHydration = (obj: unknown, depth = 0, mediaContext = false) => {
+    if (depth > 10) return;
+    if (Array.isArray(obj)) {
+      obj.forEach(item => walkHydration(item, depth + 1, mediaContext));
+      return;
+    }
+    if (!obj || typeof obj !== 'object') return;
+    const record = obj as Record<string, unknown>;
+    const rawType = record['@type'] ?? record.type ?? record.kind ?? '';
+    const type = Array.isArray(rawType) ? rawType.join(' ').toLowerCase() : String(rawType).toLowerCase();
+    const nextMediaContext = mediaContext || /(?:video|audio|media|stream|player|asset|source|track|file)/i.test(type);
+    Object.entries(record).forEach(([key, value]) => {
+      const keyIsMedia = mediaUrlKey.test(key);
+      if (typeof value === 'string') {
+        if (keyIsMedia || nextMediaContext || /\.(?:m3u8|m3u|mpd|mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp|mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i.test(value)) {
+          add(value);
+        }
+        if (/thumb|poster|image/i.test(key) && !isLikelyNonContentMediaUrl(value)) {
+          try { thumbnails.push(new URL(value, pageUrl).toString()); } catch {}
+        }
+        return;
+      }
+      if (value && typeof value === 'object') walkHydration(value, depth + 1, nextMediaContext || keyIsMedia);
+    });
+  };
 
   const ldRe = /<script\b[^>]*?\btype=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
   let ldMatch: RegExpExecArray | null;
   while ((ldMatch = ldRe.exec(html)) !== null) {
     try { walkSchema(JSON.parse(ldMatch[1])); } catch {}
+  }
+
+  const hydrationRe = /<script\b(?=[^>]*(?:id=["'](?:__NEXT_DATA__|__NUXT_DATA__|__APOLLO_STATE__|__INITIAL_STATE__|__INITIAL_DATA__|app-data)["']|type=["']application\/json["']))[^>]*>([\s\S]*?)<\/script>/gi;
+  let hydrationMatch: RegExpExecArray | null;
+  while ((hydrationMatch = hydrationRe.exec(html)) !== null) {
+    try { walkHydration(JSON.parse(hydrationMatch[1])); } catch {}
   }
 
   extractUrls(html, /<(?:enclosure|media:content)\b[^>]*?\burl=["']([^"']{10,})["']/gi).forEach(add);
@@ -290,7 +344,7 @@ async function extractHtmlMediaAll(pageUrl: string): Promise<DetectedMedia[]> {
     if (thumb) generic.forEach((item) => {
       if (item.mediaKind === 'video' || item.mediaKind === 'audio') item.thumbnailUrl = thumb;
     });
-    if (generic.length > 0) return generic;
+    if (generic.length > 0) return capGenericResults(generic);
     return _scanOgImage(html, pageUrl);
   } catch { return []; }
 }
@@ -520,8 +574,10 @@ async function extractDailymotion(pageUrl: string): Promise<DetectedMedia[]> {
     if (qualities) {
       for (const list of Object.values(qualities)) {
         for (const q of list) {
-          if (q.type === 'application/x-mpegURL' && q.url) {
-            results.push(makeItem(q.url, pageUrl));
+          const url = q.url ?? '';
+          const mime = (q.type ?? '').toLowerCase();
+          if (url && (/\.m3u8?(?:[?#]|$)/i.test(url) || /mpegurl|m3u8?/.test(mime))) {
+            results.push(makeItem(url, pageUrl, 'Dailymotion HLS'));
           }
         }
       }
@@ -761,7 +817,7 @@ async function extractFacebook(pageUrl: string): Promise<DetectedMedia[]> {
       extractUrls(html, re).forEach(u => pushUnique(results, makeItem(u, pageUrl)));
     }
 
-    return results;
+    return capGenericResults(results);
   } catch { return []; }
 }
 
@@ -1533,7 +1589,7 @@ export async function extractFromSocialUrl(pageUrl: string): Promise<DetectedMed
     const result = await runExtractor(name, fn);
     if (result.success && result.media?.length) {
       debugLog(`[extract] extraction success via ${name}`);
-      return result.media;
+      return capGenericResults(result.media);
     }
     diagnostics.push(`${name}: ${result.reason ?? 'failed'}`);
     if (i < strategies.length - 1) {

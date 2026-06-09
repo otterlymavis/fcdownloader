@@ -18,6 +18,9 @@
 import { FCDL_DEFAULT_BACKEND } from "./config.js";
 const DEFAULT_BACKEND = (FCDL_DEFAULT_BACKEND || "").trim().replace(/\/+$/, "");
 const DEBUG_LOGS = false;
+const LOCAL_HELPER_MIN_VERSION = "0.3.0-go";
+const LOCAL_HELPER_STATUS_TIMEOUT_MS = 3500;
+const LOCAL_HELPER_START_TIMEOUT_MS = 20000;
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i;
 const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i;
 const SERVER_ONLY_RE = /youtube\.com|youtu\.be|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.(?:com|cn)|bilibili\.com|b23\.tv|weibo\.com|weibo\.cn|weibocdn\.com|xiaohongshu\.com|rednote\.com|xhslink\.com|xhscdn\.com|tiktok\.com|vm\.tiktok\.com|reddit\.com|redd\.it|naver\.com|naver\.me|pstatic\.net|nicovideo\.jp|nico\.ms|niconico\.com|nicochannel\.jp|seiga\.nicovideo\.jp|tver\.jp|tver\.co\.jp|abema\.tv|abema\.io|twitcasting\.tv|openrec\.tv|video\.fc2\.com|live\.fc2\.com|nhk\.or\.jp|nhk\.jp|cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp|fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp|video\.yahoo\.co\.jp|news\.yahoo\.co\.jp|dmm\.co\.jp|dmm\.com|fanza\.jp|lemino\.docomo\.ne\.jp|animestore\.docomo\.ne\.jp|video\.dmkt-sp\.jp|unext\.jp|video\.unext\.jp|hulu\.jp|telasa\.jp|plus\.nhk\.jp|nhk-ondemand\.jp|wowow\.co\.jp|wod\.wowow\.co\.jp|b-ch\.com|bandainamcoid\.com|tv\.rakuten\.co\.jp|jod\.jsports\.co\.jp|jsports\.co\.jp|spoox\.skyperfectv\.co\.jp|skyperfectv\.co\.jp|locipo\.jp|dougaizm\.mbs\.jp|mbs\.jp|ytv\.co\.jp|video\.tv-tokyo\.co\.jp|douga\.tv-asahi\.co\.jp|ktv-smart\.jp|ktv\.jp|vod\.ntv\.co\.jp|cu\.ntv\.co\.jp|ameblo\.jp|ameba\.jp|natalie\.mu|oricon\.co\.jp|mdpr\.jp|modelpress\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|story\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net|trilltrill\.jp|note\.com|lineblog\.me|hatenablog\.(?:com|jp)|hatenadiary\.(?:com|jp)|hatena\.ne\.jp|blog\.fc2\.com|gyazo\.com|streamable\.com|redgifs\.com|linkedin\.com|bsky\.app|tumblr\.com/;
@@ -1049,12 +1052,12 @@ async function preflightLocalHelperUrl(url) {
   }
 }
 
-async function fetchLocalHelperHealth(timeoutMs = 2500) {
+async function fetchLocalHelperHealth(timeoutMs = LOCAL_HELPER_STATUS_TIMEOUT_MS) {
   const info = await fetchLocalHelperInfo(timeoutMs);
-  return Boolean(info?.ok);
+  return localHelperReady(info);
 }
 
-async function fetchLocalHelperInfo(timeoutMs = 2500) {
+async function fetchLocalHelperInfo(timeoutMs = LOCAL_HELPER_STATUS_TIMEOUT_MS) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -1072,6 +1075,34 @@ async function fetchLocalHelperInfo(timeoutMs = 2500) {
   }
 }
 
+function parseHelperVersion(version) {
+  const m = String(version || "").match(/(\d+)\.(\d+)\.(\d+)/);
+  return m ? m.slice(1).map((part) => Number(part) || 0) : null;
+}
+
+function helperVersionAtLeast(version, minimum = LOCAL_HELPER_MIN_VERSION) {
+  const got = parseHelperVersion(version);
+  const min = parseHelperVersion(minimum);
+  if (!got || !min) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (got[i] > min[i]) return true;
+    if (got[i] < min[i]) return false;
+  }
+  return true;
+}
+
+function localHelperReady(health) {
+  return Boolean(health?.ok && helperVersionAtLeast(health.version));
+}
+
+function localHelperProblem(health) {
+  if (!health?.ok) return "Companion is not running.";
+  if (!helperVersionAtLeast(health.version)) {
+    return `Companion is outdated (${health.version || "unknown"}). Update FCDownloader Companion to ${LOCAL_HELPER_MIN_VERSION} or newer.`;
+  }
+  return "";
+}
+
 async function ensureLocalHelperTools(timeoutMs = 10 * 60 * 1000) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
@@ -1082,7 +1113,7 @@ async function ensureLocalHelperTools(timeoutMs = 10 * 60 * 1000) {
     });
     const data = await response.json().catch(() => ({}));
     return response.ok && data?.ok !== false
-      ? { ok: true, health: await fetchLocalHelperInfo(2500), tools: data.tools || [] }
+      ? { ok: true, health: await fetchLocalHelperInfo(LOCAL_HELPER_STATUS_TIMEOUT_MS), tools: data.tools || [] }
       : { ok: false, error: data?.error || `HTTP ${response.status}` };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
@@ -1091,10 +1122,10 @@ async function ensureLocalHelperTools(timeoutMs = 10 * 60 * 1000) {
   }
 }
 
-async function waitForLocalHelper(timeoutMs = 10000) {
+async function waitForLocalHelper(timeoutMs = LOCAL_HELPER_START_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await fetchLocalHelperHealth(1500)) return true;
+    if (await fetchLocalHelperHealth(LOCAL_HELPER_STATUS_TIMEOUT_MS)) return true;
     await new Promise((resolve) => setTimeout(resolve, 750));
   }
   return false;
@@ -1243,13 +1274,13 @@ async function downloadItem(tabId, item) {
   addRoute("local helper", isYoutubeHdHelperItem && helperCanTry, async () => {
     debugLog("[fcdl] → local youtube helper");
     const health = await fetchLocalHelperInfo();
-    if (!health) {
+    if (!localHelperReady(health)) {
       const standalone = bestHelperAbsentFallback(tabId);
-      if (standalone) {
+      if (!health && standalone) {
         debugLog("[fcdl] → Companion absent; using best standalone candidate", standalone.source, standalone.kind);
         return downloadItem(tabId, standalone);
       }
-      throw new Error("Companion is not running.");
+      throw new Error(localHelperProblem(health));
     }
     if (health.needsSetup) {
       const setup = await ensureLocalHelperTools();
@@ -1258,7 +1289,11 @@ async function downloadItem(tabId, item) {
     const localUrl = localHelperDownloadUrl(helperTarget, true);
     const check = await preflightLocalHelperUrl(localUrl);
     if (!check.ok) throw new Error(check.error);
-    return chromeDownload(localUrl, suggestedFilename({ ...item, ext: "mp4" }, helperTarget, tabTitle));
+    const dlId = await chromeDownload(localUrl, suggestedFilename({ ...item, ext: "mp4" }, helperTarget, tabTitle));
+    _watchYtdlStreamDownload(dlId).catch((e) =>
+      debugWarn("[fcdl] local helper watcher error:", e?.message || e)
+    );
+    return dlId;
   });
 
   addRoute("direct", item.url && !backendStrategy && !hasReplayHeaders && !isPageLikeDownloadUrl(item.url), async () => {
@@ -1275,7 +1310,7 @@ async function downloadItem(tabId, item) {
   addRoute("local helper", !isYoutubeHdHelperItem && helperCanTry && !capturedConcreteMedia, async () => {
     debugLog("[fcdl] → local helper");
     const health = await fetchLocalHelperInfo();
-    if (!health) throw new Error("Companion is not running.");
+    if (!localHelperReady(health)) throw new Error(localHelperProblem(health));
     if (health.needsSetup) {
       const setup = await ensureLocalHelperTools();
       if (!setup.ok) throw new Error(setup.error || "Companion video tools are not ready.");
@@ -1283,7 +1318,11 @@ async function downloadItem(tabId, item) {
     const localUrl = localHelperDownloadUrl(helperTarget, false);
     const check = await preflightLocalHelperUrl(localUrl);
     if (!check.ok) throw new Error(check.error);
-    return chromeDownload(localUrl, suggestedFilename({ ...item, ext: "mp4" }, helperTarget, tabTitle));
+    const dlId = await chromeDownload(localUrl, suggestedFilename({ ...item, ext: "mp4" }, helperTarget, tabTitle));
+    _watchYtdlStreamDownload(dlId).catch((e) =>
+      debugWarn("[fcdl] local helper watcher error:", e?.message || e)
+    );
+    return dlId;
   });
 
   addRoute("proxy", capturedConcreteMedia && (hasReplayHeaders || PROXY_REQUIRED_RE.test(item.url || "") || SERVER_ONLY_RE.test(item.url || "")), async () => {
@@ -1595,14 +1634,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
     if (msg.type === "fcdl:helper_status") {
-      const health = await fetchLocalHelperInfo(1200);
-      sendResponse({ ok: true, ready: Boolean(health?.ok), health });
+      const health = await fetchLocalHelperInfo(LOCAL_HELPER_STATUS_TIMEOUT_MS);
+      sendResponse({ ok: true, ready: localHelperReady(health), health, problem: localHelperProblem(health) });
       return;
     }
     if (msg.type === "fcdl:helper_start") {
       await launchLocalCompanion();
-      const ready = await waitForLocalHelper(10000);
-      sendResponse({ ok: true, ready, health: ready ? await fetchLocalHelperInfo(2500) : null });
+      const ready = await waitForLocalHelper(LOCAL_HELPER_START_TIMEOUT_MS);
+      const health = await fetchLocalHelperInfo(LOCAL_HELPER_STATUS_TIMEOUT_MS);
+      sendResponse({ ok: true, ready: ready && localHelperReady(health), health, problem: localHelperProblem(health) });
       return;
     }
     if (msg.type === "fcdl:helper_ensure_tools") {

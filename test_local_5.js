@@ -1,22 +1,36 @@
-const fetch = require('node-fetch') || globalThis.fetch;
+const fetch = globalThis.fetch || (() => { try { return require('node-fetch'); } catch (e) { return null; } })();
+if (!fetch) {
+  console.error('Error: fetch is not available in your Node.js environment.');
+  process.exit(1);
+}
 
 const MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchHtml(url) {
-  const res = await fetch(url, { headers: { 'User-Agent': MOBILE_UA, 'Accept-Language': 'en-US,en;q=0.9' } });
+  const res = await fetchWithTimeout(url, { headers: { 'User-Agent': MOBILE_UA, 'Accept-Language': 'en-US,en;q=0.9' } });
   return res.text();
 }
 
 async function extractTikTok(pageUrl) {
   let url = pageUrl;
   if (url.includes('vm.tiktok.com') || url.includes('vt.tiktok.com')) {
-    const res = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
+    const res = await fetchWithTimeout(url, { redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
     url = res.url;
   }
   const m = url.match(/(?:video|photo|v)\/(\d+)/);
   if (!m) return null;
   const videoId = m[1];
-  const res = await fetch(`https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id=${videoId}`, {
+  const res = await fetchWithTimeout(`https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id=${videoId}`, {
     headers: { 'User-Agent': MOBILE_UA }
   });
   try {
@@ -36,11 +50,11 @@ async function extractTikTok(pageUrl) {
 async function extractReddit(pageUrl) {
   let url = pageUrl;
   if (url.includes('/s/')) {
-    const res = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
+    const res = await fetchWithTimeout(url, { redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
     url = res.url;
   }
   const jsonUrl = url.split('?')[0].replace(/\/$/, '') + '/.json';
-  const res = await fetch(jsonUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
+  const res = await fetchWithTimeout(jsonUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
   if (!res.ok) return `Reddit failed: ${res.status}`;
   const data = await res.json();
   const post = data[0]?.data?.children?.[0]?.data;
@@ -69,7 +83,7 @@ async function extractBilibili(pageUrl) {
 async function extractXiaohongshu(pageUrl) {
   let url = pageUrl;
   if (pageUrl.includes('xhslink.com')) {
-    const res = await fetch(pageUrl, { headers: { 'User-Agent': MOBILE_UA }, redirect: 'follow' });
+    const res = await fetchWithTimeout(pageUrl, { headers: { 'User-Agent': MOBILE_UA }, redirect: 'follow' });
     url = res.url;
   }
   const html = await fetchHtml(url);
@@ -91,7 +105,7 @@ async function extractXiaohongshu(pageUrl) {
 async function extractWeibo(pageUrl) {
   let url = pageUrl;
   if (url.includes('mapp.api.weibo.cn')) {
-    const res = await fetch(url, { headers: { 'User-Agent': MOBILE_UA }, redirect: 'follow' });
+    const res = await fetchWithTimeout(url, { headers: { 'User-Agent': MOBILE_UA }, redirect: 'follow' });
     url = res.url;
   }
   const html = await fetchHtml(url);
@@ -119,11 +133,23 @@ async function extractWeibo(pageUrl) {
 }
 
 async function runTests() {
-  console.log(await extractTikTok("https://vm.tiktok.com/ZNR7eeRqB/") || "TikTok FAIL");
-  console.log(await extractReddit("https://www.reddit.com/r/shiba/s/nC3HbrECzI") || "Reddit FAIL");
-  console.log(await extractBilibili("https://www.bilibili.com/video/BV1PkR2BkEUt") || "Bilibili FAIL");
-  console.log(await extractXiaohongshu("http://xhslink.com/o/AuDpBCMNn0z") || "XHS FAIL");
-  console.log(await extractWeibo("https://mapp.api.weibo.cn/fx/d98fa849fa97fd2e8221047514eef64c.html") || "Weibo FAIL");
+  const samples = [
+    ["TikTok Short", () => extractTikTok("https://vm.tiktok.com/ZNR7eeRqB/")],
+    ["TikTok NASA", () => extractTikTok("https://www.tiktok.com/@nasa.tiktok2/video/7624845650504469780")],
+    ["Reddit Gallery", () => extractReddit("https://www.reddit.com/r/shiba/s/nC3HbrECzI")],
+    ["Bilibili Small", () => extractBilibili("https://www.bilibili.com/video/BV1PkR2BkEUt")],
+    ["Bilibili Large", () => extractBilibili("https://www.bilibili.com/video/BV1ux411U7Dp/")],
+    ["Xiaohongshu", () => extractXiaohongshu("http://xhslink.com/o/AuDpBCMNn0z")],
+    ["Weibo Share", () => extractWeibo("https://mapp.api.weibo.cn/fx/d98fa849fa97fd2e8221047514eef64c.html")],
+  ];
+
+  for (const [name, run] of samples) {
+    try {
+      console.log(await run() || `${name} FAIL`);
+    } catch (e) {
+      console.log(`${name} ERROR: ${e.message || e}`);
+    }
+  }
 }
 
 runTests();

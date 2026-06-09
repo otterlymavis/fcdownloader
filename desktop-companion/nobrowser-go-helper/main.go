@@ -36,7 +36,7 @@ const (
 	apiVersion           = "v1"
 	maxURLLength         = 4096
 	defaultFormat        = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/best[ext=mp4]/best"
-	youtubeFormat        = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/137+140/136+140/18"
+	youtubeFormat        = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/bestvideo[height<=1080]+bestaudio/best[height>=720][height<=1080]"
 	pinnedYtDlpVersion   = "2026.03.17"
 	defaultYtDlpBaseURL  = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17"
 	nightlyYtDlpBaseURL  = "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download"
@@ -266,23 +266,13 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 		return
 	}
 
-	// Flush headers immediately so the Chrome extension's download manager doesn't time out
-	// while waiting for yt-dlp to finish downloading the video.
-	w.Header().Set("Content-Type", "video/mp4")
-	w.Header().Set("Content-Disposition", `attachment; filename="fcdownloader_video.mp4"`)
-	w.WriteHeader(http.StatusOK)
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-
 	filePath, cleanup, err := downloadMedia(r.Context(), rawURL, strings.TrimSpace(q.Get("format")), strings.TrimSpace(q.Get("max_height")))
 	if cleanup != nil {
 		defer cleanup()
 	}
 	if err != nil {
-		// Headers already sent, so we can't send a JSON error payload anymore.
-		// Simply aborting the connection will let the browser know the download failed.
 		logf("download error: %v", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -290,10 +280,13 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 	if err != nil {
 		logf("failed to open downloaded file: %v", err)
 		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "downloaded media file could not be opened"})
 		return
 	}
 	defer file.Close()
 
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Content-Disposition", `attachment; filename="fcdownloader_video.mp4"`)
 	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 99, Status: "serving"})
 	if _, err := io.Copy(w, file); err != nil {
 		logf("failed to serve downloaded file: %v", err)
@@ -462,18 +455,7 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (strin
 		cleanup()
 		return "", nil, err
 	}
-	var candidates []string
-	for _, file := range files {
-		if !file.Type().IsRegular() {
-			continue
-		}
-		candidates = append(candidates, filepath.Join(tmp, file.Name()))
-	}
-	sort.Slice(candidates, func(i, j int) bool {
-		ai, _ := os.Stat(candidates[i])
-		aj, _ := os.Stat(candidates[j])
-		return ai.Size() > aj.Size()
-	})
+	candidates := mediaFileCandidates(tmp, files)
 	if len(candidates) == 0 {
 		cleanup()
 		return "", nil, errors.New("yt-dlp produced no media file")
@@ -502,23 +484,41 @@ func downloadMediaWithYtDlp(ctx context.Context, ytDlp, ffmpeg, rawURL, format s
 		cleanup()
 		return "", nil, err
 	}
+	candidates := mediaFileCandidates(tmp, files)
+	if len(candidates) == 0 {
+		cleanup()
+		return "", nil, errors.New("yt-dlp produced no media file")
+	}
+	return candidates[0], cleanup, nil
+}
+
+func mediaFileCandidates(dir string, files []os.DirEntry) []string {
 	var candidates []string
 	for _, file := range files {
 		if !file.Type().IsRegular() {
 			continue
 		}
-		candidates = append(candidates, filepath.Join(tmp, file.Name()))
+		path := filepath.Join(dir, file.Name())
+		if !isMediaOutputFile(path) {
+			continue
+		}
+		candidates = append(candidates, path)
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		ai, _ := os.Stat(candidates[i])
 		aj, _ := os.Stat(candidates[j])
 		return ai.Size() > aj.Size()
 	})
-	if len(candidates) == 0 {
-		cleanup()
-		return "", nil, errors.New("yt-dlp produced no media file")
+	return candidates
+}
+
+func isMediaOutputFile(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi", ".mp3", ".m4a", ".aac", ".opus", ".ogg", ".wav", ".flac":
+		return true
+	default:
+		return false
 	}
-	return candidates[0], cleanup, nil
 }
 
 func ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL string) []string {

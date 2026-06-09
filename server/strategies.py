@@ -176,7 +176,7 @@ def _strategy_ydl(
         if registry.is_youtube(page_url) or any(h in page_url for h in ("nicovideo.jp", "nico.ms", "niconico.com", "nicochannel.jp")):
             _proto = (info.get("protocol") or "").lower()
             _url = (info.get("url") or "").lower()
-            if "m3u8" in _proto or ".m3u8" in _url:
+            if "m3u8" in _proto or re.search(r"\.m3u8?(?:[?#]|$)", _url, re.I):
                 return _result(
                     name, False,
                     reason=(
@@ -219,7 +219,7 @@ def _strategy_ydl_client(
         if registry.is_youtube(page_url):
             _proto = (info.get("protocol") or "").lower()
             _url = (info.get("url") or "").lower()
-            if "m3u8" in _proto or ".m3u8" in _url:
+            if "m3u8" in _proto or re.search(r"\.m3u8?(?:[?#]|$)", _url, re.I):
                 return _result(
                     name, False,
                     reason=(
@@ -258,6 +258,12 @@ def _strategy_platform_extractors(
             if info:
                 return _result(name, True, media=info)
             return _result(name, False, reason="Instagram extractor found no media")
+
+        if "dailymotion.com" in page_url:
+            info = extractors.extract_dailymotion(page_url, cookies)
+            if info:
+                return _result(name, True, media=info)
+            return _result(name, False, reason="Dailymotion extractor found no media")
 
         if any(h in page_url for h in ("mdpr.jp", "modelpress.jp")):
             info = extractors.extract_modelpress(page_url, cookies)
@@ -413,7 +419,7 @@ def _strategy_html_scan_combined(
 
     name = "HTML media scanner"
 
-    if ".m3u8" in page_url.lower():
+    if re.search(r"\.m3u8?(?:[?#]|$)", page_url, re.I):
         url = normalize_url(page_url)
         ext = "m3u8"
         return _result(name, True, media={
@@ -457,7 +463,7 @@ def _strategy_html_scan_combined(
     def _info_from_url(media_url: str) -> dict[str, Any]:
         url = normalize_url(html_mod.unescape(media_url))
         ext = guess_ext_from_url(url) or (
-            "m3u8" if ".m3u8" in url.lower() else
+            "m3u8" if re.search(r"\.m3u8?(?:[?#]|$)", url, re.I) else
             "mpd"  if ".mpd"  in url.lower() else "mp4"
         )
         return {
@@ -678,6 +684,62 @@ def _snapwc_result_acceptable(page_url: str, info: dict[str, Any]) -> tuple[bool
     return True, None
 
 
+_IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "avif", "heic"}
+_JP_VIDEO_ONLY_HOSTS = (
+    "nicovideo.jp", "nico.ms", "niconico.com", "nicochannel.jp",
+    "tver.jp", "tver.co.jp",
+    "abema.tv", "abema.io",
+    "cu.tbs.co.jp",
+    "fod.fujitv.co.jp", "fod-sp.fujitv.co.jp", "fujitv.co.jp",
+    "lemino.docomo.ne.jp", "animestore.docomo.ne.jp", "video.dmkt-sp.jp",
+    "unext.jp", "video.unext.jp", "hulu.jp", "telasa.jp",
+    "plus.nhk.jp", "nhk-ondemand.jp", "wowow.co.jp", "wod.wowow.co.jp",
+    "b-ch.com", "bandainamcoid.com", "tv.rakuten.co.jp",
+    "jod.jsports.co.jp", "jsports.co.jp", "spoox.skyperfectv.co.jp",
+    "skyperfectv.co.jp",
+    "locipo.jp", "dougaizm.mbs.jp", "mbs.jp", "ytv.co.jp",
+    "video.tv-tokyo.co.jp", "douga.tv-asahi.co.jp", "ktv-smart.jp",
+    "ktv.jp", "vod.ntv.co.jp", "cu.ntv.co.jp",
+)
+
+
+def _is_jp_video_only_page(page_url: str) -> bool:
+    host = (urllib.parse.urlsplit(page_url).hostname or "").lower()
+    return any(host == h or host.endswith(f".{h}") for h in _JP_VIDEO_ONLY_HOSTS)
+
+
+def _media_is_image_only(info: dict[str, Any]) -> bool:
+    if info.get("_type") == "playlist":
+        entries = [entry for entry in (info.get("entries") or []) if isinstance(entry, dict)]
+        if not entries:
+            return False
+        for entry in entries:
+            url = safe_text(entry.get("url"))
+            ext = safe_text(entry.get("ext") or guess_ext_from_url(url)).lower()
+            protocol = safe_text(entry.get("protocol")).lower()
+            if ext not in _IMAGE_EXTS and not protocol.startswith("image"):
+                return False
+        return True
+
+    url = safe_text(info.get("url"))
+    ext = safe_text(info.get("ext") or guess_ext_from_url(url)).lower()
+    protocol = safe_text(info.get("protocol")).lower()
+    return bool(url) and (ext in _IMAGE_EXTS or protocol.startswith("image"))
+
+
+def _media_result_acceptable(page_url: str, info: dict[str, Any]) -> tuple[bool, str | None]:
+    if _is_jp_video_only_page(page_url):
+        if _media_is_image_only(info):
+            return False, "image/poster result rejected for Japanese video page"
+        if info.get("_type") != "playlist":
+            media_url = safe_text(info.get("url"))
+            page_key = normalize_url(page_url).split("#", 1)[0].rstrip("/")
+            media_key = normalize_url(media_url).split("#", 1)[0].rstrip("/") if media_url else ""
+            if media_key == page_key:
+                return False, "page HTML URL rejected for Japanese video page"
+    return True, None
+
+
 def _strategy_snapwc(page_url: str) -> dict[str, Any]:
     """Watermark-removal proxy via snapwc.com (only runs when remove_watermark=True)."""
     name = "watermark-removal proxy"
@@ -746,7 +808,7 @@ def _scan_media_urls(html_text: str, mode: str) -> list[str]:
     import html as html_mod
     patterns: list[str] = []
     if mode in {"hls", "generic"}:
-        patterns.append(r'https?:\\?/\\?/[^"\'<>\s\\]+?\.m3u8[^"\'<>\s\\]*')
+        patterns.append(r'https?:\\?/\\?/[^"\'<>\s\\]+?\.m3u8?[^"\'<>\s\\]*')
     if mode in {"dash", "generic"}:
         patterns.append(r'https?:\\?/\\?/[^"\'<>\s\\]+?\.mpd[^"\'<>\s\\]*')
     if mode in {"generic"}:
@@ -795,7 +857,7 @@ def _scan_media_urls(html_text: str, mode: str) -> list[str]:
             return False
         if raw_url.startswith(("http://", "https://", "/", "./", "../")):
             return True
-        return bool(re.search(r'\.(?:m3u8|mpd|mp4|m4v|webm|mov|mp3|m4a|aac|ogg|flac|opus)(?:[?#]|$)', raw_url, re.IGNORECASE))
+        return bool(re.search(r'\.(?:m3u8?|mpd|mp4|m4v|webm|mov|mp3|m4a|aac|ogg|flac|opus)(?:[?#]|$)', raw_url, re.IGNORECASE))
 
     variants = [
         html_text,
@@ -956,7 +1018,7 @@ def _strategy_structured_media_data(
 
     def mk_entry(url: str) -> dict[str, Any]:
         ext = guess_ext_from_url(url) or (
-            "m3u8" if ".m3u8" in url.lower() else
+            "m3u8" if re.search(r"\.m3u8?(?:[?#]|$)", url, re.I) else
             "mpd" if ".mpd" in url.lower() else
             "mp3" if any(x in url.lower() for x in (".mp3", "/mp3", "audio/mpeg")) else "mp4"
         )
@@ -1287,7 +1349,7 @@ def _strategy_page_embeds(
         def _mk_entry(u: str) -> dict[str, Any]:
             u = _html_mod2.unescape(u)
             ext = guess_ext_from_url(u) or (
-                "m3u8" if ".m3u8" in u.lower() else
+                "m3u8" if re.search(r"\.m3u8?(?:[?#]|$)", u, re.I) else
                 "mp3"  if any(x in u.lower() for x in (".mp3", "/mp3", "audio/mpeg")) else "mp4"
             )
             return {
@@ -1620,7 +1682,7 @@ def run_extraction(
     # ── Direct media URL short-circuit ────────────────────────────────────────
     import re
     direct_media = re.search(
-        r"(?:\.(?:mp4|webm|mov|m4v|m3u8|mpd)(?:[?#]|$)"
+        r"(?:\.(?:mp4|webm|mov|m4v|m3u8?|mpd)(?:[?#]|$)"
         # bilivideo.com: only .mp4/.flv are complete; .m4s are DASH video-only segments
         r"|bilivideo\.com/.*\.(?:mp4|flv)(?:[?#]|$)"
         r"|weibocdn\.com/|xhscdn\.com/"
@@ -1631,7 +1693,7 @@ def run_extraction(
     )
     if direct_media:
         ext = guess_ext_from_url(page_url) or (
-            "m3u8" if ".m3u8" in page_url.lower() else "mp4"
+            "m3u8" if re.search(r"\.m3u8?(?:[?#]|$)", page_url, re.I) else "mp4"
         )
         return {
             "url":          page_url,
@@ -1640,7 +1702,7 @@ def run_extraction(
             "thumbnail":    None,
             "duration":     None,
             "ext":          ext,
-            "protocol":     "m3u8_native" if ".m3u8" in page_url.lower() else "https",
+            "protocol":     "m3u8_native" if re.search(r"\.m3u8?(?:[?#]|$)", page_url, re.I) else "https",
             "id":           cache_key(page_url),
             "_source_audit": [source_audit.audit_entry(
                 strategy="direct media URL short-circuit",
@@ -1715,6 +1777,7 @@ def run_extraction(
             "redgifs.com",
             "bsky.app",
             "tumblr.com",
+            "dailymotion.com",
         ))
         platform_strategy = ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies))
         ytdlp_strategy = ("yt-dlp", lambda: _strategy_ydl(page_url, ydl_opts, False))
@@ -1788,9 +1851,24 @@ def run_extraction(
                 )
 
             if result.get("success") and result.get("media"):
-                print(f"[extract] {name} success (extraction complete)")
                 info = result["media"]
                 if isinstance(info, dict):
+                    acceptable, reject_reason = _media_result_acceptable(page_url, info)
+                    if not acceptable:
+                        print(f"[extract] {name} rejected: {reject_reason}")
+                        diagnostics[-1]["success"] = False
+                        diagnostics[-1]["reason"] = reject_reason
+                        if ctx:
+                            ctx.record_strategy(
+                                f"{name} result guard",
+                                False,
+                                reason=reject_reason,
+                            )
+                        if idx < len(strategies) - 1:
+                            print(f"[extract] falling back to {strategies[idx + 1][0]}")
+                        continue
+
+                    print(f"[extract] {name} success (extraction complete)")
                     info.setdefault("_extractor_strategy", name)
                     info.setdefault("_extractor_diagnostics", diagnostics)
                     source_audit.add_audit(info, accumulated_audit)

@@ -226,9 +226,9 @@ def fetch_with_retry(
 
 
 def looks_like_hls(url: str, protocol: str | None) -> bool:
-    if protocol and "m3u8" in protocol:
+    if protocol and ("m3u8" in protocol or "mpegurl" in protocol.lower()):
         return True
-    return ".m3u8" in url or "/api/manifest/hls" in url
+    return bool(re.search(r"\.m3u8?(?:[?#]|$)", url, re.I)) or "/api/manifest/hls" in url
 
 
 def expire_of(url: str) -> int | None:

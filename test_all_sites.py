@@ -5,15 +5,30 @@ import yt_dlp
 
 TEST_URLS = {
     "YouTube": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
-    "Instagram": "https://www.instagram.com/p/C-00-5lA2Qd/?img_index=1",
-    "Twitter": "https://twitter.com/SpaceX/status/1768271505370423719",
-    "Facebook": "https://www.facebook.com/watch/?v=1329243767851936",
-    "Naver TV": "https://tv.naver.com/v/41725595",
-    "Niconico": "https://www.nicovideo.jp/watch/sm43343389",
-    "Bilibili": "https://www.bilibili.com/video/BV11h4y1f7Xk/",
+    "YouTube Classic": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "Instagram Reel": "https://www.instagram.com/reel/C7VgIvhsKgR/",
+    "Twitter/X": "https://x.com/NASA/status/1902118174591521056",
+    "Facebook": "https://www.facebook.com/watch/?v=10153231379946729",
+    "Naver TV": "http://tv.naver.com/v/81652",
+    "Niconico": "https://www.nicovideo.jp/watch/sm9",
+    "Bilibili": "https://www.bilibili.com/video/BV1PkR2BkEUt",
+    "Bilibili Large": "https://www.bilibili.com/video/BV1ux411U7Dp/",
     "Xiaohongshu": "https://www.xiaohongshu.com/explore/654854cd000000001e00e00f",
-    "TikTok": "https://www.tiktok.com/@tiktok/video/7339798485299875114",
-    "Reddit": "https://www.reddit.com/r/aww/comments/1f4x0x1/this_is_my_life_now/"
+    "Xiaohongshu Shortlink": "http://xhslink.com/o/AuDpBCMNn0z",
+    "TikTok Short": "https://vm.tiktok.com/ZNR7eeRqB/",
+    "TikTok NASA": "https://www.tiktok.com/@nasa.tiktok2/video/7624845650504469780",
+    "Reddit Gallery": "https://www.reddit.com/r/shiba/s/nC3HbrECzI",
+    "Vimeo": "https://vimeo.com/76979871",
+    "Dailymotion": "https://www.dailymotion.com/video/xa52aa8",
+    "Pinterest": "https://www.pinterest.com/pin/84301824269690044/",
+    "NHK World": "https://www3.nhk.or.jp/nhkworld/en/shows/2049165/",
+    "Oricon": "https://www.oricon.co.jp/news/2285123/full/",
+    "Modelpress": "https://mdpr.jp/photo/detail/20095233",
+    "Direct MP4": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
+    "Direct Image": "https://upload.wikimedia.org/wikipedia/commons/3/3f/Fronalpstock_big.jpg",
+    "Direct Audio": "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg",
+    "HLS Manifest": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+    "DASH Manifest": "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd",
 }
 
 def test_ytdlp(url):
@@ -30,6 +45,9 @@ def test_ytdlp(url):
             return "FAIL: No info returned"
     except Exception as e:
         return f"FAIL: {str(e)}"
+
+
+test_ytdlp.__test__ = False
 
 def main():
     print("--- STARTING TESTS ---")
