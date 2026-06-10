@@ -41,6 +41,12 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
   // below, and the proxy 502s on them — the on-device extractor mis-types their
   // extension-less CDN URLs as video, so without these guards they'd wrongly
   // route here.
+  // On-device extracted Bilibili CDN URLs have pinned Referer+UA headers and
+  // can be fetched directly from the user's IP — skip the server proxy path
+  // (which requires BUNDLED_URL to be configured). Server-extracted items have
+  // sourcePageUrl set and still go through the auth-gated routing below.
+  if (/bilivideo\.com\//i.test(url) && !media.sourcePageUrl) return 'direct';
+
   const isVideo =
     media.mediaKind === 'video' ||
     media.mediaType === 'dash' ||

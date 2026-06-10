@@ -178,8 +178,14 @@ function _scanHtml(html: string, pageUrl: string, mode: 'hls' | 'dash' | 'generi
     : mode === 'dash' ? [/(https?:\/\/[^"'\\<>\s]+?\.mpd[^"'\\<>\s]*)/gi]
     : [
         /(https?:\/\/[^"'\\<>\s]+?\.(?:m3u8|m3u|mpd|mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp|mp3|m4a|ogg|opus|aac|flac|wav|jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/gi,
-        /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.(?:com|cn)|weibocdn\.com|xhscdn\.com|ci\.xiaohongshu\.com|biliimg\.com|hdslb\.com|pximg\.net|yimg\.jp|kakaocdn\.net|akamaized\.net|cloudfront\.net|jwpcdn\.com|jwplatform\.com|kaltura\.com|mux\.com|mux\.dev)[^"'\\<>\s]*)/gi,
+        /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.(?:com|cn)|weibocdn\.com|xhscdn\.com|ci\.xiaohongshu\.com|biliimg\.com|hdslb\.com|pximg\.net|yimg\.jp|kakaocdn\.net|daumcdn\.net|akamaized\.net|cloudfront\.net|jwpcdn\.com|jwplatform\.com|kaltura\.com|mux\.com|mux\.dev)[^"'\\<>\s]*)/gi,
+        // Japanese publisher CDN domains that may serve images without a file extension
+        /(https?:\/\/[^"'\\<>\s]*(?:contents\.oricon\.co\.jp|img-mdpr\.freetls\.fastly\.net|mdpr\.jp\/photo|ogre\.natalie\.mu|img\.thetv\.jp|img\.mantan-web\.jp|img\.cinematoday\.jp|images\.microcms-assets\.io|cdn-ak\.f\.st-hatena\.com|imgix\.net|cdn\.clipkit\.co|i\.gzn\.jp|res\.cloudinary\.com|webaccel\.jp|ismcdn\.jp|img\.cf\.47news\.jp)[^"'\\<>\s]*)/gi,
         /<(?:video|audio|source)\b[^>]{0,400}?\bsrc=["']([^"'<>\\\s]{2,})["']/gi,
+        // img tags: src, lazy-load variants, srcset first URL
+        /<img\b[^>]{0,600}?\bsrc=["']([^"'<>\\\s]{4,})["']/gi,
+        /<img\b[^>]{0,600}?\bdata-(?:src|lazy|lazy-src|original|origin|url|img-src|image-src)=["']([^"'<>\\\s]{4,})["']/gi,
+        /<source\b[^>]{0,600}?\bsrcset=["']([^\s,'"<>]{4,})/gi,
         /<(?:video|source)\b[^>]{0,400}?\bdata-src=["']([^"'<>\\\s]{2,})["']/gi,
         /<[a-z][a-z0-9-]*\b[^>]{0,600}?\bdata-(?:video-url|stream-url|media-url|video-src|stream-src|hls-url|mp4-url|mp4|m3u8|hls|download-url|file)=["']([^"'<>\\\s]{2,})["']/gi,
       ];
@@ -198,21 +204,33 @@ async function extractHtmlMedia(pageUrl: string, mode: 'hls' | 'dash' | 'generic
 }
 
 function _scanOg(html: string, pageUrl: string): DetectedMedia[] {
-  return extractUrls(
-    html,
-    /<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream)["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
-  )
-    .filter(u => u.startsWith('http'))
-    .map(u => makeItem(u, pageUrl));
+  const seen = new Set<string>();
+  const results: DetectedMedia[] = [];
+  const add = (u: string) => {
+    if (u.startsWith('http') && !seen.has(u)) { seen.add(u); results.push(makeItem(u, pageUrl)); }
+  };
+  extractUrls(html, /<meta\s[^>]*?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream)["'][^>]*?content\s*=\s*["']([^"']+)["']/gi).forEach(add);
+  extractUrls(html, /<meta\s[^>]*?content\s*=\s*["']([^"']+)["'][^>]*?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream)["']/gi).forEach(add);
+  return results;
 }
 
 function _scanOgImage(html: string, pageUrl: string): DetectedMedia[] {
-  return extractUrls(
-    html,
-    /<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["'](?:og:image(?::url|:secure_url)?|twitter:image(?::src)?)["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
-  )
-    .filter(u => u.startsWith('http'))
-    .map(u => makeItem(u, pageUrl, 'Image', 'social-extractor', 0.6));
+  const seen = new Set<string>();
+  const results: DetectedMedia[] = [];
+  const add = (u: string) => {
+    if (u.startsWith('http') && !seen.has(u)) {
+      seen.add(u);
+      results.push(makeItem(u, pageUrl, 'Image', 'social-extractor', 0.6));
+    }
+  };
+  // Handle both attribute orderings: property="og:image" content="..." and content="..." property="og:image"
+  extractUrls(html,
+    /<meta\s[^>]*?(?:property|name)\s*=\s*["'](?:og:image(?::url|:secure_url)?|twitter:image(?::src)?)["'][^>]*?content\s*=\s*["']([^"']+)["']/gi,
+  ).forEach(add);
+  extractUrls(html,
+    /<meta\s[^>]*?content\s*=\s*["']([^"']+)["'][^>]*?(?:property|name)\s*=\s*["'](?:og:image(?::url|:secure_url)?|twitter:image(?::src)?)["']/gi,
+  ).forEach(add);
+  return results;
 }
 
 function _scanPageThumbnail(html: string, pageUrl: string): string | undefined {
@@ -351,7 +369,7 @@ async function extractHtmlMediaAll(pageUrl: string): Promise<DetectedMedia[]> {
 
 function isLikelyNonContentMediaUrl(url: string): boolean {
   const u = url.toLowerCase();
-  if (/\.(?:html?|php|aspx?)(?:[?#]|$)/i.test(u)) return true;
+  if (/\.(?:html?|php|aspx?|jsx?|tsx?|css|woff2?|ttf|eot)(?:[?#]|$)/i.test(u)) return true;
   if (/(?:doubleclick|googlesyndication|google-analytics|analytics|adservice|scorecardresearch|outbrain|taboola|treasuredata|bidswitch)/i.test(u)) return true;
   if (/(?:^|[\/_.-])(?:ad|ads|banner|beacon|tracking|tracker|counter|spacer|sprite|logo|icon|button|common|header|footer|gnb|nav|placeholder|blank|pixel)(?:[\/_.-]|$)/i.test(u)) return true;
   if (/\.gif(?:[?#]|$)/i.test(u) && !/(?:article|photo|gallery|image|upimg|contents|media|original|large)/i.test(u)) return true;
@@ -1153,12 +1171,29 @@ async function extractNaver(pageUrl: string): Promise<DetectedMedia[]> {
   }
 
   try {
-    const html = await fetchHtml(pageUrl, DESKTOP_UA, getAcceptLanguage(pageUrl));
+    const lang = getAcceptLanguage(pageUrl);
+    let html = await fetchHtml(pageUrl, DESKTOP_UA, lang);
+
+    // Naver Blog pages are framesets — the actual content lives in a PostView iframe.
+    // Follow the iframe src so we can scan the real article HTML.
+    if (/blog\.naver\.com/i.test(pageUrl)) {
+      const iframeMatch = html.match(/<iframe\b[^>]*\bid=["']mainFrame["'][^>]*\bsrc=["']([^"']+)["']/i)
+        ?? html.match(/<iframe\b[^>]*\bsrc=["']([^"']+)["'][^>]*\bid=["']mainFrame["']/i);
+      if (iframeMatch) {
+        try {
+          const iframeUrl = new URL(iframeMatch[1].replace(/&amp;/g, '&'), pageUrl).toString();
+          html = await fetchHtml(iframeUrl, DESKTOP_UA, lang);
+        } catch {}
+      }
+    }
+
     const results: DetectedMedia[] = [];
+    // Scan for video streams and images from Naver/pstatic CDN
     extractUrls(
       html,
-      /(https?:\/\/[^"'\\<>\s]*(?:pstatic\.net|naver\.com)[^"'\\<>\s]*\.(?:m3u8|mp4)[^"'\\<>\s]*)/gi,
-    ).forEach(u => pushUnique(results, makeItem(u, pageUrl, 'Naver', 'social-extractor', 0.65)));
+      /(https?:\/\/[^"'\\<>\s]*(?:pstatic\.net|naver\.com)[^"'\\<>\s]*\.(?:m3u8|mp4|jpe?g|png|webp|gif)[^"'\\<>\s]*)/gi,
+    ).filter(u => !isLikelyNonContentMediaUrl(u))
+      .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'Naver', 'social-extractor', 0.65)));
     return results;
   } catch { return []; }
 }
@@ -1269,14 +1304,17 @@ async function extractJapaneseGeneric(pageUrl: string): Promise<DetectedMedia[]>
         .forEach(u => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.6)));
     });
 
-    // OG/twitter card, including article lead images.
-    extractUrls(
-      html,
-      /<meta\s+(?:[^>]*\s)?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream|og:image(?::secure_url)?|twitter:image(?::src)?)["'][^>]+content\s*=\s*["']([^"']+)["']/gi,
-    )
-      .filter(u => u.startsWith('http'))
-      .filter((u) => !isLikelyNonContentMediaUrl(u))
-      .forEach(u => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.55)));
+    // OG/twitter card, including article lead images — both attribute orderings.
+    const ogPatterns = [
+      /<meta\s[^>]*?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream|og:image(?::secure_url)?|twitter:image(?::src)?)["'][^>]*?content\s*=\s*["']([^"']+)["']/gi,
+      /<meta\s[^>]*?content\s*=\s*["']([^"']+)["'][^>]*?(?:property|name)\s*=\s*["'](?:og:video(?::url)?|twitter:player:stream|og:image(?::secure_url)?|twitter:image(?::src)?)["']/gi,
+    ];
+    ogPatterns.forEach(re =>
+      extractUrls(html, re)
+        .filter(u => u.startsWith('http'))
+        .filter((u) => !isLikelyNonContentMediaUrl(u))
+        .forEach(u => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.55))),
+    );
 
     return results;
   } catch { return []; }

@@ -130,7 +130,7 @@ async function fetchText(
 ): Promise<string> {
   const res = await fetch(url, { signal, headers });
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching manifest`);
-  return res.text();
+  return (await res.text()) ?? '';
 }
 
 async function downloadSegment(

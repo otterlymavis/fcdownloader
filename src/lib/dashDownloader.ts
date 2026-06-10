@@ -387,7 +387,7 @@ export async function downloadDASH(
   const manifestHeaders = await buildHeaders(media.url);
   const mpdRes = await fetch(media.url, { signal, headers: manifestHeaders });
   if (!mpdRes.ok) throw new Error(`HTTP ${mpdRes.status} fetching MPD manifest`);
-  const mpdXml = await mpdRes.text();
+  const mpdXml = (await mpdRes.text()) ?? '';
   if (signal?.aborted) throw new Error('Cancelled');
 
   if (!mpdXml.includes('<MPD') && !mpdXml.includes('urn:mpeg:dash')) {
@@ -423,24 +423,34 @@ export async function downloadDASH(
     return outPath;
   }
 
-  // ── Case 2b: SegmentTemplate / SegmentList — download best video track ──
+  // ── Case 2b: SegmentTemplate / SegmentList — download best available track ──
+  // Try tracks from highest to lowest quality; skip a track if its first segment
+  // returns HTTP 404 (stale CDN segment rotation is common for public test streams).
   onStatus?.('downloading');
-  const track = bestVideo ?? bestAudio!;
-  const totalSegs = track.segmentUrls.length;
-
-  const firstSeg = track.segmentUrls[0] ?? track.initUrl ?? '';
-  const segHeaders = await buildHeaders(firstSeg);
-
-  const outPath = await downloadTrack(
-    track.segmentUrls, track.initUrl, taskId, 'video_track',
-    segHeaders,
-    (done) => onProgress?.(done, totalSegs),
-    signal,
-  );
-
-  onStatus?.('assembling');
-  const info = await FileSystem.getInfoAsync(outPath);
-  if (!info.exists || (info.size ?? 0) === 0) throw new Error('Downloaded track is empty');
-  onProgress?.(1, 1);
-  return outPath;
+  const candidates = parsed.video.length > 0 ? parsed.video : [bestAudio!];
+  let lastErr: Error = new Error('No video track had accessible segments');
+  for (const track of candidates) {
+    if (signal?.aborted) throw new Error('Cancelled');
+    const totalSegs = track.segmentUrls.length;
+    const firstSeg = track.segmentUrls[0] ?? track.initUrl ?? '';
+    const segHeaders = await buildHeaders(firstSeg);
+    try {
+      const outPath = await downloadTrack(
+        track.segmentUrls, track.initUrl, taskId, 'video_track',
+        segHeaders,
+        (done) => onProgress?.(done, totalSegs),
+        signal,
+      );
+      onStatus?.('assembling');
+      const info = await FileSystem.getInfoAsync(outPath);
+      if (!info.exists || (info.size ?? 0) === 0) throw new Error('Downloaded track is empty');
+      onProgress?.(1, 1);
+      return outPath;
+    } catch (err) {
+      lastErr = err as Error;
+      if (signal?.aborted || lastErr.message === 'Cancelled') throw lastErr;
+      if (!/HTTP 404/.test(lastErr.message)) throw lastErr;
+    }
+  }
+  throw lastErr;
 }
