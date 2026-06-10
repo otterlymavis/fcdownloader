@@ -12,6 +12,7 @@
     "test:strategy-matrices": "python test_all_strategies.py --check-matrices",
     "validate:safari-extension": "node --check safari-extension/background.js && node --check safari-extension/content.js && node --check safari-extension/popup.js",
     "test:ios-urls": "python3 scripts/test_ios_urls.py",
+    "test:ios-urls:maestro": "python3 scripts/test_ios_urls.py --maestro",
     "test:macos-safari-urls": "python3 scripts/test_macos_safari_urls.py",
     "bake:web": "node scripts/bake-web-config.mjs",
     "dist:companion": "npm --prefix desktop-companion run dist",

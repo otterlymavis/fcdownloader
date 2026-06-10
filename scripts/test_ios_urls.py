@@ -115,6 +115,7 @@ def main() -> int:
     parser.add_argument("--pace", type=float, default=1.25, help="Seconds between URL injections.")
     parser.add_argument("--out-dir", default="artifacts/ios-url-tests", help="Output directory.")
     parser.add_argument("--screenshots", action="store_true", help="Capture one screenshot after each URL.")
+    parser.add_argument("--maestro", action="store_true", help="Use Maestro to simulate a center tap for each URL to bypass iOS Safari autoplay restrictions.")
     args = parser.parse_args()
 
     urls = select_urls(args.names, include_extra=not args.no_extra)
@@ -138,6 +139,30 @@ def main() -> int:
 
     print(f"Testing {len(urls)} URLs on {args.device} ({udid})")
     passed = 0
+    if args.maestro:
+        print("Generating chunked Maestro flows to avoid driver crash...")
+        chunk_size = 15
+        chunks = [urls[i:i + chunk_size] for i in range(0, len(urls), chunk_size)]
+        
+        for chunk_idx, chunk in enumerate(chunks):
+            flow_path = out_dir / f"maestro_flow_{chunk_idx}.yaml"
+            with flow_path.open("w", encoding="utf-8") as f:
+                f.write(f"appId: {args.bundle_id}\n---\n")
+                for name, url, note in chunk:
+                    generated = handoff_url(args.target, url, template=args.template)
+                    f.write(f"- openLink: {generated}\n")
+                    f.write(f"- swipe:\n    direction: DOWN\n    duration: 8000\n")
+                    f.write(f"- tapOn:\n    point: 50%, 25%\n")
+                    f.write(f"- tapOn:\n    point: 50%, 50%\n")
+                    f.write(f"- tapOn:\n    point: 50%, 75%\n")
+                    f.write(f"- swipe:\n    direction: DOWN\n    duration: {int(args.pace * 1000)}\n")
+            
+            print(f"Running Maestro chunk {chunk_idx + 1}/{len(chunks)} ({len(chunk)} URLs)")
+            cmd = f'export PATH="/opt/homebrew/opt/openjdk/bin:$HOME/.maestro/bin:$PATH"; maestro --device {udid} test "{flow_path}"'
+            subprocess.run(cmd, shell=True)
+            time.sleep(2.0)
+        return 0
+
     with results_path.open("w", encoding="utf-8") as f:
         for idx, (name, url, note) in enumerate(urls, start=1):
             generated = handoff_url(args.target, url, template=args.template)
