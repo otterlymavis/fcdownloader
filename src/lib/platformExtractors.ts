@@ -349,20 +349,26 @@ function _scanStructuredMediaData(html: string, pageUrl: string): DetectedMedia[
 async function extractHtmlMediaAll(pageUrl: string): Promise<DetectedMedia[]> {
   try {
     const html = await fetchHtml(pageUrl);
+    const all: DetectedMedia[] = [];
+
+    // Video/audio manifests — high confidence (0.85 default), score 4 in pickBestMedia.
+    // Run first but accumulate rather than short-circuit, so image fallbacks survive
+    // when a found HLS/DASH URL turns out to be expired or auth-gated.
     for (const mode of ['hls', 'dash'] as const) {
-      const found = _scanHtml(html, pageUrl, mode);
-      if (found.length > 0) return found;
+      _scanHtml(html, pageUrl, mode).forEach(item => pushUnique(all, item));
     }
-    const og = _scanOg(html, pageUrl);
-    if (og.length > 0) return og;
-    const structured = _scanStructuredMediaData(html, pageUrl);
-    if (structured.length > 0) return structured;
+    _scanOg(html, pageUrl).forEach(item => pushUnique(all, item));
+    _scanStructuredMediaData(html, pageUrl).forEach(item => pushUnique(all, item));
+
+    // Generic scan: img/source tags, CDN domains — lower confidence (0.65), score 3.
     const generic = _scanHtml(html, pageUrl, 'generic');
     const thumb = _scanPageThumbnail(html, pageUrl);
     if (thumb) generic.forEach((item) => {
       if (item.mediaKind === 'video' || item.mediaKind === 'audio') item.thumbnailUrl = thumb;
     });
-    if (generic.length > 0) return capGenericResults(generic);
+    generic.forEach(item => pushUnique(all, item));
+
+    if (all.length > 0) return capGenericResults(all);
     return _scanOgImage(html, pageUrl);
   } catch { return []; }
 }
