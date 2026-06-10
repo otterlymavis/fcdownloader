@@ -160,7 +160,7 @@ URLS = {
     "Smart Flash":   ("https://smart-flash.jp/entertainment/", ""),
     "Nikkan Gendai": ("https://www.nikkan-gendai.com/articles/index/news", "BROWSER-ONLY: index page does not expose stable article media to server fetch"),
     "Asagei":        ("https://www.asagei.com/category/sports", ""),
-    "Entame Next":   ("https://entamenext.com/category/lists/news", ""),
+    "Entame Next":   ("https://entamenext.com/category/lists/news", "AUTH/HLS: category page embeds a promo video behind an auth-gated HLS URL; generic image scan fallback available"),
     "GirlsNews":     ("https://girlsnews.tv/category/news", ""),
     "Tokyo Sports":  ("https://www.tokyo-sports.co.jp/list/sports", ""),
     "Hochi":         ("https://hochi.news/photos/", ""),
