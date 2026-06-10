@@ -271,11 +271,23 @@ export async function downloadHLS(
   let playlistUrl = media.url;
   let raw = await fetchText(playlistUrl, resolvedHeaders, signal);
 
+  // Every HLS playlist MUST begin with #EXTM3U (RFC 8216 §4.1).
+  // An HTML error page or CDN redirect page that leaks into media detection
+  // would otherwise have every non-# line parsed as a segment URL — including
+  // HTML tags with '<' characters — causing iOS NSURLRequest to reject the
+  // "segment URL" with a native error rather than a clear HTTP status.
+  if (!raw.trimStart().startsWith('#EXTM3U')) {
+    throw new Error('Not a valid HLS manifest (missing #EXTM3U)');
+  }
+
   if (raw.includes('#EXT-X-STREAM-INF')) {
     const variant = parseMaster(raw, playlistUrl);
     if (!variant) throw new Error('No variant streams in master playlist');
     playlistUrl = variant;
     raw = await fetchText(playlistUrl, resolvedHeaders, signal);
+    if (!raw.trimStart().startsWith('#EXTM3U')) {
+      throw new Error('Not a valid HLS media playlist (missing #EXTM3U)');
+    }
   }
 
   if (signal?.aborted) throw new Error('Cancelled');
