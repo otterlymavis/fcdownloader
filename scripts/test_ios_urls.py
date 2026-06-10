@@ -14,7 +14,7 @@ from url_catalog import ROOT, select_urls
 
 
 DEFAULT_DEVICE = "iPhone 17"
-DEFAULT_BUNDLE_ID = "com.mabisuuu.fcdownloader"
+DEFAULT_BUNDLE_ID = "com.otterpia.fcdownloader"
 SAFARI_PROJECT = ROOT / "safari-extension-xcode" / "FCDownloader Safari" / "FCDownloader Safari.xcodeproj"
 SAFARI_SCHEME = "FCDownloader Safari (iOS)"
 DEFAULT_TEMPLATE = "fcdownloader://share?url={url}"

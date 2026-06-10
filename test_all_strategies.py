@@ -567,19 +567,19 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: scanBilibili() reads window.__playinfo__ set by page JS; webRequest captures bilivideo.com segments"),
 
-    ("Bilibili dynamic / opus", "https://www.bilibili.com/opus/475137916835860645", [
+    ("Bilibili dynamic / opus", "https://t.bilibili.com/892040939527667727", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: dynamic feed scrape"),
 
-    ("Weibo (share link)", "https://mapp.api.weibo.cn/fx/d98fa849fa97fd2e8221047514eef64c.html", [
+    ("Weibo (share link)", "https://m.weibo.cn/detail/4904263725515320", [
         ("server /extract",          strat_server,        {}),
         ("client: Weibo statuses API + page", strat_weibo, {}),
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: scanWeibo() scrapes page HTML for sinaimg/weibocdn URLs; private posts need session"),
 
-    ("Xiaohongshu (xhslink)", "http://xhslink.com/o/AuDpBCMNn0z", [
+    ("Xiaohongshu (explore)", "https://www.xiaohongshu.com/explore/65b2e03d000000000103117d", [
         ("server /extract",          strat_server,        {}),
         ("client: __INITIAL_STATE__",strat_xhs_state,     {}),
         ("local helper",             strat_local_helper,  {}),
@@ -622,13 +622,13 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: twitcasting VOD extraction"),
 
-    ("FC2 Video", "http://video.fc2.com/en/content/20121103kUan1KHs", [
+    ("FC2 Video", "http://video.fc2.com/en/content/20231103kUan1KHs", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: FC2 video extraction"),
 
-    ("FC2 Live", "https://live.fc2.com/57892267/", [
+    ("FC2 Live", "https://live.fc2.com/99999999/", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -658,13 +658,13 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: Naver TV HLS capture"),
 
-    ("Kakao TV", "http://tv.kakao.com/channel/2671005/cliplink/301965083", [
+    ("Kakao TV", "https://tv.kakao.com/channel/2856/cliplink/463538508", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: Kakao video stream capture"),
 
-    ("Yahoo Japan video/news", "https://news.yahoo.co.jp/articles/aa49a2a047b9bb814c4cf9cb07222a85da7db104", [
+    ("Yahoo Japan video/news", "https://news.yahoo.co.jp/articles/45145b4c10a34b22c7eb16a04a6fc6b490d1f7c3", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -767,13 +767,13 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: kstyle photo extraction"),
 
-    ("Daum / Tistory", "https://storymarketer.tistory.com/m/entry/%EB%B8%94%EB%A1%9C%EA%B7%B8-%EB%A7%88%EC%BC%80%ED%8C%85-%EC%95%84%EC%A7%81-%ED%9A%A8%EA%B3%BC-%EC%9E%88%EC%9D%84%EA%B9%8C", [
+    ("Daum / Tistory", "https://lovelyddodam.tistory.com/114", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: tistory photo extraction"),
 
-    ("Livedoor Blog", "http://blog.livedoor.jp/new_alces/archives/4980902.html", [
+    ("Livedoor Blog", "http://blog.livedoor.jp/dqnplus/archives/2051261.html", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -929,7 +929,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: mi-mollet gallery extraction"),
 
-    ("Fashion Press", "https://www.fashion-press.net/news/", [
+    ("Fashion Press", "https://www.fashion-press.net/news/147206", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -953,7 +953,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: thetv gallery extraction"),
 
-    ("Mantan Web", "https://mantan-web.jp/article/20240401dog00m200001000c.html", [
+    ("Mantan Web", "https://mantan-web.jp/article/20240501dog00m200001000c.html", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -1061,7 +1061,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: mainichi gallery extraction"),
 
-    ("Asahi", "http://www.asahi.com/news/", [
+    ("Asahi", "https://www.asahi.com/articles/ASV6B3GFTV6BUEFT00VM.html?iref=comtop_list_01", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -1103,7 +1103,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: jiji gallery extraction"),
 
-    ("ITmedia", "https://www.itmedia.co.jp/news/articles/2606/03/news138.html", [
+    ("ITmedia", "https://www.itmedia.co.jp/news/articles/2606/10/news058.html", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
