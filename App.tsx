@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  DeviceEventEmitter,
   Image,
   Modal,
   Pressable,
@@ -33,6 +34,9 @@ import { useSettings } from './src/hooks/useSettings';
 import { DetectedMedia, DownloadTask } from './src/types';
 import { extractionManager } from './src/lib/extractionManager';
 import { ServerExtractOptions, setRemoveWatermark, setPreferredQuality } from './src/lib/serverExtractor';
+import { runAutomatedStrategyTest } from './src/lib/automatedTester';
+import { signalWeiboPrewarmComplete, signalWeiboFetchComplete } from './src/lib/weiboPrewarm';
+import { extractSessionCookies } from './src/lib/cookieManager';
 import {
   BOTTOM_PAD,
   IS_ANDROID,
@@ -160,6 +164,33 @@ export default function App() {
   resolvedLangRef.current = resolvedLanguage;
 
   const editLabel = resolvedLanguage === 'ar' ? 'تعديل' : (resolvedLanguage === 'zh' ? '编辑' : (resolvedLanguage === 'ja' ? '編集' : (resolvedLanguage === 'ko' ? '편집' : (resolvedLanguage === 'es' ? 'Editar' : (resolvedLanguage === 'fr' ? 'Modifier' : (resolvedLanguage === 'de' ? 'Bearbeiten' : 'Edit'))))));
+
+  // ── Weibo visitor session pre-warm ────────────────────────
+  const [weiboPrewarmActive, setWeiboPrewarmActive] = useState(false);
+  const weiboWebViewRef = useRef<WebView | null>(null);
+  const weiboAutoDismissRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const startSub = DeviceEventEmitter.addListener('weibo:prewarm:start', () => setWeiboPrewarmActive(true));
+    const cancelSub = DeviceEventEmitter.addListener('weibo:prewarm:cancel', () => {
+      if (weiboAutoDismissRef.current) { clearTimeout(weiboAutoDismissRef.current); weiboAutoDismissRef.current = null; }
+      setWeiboPrewarmActive(false);
+    });
+    // After prewarm, platformExtractors calls fetchWeiboStatuses() which emits this event.
+    // We inject a fetch() into the still-live WKWebView (which has the visitor cookie)
+    // and relay the JSON response back via postMessage → signalWeiboFetchComplete.
+    const fetchSub = DeviceEventEmitter.addListener('weibo:fetch:start', (apiUrl: string) => {
+      const ref = weiboWebViewRef.current;
+      if (!ref) { signalWeiboFetchComplete(null); return; }
+      const safeUrl = JSON.stringify(apiUrl);
+      ref.injectJavaScript(
+        `(function(){fetch(${safeUrl},{credentials:'include',headers:{'Accept':'application/json'}})` +
+        `.then(function(r){return r.json();})` +
+        `.then(function(d){window.ReactNativeWebView.postMessage('weibo_statuses:'+JSON.stringify(d));})` +
+        `.catch(function(){window.ReactNativeWebView.postMessage('weibo_statuses:null');});})();true;`
+      );
+    });
+    return () => { startSub.remove(); cancelSub.remove(); fetchSub.remove(); };
+  }, []);
 
   // ── Navigation ────────────────────────────────────────────
   const [tab, setTab]               = useState<Tab>('home');
@@ -289,6 +320,14 @@ export default function App() {
   const handleIncomingUrl = useCallback((raw: string) => {
     try {
       const parsed = Linking.parse(raw);
+      if (parsed.path === 'test_strategies' || parsed.hostname === 'test_strategies') {
+        const mediaUrl = parsed.queryParams?.url ? String(parsed.queryParams.url) : null;
+        const reportUrl = parsed.queryParams?.reportUrl ? String(parsed.queryParams.reportUrl) : null;
+        if (mediaUrl && reportUrl) {
+          runAutomatedStrategyTest(mediaUrl, reportUrl);
+        }
+        return;
+      }
       if (parsed.path === 'share' || parsed.hostname === 'share') {
         const mediaUrl = parsed.queryParams?.url ? String(parsed.queryParams.url) : null;
         if (mediaUrl) {
@@ -1622,6 +1661,54 @@ export default function App() {
       {/* ── Modals ──────────────────────────────────────── */}
         {playingPath && <VideoPlayerModal path={playingPath} onClose={() => setPlayingPath(null)} language={resolvedLanguage} />}
         <Toast message={toast} />
+        {/* Hidden WebView: runs the Sina Visitor System JS for Weibo sessions.
+            m.weibo.cn serves the visitor HTML INLINE (title="Sina Visitor System") so
+            onLoadEnd fires immediately on the visitor page before the JS runs. We use
+            injectedJavaScript (runs after every navigation) to detect when the visitor
+            JS has completed and the real Weibo page has loaded (different title), then
+            extract cookies and signal. */}
+        {IS_IOS && weiboPrewarmActive && (
+          <WebView
+            ref={(r) => { weiboWebViewRef.current = r; }}
+            source={{ uri: 'https://m.weibo.cn/' }}
+            style={s.hiddenWebView}
+            injectedJavaScript={`
+              (function() {
+                if (window.location.hostname === 'm.weibo.cn' && document.title && document.title !== 'Sina Visitor System') {
+                  window.ReactNativeWebView.postMessage('weibo_ready');
+                }
+              })();
+              true;
+            `}
+            onMessage={(e) => {
+              const msg = e.nativeEvent.data;
+              if (msg === 'weibo_ready') {
+                // Keep WebView alive so fetchWeiboStatuses can inject API calls.
+                // Auto-dismiss after 60s as safety net.
+                if (weiboAutoDismissRef.current) clearTimeout(weiboAutoDismissRef.current);
+                weiboAutoDismissRef.current = setTimeout(() => {
+                  weiboAutoDismissRef.current = null;
+                  setWeiboPrewarmActive(false);
+                }, 60_000);
+                extractSessionCookies('https://m.weibo.cn/')
+                  .then((cookies) => signalWeiboPrewarmComplete(cookies.length > 0))
+                  .catch(() => signalWeiboPrewarmComplete(false));
+              } else if (msg.startsWith('weibo_statuses:')) {
+                const json = msg.slice('weibo_statuses:'.length);
+                try {
+                  signalWeiboFetchComplete(json === 'null' ? null : JSON.parse(json));
+                } catch {
+                  signalWeiboFetchComplete(null);
+                }
+              }
+            }}
+            onError={() => {
+              if (weiboAutoDismissRef.current) { clearTimeout(weiboAutoDismissRef.current); weiboAutoDismissRef.current = null; }
+              setWeiboPrewarmActive(false);
+              signalWeiboPrewarmComplete(false);
+            }}
+          />
+        )}
       </SafeAreaView>
       </LinearGradient>
     </SafeAreaProvider>
@@ -1634,6 +1721,7 @@ const s = StyleSheet.create({
   flex:   { flex: 1 },
   center: { alignItems: 'center', justifyContent: 'center' },
   sep:    { height: StyleSheet.hairlineWidth, marginVertical: S.md },
+  hiddenWebView: { position: 'absolute', width: 0, height: 0, opacity: 0 },
 
   // ── Background Glows ──────────────────────────────────────
   bgGlow1: {

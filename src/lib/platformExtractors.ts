@@ -3,11 +3,14 @@
  * Called when the user pastes a site URL (not a direct CDN URL) into the
  * manual-add field. Works best for public / unauthenticated content.
  */
+import { Platform } from 'react-native';
 import { DetectedMedia, Provenance } from '../types';
 import { extractYouTubeStreams } from './ytExtractor';
 import { extractViaServer } from './serverExtractor';
 import { getAcceptLanguage, getSiteCapabilities } from './siteRegistry';
 import { debugLog, debugWarn } from './releaseLogger';
+import { prewarmWeiboVisitorSession, fetchWeiboStatuses } from './weiboPrewarm';
+import { extractSessionCookies } from './cookieManager';
 
 let _seq = 0;
 const genId = () => `ext_${Date.now()}_${_seq++}`;
@@ -37,7 +40,7 @@ export function isJapaneseDomain(url: string): boolean {
       'news-postseven.com', 'josei7.com', 'gendai.media', 'vivi.tv',
       'cancam.jp', 'withonline.jp', 'fashion-press.net', 'fashionsnap.com',
       'thetv.jp', 'mantan-web.jp', 'crank-in.net', 'cinematoday.jp',
-      'eiga.com', 'realsound.jp', 'jprime.jp', 'smart-flash.jp',
+      'eiga.com', 'entamenext.com', 'realsound.jp', 'jprime.jp', 'smart-flash.jp',
       'pixiv.net', 'fanbox.cc',
       'gyao.jp', 'hulu.jp', 'openrec.tv', 'mildom.com',
       'lemino.docomo.ne.jp', 'animestore.docomo.ne.jp', 'video.dmkt-sp.jp',
@@ -69,7 +72,10 @@ async function fetchHtml(url: string, ua = DESKTOP_UA, acceptLanguage?: string):
       'Accept-Language': lang,
     },
   });
-  return res.text();
+  // res.text() fails on React Native iOS for Shift-JIS encoded pages (iOS charset decode bug);
+  // arrayBuffer + permissive UTF-8 decode preserves ASCII CDN URLs even on non-UTF-8 pages.
+  const buf = await res.arrayBuffer();
+  return new TextDecoder('utf-8', { fatal: false }).decode(buf);
 }
 
 function mediaKindFromUrl(url: string): NonNullable<DetectedMedia['mediaKind']> {
@@ -78,12 +84,16 @@ function mediaKindFromUrl(url: string): NonNullable<DetectedMedia['mediaKind']> 
   return 'video';
 }
 
-function makeItem(url: string, pageUrl: string, label?: string, provenance: Provenance = 'social-extractor', confidence = 0.85): DetectedMedia {
+function makeItem(url: string, pageUrl: string, label?: string, provenance: Provenance = 'social-extractor', confidence = 0.85, forcedKind?: DetectedMedia['mediaKind']): DetectedMedia {
   const raw = url
+    .replace(/&#x([0-9a-fA-F]{1,4});/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&#([0-9]{1,5});/g, (_, d) => String.fromCharCode(parseInt(d, 10)))
     .replace(/&amp;/g, '&')
     .replace(/\\u0026/g, '&')
     .replace(/\\\//g, '/')
     .replace(/\\/g, '')
+    .replace(/&(?:quot|lt|gt|apos);.*/gi, '')  // strip HTML entity tail (from unescaped HTML context)
+    .replace(/[);,\s"']+$/, '')                 // strip trailing delimiters
     .trim();
   let clean = raw;
   try {
@@ -97,7 +107,7 @@ function makeItem(url: string, pageUrl: string, label?: string, provenance: Prov
     userAgent: '',
     timestamp: Date.now(),
     mediaType: lower.includes('.mpd') ? 'dash' : /\.m3u8?(?:[?#]|$)/i.test(lower) ? 'hls' : 'direct',
-    mediaKind: mediaKindFromUrl(clean),
+    mediaKind: forcedKind ?? mediaKindFromUrl(clean),
     label,
     confidence,
     provenance,
@@ -139,16 +149,25 @@ async function runExtractor(
   }
 }
 
+function cleanExtractedUrl(raw: string): string {
+  return raw
+    .replace(/&#x([0-9a-fA-F]{1,4});/g, (_, h) => String.fromCharCode(parseInt(h, 16))) // &#x3A; → :
+    .replace(/&#([0-9]{1,5});/g, (_, d) => String.fromCharCode(parseInt(d, 10)))         // &#58; → :
+    .replace(/&amp;/g, '&')
+    .replace(/\\u0026/g, '&')
+    .replace(/\\\//g, '/')
+    .replace(/\\/g, '')
+    .replace(/&(?:quot|lt|gt|apos);.*/gi, '')  // strip HTML entities that mark end of URL
+    .replace(/[);,\s"']+$/, '')                 // strip trailing delimiter characters
+    .trim();
+}
+
 function extractUrls(text: string, re: RegExp): string[] {
   const results: string[] = [];
   let m: RegExpExecArray | null;
   re.lastIndex = 0;
   while ((m = re.exec(text)) !== null) {
-    const raw = (m[1] ?? m[0])
-      .replace(/\\u0026/g, '&')
-      .replace(/\\\//g, '/')
-      .replace(/\\/g, '')
-      .trim();
+    const raw = cleanExtractedUrl((m[1] ?? m[0]) as string);
     if (raw.startsWith('http') && !results.includes(raw)) results.push(raw);
   }
   return results;
@@ -159,12 +178,7 @@ function extractUrlCandidates(text: string, re: RegExp): string[] {
   let m: RegExpExecArray | null;
   re.lastIndex = 0;
   while ((m = re.exec(text)) !== null) {
-    const raw = String(m[1] ?? m[0] ?? '')
-      .replace(/&amp;/g, '&')
-      .replace(/\\u0026/g, '&')
-      .replace(/\\\//g, '/')
-      .replace(/\\/g, '')
-      .trim();
+    const raw = cleanExtractedUrl(String(m[1] ?? m[0] ?? ''));
     if (!raw || /^(?:data:|blob:|javascript:|mailto:|#)/i.test(raw)) continue;
     if (!results.includes(raw)) results.push(raw);
   }
@@ -173,27 +187,31 @@ function extractUrlCandidates(text: string, re: RegExp): string[] {
 
 function _scanHtml(html: string, pageUrl: string, mode: 'hls' | 'dash' | 'generic'): DetectedMedia[] {
   const results: DetectedMedia[] = [];
-  const patterns =
-    mode === 'hls' ? [/(https?:\/\/[^"'\\<>\s]+?\.m3u8?[^"'\\<>\s]*)/gi]
-    : mode === 'dash' ? [/(https?:\/\/[^"'\\<>\s]+?\.mpd[^"'\\<>\s]*)/gi]
+  type PatternSpec = { re: RegExp; kind?: DetectedMedia['mediaKind'] };
+  const patternSpecs: PatternSpec[] =
+    mode === 'hls' ? [{ re: /(https?:\/\/[^"'\\<>\s]+?\.m3u8?[^"'\\<>\s]*)/gi }]
+    : mode === 'dash' ? [{ re: /(https?:\/\/[^"'\\<>\s]+?\.mpd[^"'\\<>\s]*)/gi }]
     : [
-        /(https?:\/\/[^"'\\<>\s]+?\.(?:m3u8|m3u|mpd|mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp|mp3|m4a|ogg|opus|aac|flac|wav|jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/gi,
-        /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.(?:com|cn)|weibocdn\.com|xhscdn\.com|ci\.xiaohongshu\.com|biliimg\.com|hdslb\.com|pximg\.net|yimg\.jp|kakaocdn\.net|daumcdn\.net|akamaized\.net|cloudfront\.net|jwpcdn\.com|jwplatform\.com|kaltura\.com|mux\.com|mux\.dev)[^"'\\<>\s]*)/gi,
-        // Japanese publisher CDN domains that may serve images without a file extension
-        /(https?:\/\/[^"'\\<>\s]*(?:contents\.oricon\.co\.jp|img-mdpr\.freetls\.fastly\.net|mdpr\.jp\/photo|ogre\.natalie\.mu|img\.thetv\.jp|img\.mantan-web\.jp|img\.cinematoday\.jp|images\.microcms-assets\.io|cdn-ak\.f\.st-hatena\.com|imgix\.net|cdn\.clipkit\.co|i\.gzn\.jp|res\.cloudinary\.com|webaccel\.jp|ismcdn\.jp|img\.cf\.47news\.jp)[^"'\\<>\s]*)/gi,
-        /<(?:video|audio|source)\b[^>]{0,400}?\bsrc=["']([^"'<>\\\s]{2,})["']/gi,
-        // img tags: src, lazy-load variants, srcset first URL
-        /<img\b[^>]{0,600}?\bsrc=["']([^"'<>\\\s]{4,})["']/gi,
-        /<img\b[^>]{0,600}?\bdata-(?:src|lazy|lazy-src|original|origin|url|img-src|image-src)=["']([^"'<>\\\s]{4,})["']/gi,
-        /<source\b[^>]{0,600}?\bsrcset=["']([^\s,'"<>]{4,})/gi,
-        /<(?:video|source)\b[^>]{0,400}?\bdata-src=["']([^"'<>\\\s]{2,})["']/gi,
-        /<[a-z][a-z0-9-]*\b[^>]{0,600}?\bdata-(?:video-url|stream-url|media-url|video-src|stream-src|hls-url|mp4-url|mp4|m3u8|hls|download-url|file)=["']([^"'<>\\\s]{2,})["']/gi,
+        { re: /(https?:\/\/[^"'\\<>\s]+?\.(?:m3u8|m3u|mpd|mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp|mp3|m4a|ogg|opus|aac|flac|wav|jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/gi },
+        { re: /(https?:\\?\/\\?\/[^"'\\<>\s]*(?:googlevideo\.com\/videoplayback|video\.twimg\.com|cdninstagram\.com|threadscdn\.com|bilivideo\.(?:com|cn)|weibocdn\.com|xhscdn\.com|ci\.xiaohongshu\.com|biliimg\.com|hdslb\.com|pximg\.net|yimg\.jp|kakaocdn\.net|daumcdn\.net|akamaized\.net|cloudfront\.net|jwpcdn\.com|jwplatform\.com|kaltura\.com|mux\.com|mux\.dev)[^"'\\<>\s)]*)/gi },
+        // Japanese publisher CDN domains — force image kind since these are editorial image CDNs
+        // and their URLs may lack a file extension (CDN transform params like w=,h=,f=webp)
+        { re: /(https?:\/\/[^"'\\<>\s]*(?:contents\.oricon\.co\.jp|img-mdpr\.freetls\.fastly\.net|mdpr\.jp\/photo|ogre\.natalie\.mu|img\.thetv\.jp|img\.mantan-web\.jp|storage\.mantan-web\.jp|img\.cinematoday\.jp|images\.microcms-assets\.io|cdn-ak\.f\.st-hatena\.com|imgix\.net|cdn\.clipkit\.co|i\.gzn\.jp|res\.cloudinary\.com|webaccel\.jp|ismcdn\.jp|img\.cf\.47news\.jp)[^"'\\<>\s)]*)/gi, kind: 'image' },
+        // CSS background-image:url(...) — always an image
+        { re: /background-image\s*:\s*url\(\s*['"]?(https?:\/\/[^'")\s]{10,})['"]?\s*\)/gi, kind: 'image' },
+        { re: /<(?:video|audio|source)\b[^>]{0,400}?\bsrc=["']([^"'<>\\\s]{2,})["']/gi },
+        // img tags — always image regardless of whether URL has a file extension
+        { re: /<img\b[^>]{0,600}?\bsrc=["']([^"'<>\\\s]{4,})["']/gi, kind: 'image' },
+        { re: /<img\b[^>]{0,600}?\bdata-(?:src|lazy|lazy-src|original|origin|url|img-src|image-src)=["']([^"'<>\\\s]{4,})["']/gi, kind: 'image' },
+        { re: /<source\b[^>]{0,600}?\bsrcset=["']([^\s,'"<>]{4,})/gi, kind: 'image' },
+        { re: /<(?:video|source)\b[^>]{0,400}?\bdata-src=["']([^"'<>\\\s]{2,})["']/gi },
+        { re: /<[a-z][a-z0-9-]*\b[^>]{0,600}?\bdata-(?:video-url|stream-url|media-url|video-src|stream-src|hls-url|mp4-url|mp4|m3u8|hls|download-url|file)=["']([^"'<>\\\s]{2,})["']/gi },
       ];
-  patterns.forEach((re) => {
+  patternSpecs.forEach(({ re, kind }) => {
     extractUrlCandidates(html, re)
       .filter((u) => !/^(?:data:|blob:|javascript:|mailto:|#)/i.test(u))
       .filter((u) => !isLikelyNonContentMediaUrl(u))
-      .forEach((u) => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.65)));
+      .forEach((u) => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.65, kind)));
   });
   return results;
 }
@@ -220,7 +238,7 @@ function _scanOgImage(html: string, pageUrl: string): DetectedMedia[] {
   const add = (u: string) => {
     if (u.startsWith('http') && !seen.has(u)) {
       seen.add(u);
-      results.push(makeItem(u, pageUrl, 'Image', 'social-extractor', 0.6));
+      results.push(makeItem(u, pageUrl, 'Image', 'social-extractor', 0.6, 'image'));
     }
   };
   // Handle both attribute orderings: property="og:image" content="..." and content="..." property="og:image"
@@ -348,7 +366,9 @@ function _scanStructuredMediaData(html: string, pageUrl: string): DetectedMedia[
 // when no video content was found.
 async function extractHtmlMediaAll(pageUrl: string): Promise<DetectedMedia[]> {
   try {
+    debugLog('[extractHtmlMediaAll] fetching', pageUrl);
     const html = await fetchHtml(pageUrl);
+    debugLog('[extractHtmlMediaAll] fetched', pageUrl, 'len:', html.length);
     const all: DetectedMedia[] = [];
 
     // Video/audio manifests — high confidence (0.85 default), score 4 in pickBestMedia.
@@ -368,9 +388,15 @@ async function extractHtmlMediaAll(pageUrl: string): Promise<DetectedMedia[]> {
     });
     generic.forEach(item => pushUnique(all, item));
 
+    debugLog('[extractHtmlMediaAll]', pageUrl, 'found:', all.length, 'items, generic:', generic.length);
     if (all.length > 0) return capGenericResults(all);
-    return _scanOgImage(html, pageUrl);
-  } catch { return []; }
+    const ogImages = _scanOgImage(html, pageUrl);
+    debugLog('[extractHtmlMediaAll]', pageUrl, 'ogImages:', ogImages.length);
+    return ogImages;
+  } catch (e) {
+    debugLog('[extractHtmlMediaAll] CAUGHT ERROR for', pageUrl, ':', String(e));
+    return [];
+  }
 }
 
 function isLikelyNonContentMediaUrl(url: string): boolean {
@@ -439,7 +465,7 @@ async function extractTikTok(pageUrl: string): Promise<DetectedMedia[]> {
 
     // Fallback: scan page for TikTok CDN URLs directly
     if (results.length === 0) {
-      extractUrls(html, /https?:\/\/v\d+-webapp\.tiktok\.com\/[^\s"'<>]{8,}/g).forEach(u =>
+      extractUrls(html, /https?:\/\/v\d+-webapp[^/]*\.tiktok\.com\/[^\s"'<>]{8,}/g).forEach(u =>
         results.push(makeItem(u, pageUrl)),
       );
     }
@@ -641,26 +667,6 @@ async function extractYouTube(pageUrl: string): Promise<DetectedMedia[]> {
 }
 
 // ── TVer ──────────────────────────────────────────────────────────
-type TVerSession = {
-  result?: {
-    platform_uid?: string;
-    platform_token?: string;
-  };
-};
-
-type TVerEpisodeResponse = {
-  result?: {
-    episode?: {
-      content?: {
-        title?: string;
-        seriesTitle?: string;
-        version?: number | string;
-        duration?: number;
-      };
-    };
-  };
-};
-
 type TVerEpisodeInfo = {
   title?: string;
   description?: string;
@@ -685,53 +691,17 @@ type TVerPlayback = {
   }>;
 };
 
+// 3-call pipeline: statics → streaks_info → playback. No TVer session needed.
 async function extractTVerViaStreaks(pageUrl: string, episodeId: string): Promise<DetectedMedia[]> {
-  const sessionRes = await fetch(
-    'https://platform-api.tver.jp/v2/api/platform_users/browser/create',
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': DESKTOP_UA,
-      },
-      body: 'device_type=pc',
-    },
-  );
-  if (!sessionRes.ok) return [];
-  const session = (await sessionRes.json()) as TVerSession;
-  const platformUid = session.result?.platform_uid;
-  const platformToken = session.result?.platform_token;
-  if (!platformUid || !platformToken) return [];
-
-  const query = new URLSearchParams({
-    platform_uid: platformUid,
-    platform_token: platformToken,
-    require_data: `mylist,later[${episodeId}],good[${episodeId}],resume[${episodeId}]`,
-  });
-  const episodeRes = await fetch(
-    `https://platform-api.tver.jp/service/api/v1/callEpisode/${episodeId}?${query.toString()}`,
-    {
-      headers: {
-        'x-tver-platform-type': 'web',
-        'Origin': 'https://tver.jp',
-        'Referer': 'https://tver.jp/',
-        'User-Agent': DESKTOP_UA,
-      },
-    },
-  );
-  if (!episodeRes.ok) return [];
-  const episode = (await episodeRes.json()) as TVerEpisodeResponse;
-  const content = episode.result?.episode?.content;
-  const version = content?.version ?? 5;
+  const tverHeaders = {
+    'User-Agent': DESKTOP_UA,
+    'Origin': 'https://tver.jp',
+    'Referer': 'https://tver.jp/',
+  };
 
   const infoRes = await fetch(
-    `https://statics.tver.jp/content/episode/${episodeId}.json?v=${encodeURIComponent(String(version))}`,
-    {
-      headers: {
-        'Referer': 'https://tver.jp/',
-        'User-Agent': DESKTOP_UA,
-      },
-    },
+    `https://statics.tver.jp/content/episode/${episodeId}.json`,
+    { headers: { ...tverHeaders, 'Accept': 'application/json' } },
   );
   if (!infoRes.ok) return [];
   const episodeInfo = (await infoRes.json()) as TVerEpisodeInfo;
@@ -757,10 +727,8 @@ async function extractTVerViaStreaks(pageUrl: string, episodeId: string): Promis
       `https://playback.api.streaks.jp/v1/projects/${encodeURIComponent(projectId)}/medias/ref:${encodeURIComponent(videoRefId)}`,
       {
         headers: {
+          ...tverHeaders,
           'Accept': 'application/json',
-          'Origin': 'https://tver.jp',
-          'Referer': 'https://tver.jp/',
-          'User-Agent': DESKTOP_UA,
           'X-Streaks-Api-Key': apiKey,
         },
       },
@@ -768,20 +736,17 @@ async function extractTVerViaStreaks(pageUrl: string, episodeId: string): Promis
     if (!playbackRes.ok) continue;
     const playback = (await playbackRes.json()) as TVerPlayback;
     const sources = playback.sources ?? [];
-    const title = [content?.seriesTitle, content?.title].filter(Boolean).join(' ') || playback.name || episodeInfo.title || 'TVer';
-    return sources
+    const title = playback.name || episodeInfo.title || 'TVer';
+    const items = sources
       .filter(source => source.src && !source.key_systems && /mpegurl|m3u8/i.test(`${source.type ?? ''} ${source.src}`))
       .map(source => ({
         ...makeItem(source.src!, pageUrl, 'TVer HLS', 'social-extractor', 0.92),
-        httpHeaders: {
-          'Origin': 'https://tver.jp',
-          'Referer': 'https://tver.jp/',
-          'User-Agent': DESKTOP_UA,
-        },
+        httpHeaders: tverHeaders,
         sourceTitle: title,
-        duration: playback.duration ?? episodeInfo.duration ?? content?.duration,
-        thumbnailUrl: `https://statics.tver.jp/images/content/thumbnail/episode/xlarge/${episodeId}.jpg?v=${version}`,
+        duration: playback.duration ?? episodeInfo.duration,
+        thumbnailUrl: `https://statics.tver.jp/images/content/thumbnail/episode/xlarge/${episodeId}.jpg`,
       }));
+    if (items.length > 0) return items;
   }
 
   return [];
@@ -791,36 +756,7 @@ async function extractTVer(pageUrl: string): Promise<DetectedMedia[]> {
   try {
     const episodeMatch = pageUrl.match(/tver\.jp\/episodes\/(ep[A-Za-z0-9]+)/);
     if (!episodeMatch) return [];
-    const episodeId = episodeMatch[1];
-
-    const streaksResults = await extractTVerViaStreaks(pageUrl, episodeId);
-    if (streaksResults.length > 0) return streaksResults;
-
-    const res = await fetch(
-      `https://platform-api.tver.jp/service/api/v1/callEpisode/${episodeId}`,
-      {
-        headers: {
-          'x-tver-platform-type': 'web',
-          'Origin': 'https://tver.jp',
-          'Referer': 'https://tver.jp/',
-          'User-Agent': DESKTOP_UA,
-        },
-      },
-    );
-    if (!res.ok) return [];
-
-    const json = JSON.stringify(await res.json());
-    const results: DetectedMedia[] = [];
-
-    extractUrls(json, /(https?:\/\/[^"\\]+\.m3u8[^"\\]*)/g)
-      .forEach(u => results.push(makeItem(u, pageUrl)));
-
-    if (results.length === 0) {
-      extractUrls(json, /(https?:\/\/[^"\\]+\.mp4[^"\\]*)/g)
-        .forEach(u => results.push(makeItem(u, pageUrl)));
-    }
-
-    return results;
+    return await extractTVerViaStreaks(pageUrl, episodeMatch[1]);
   } catch { return []; }
 }
 
@@ -947,12 +883,97 @@ async function extractWeibo(pageUrl: string): Promise<DetectedMedia[]> {
     debugWarn('[extractWeibo] server extractor errored:', String(e).slice(0, 200));
   }
 
+  // On iOS, the Sina Visitor System (which gates all Weibo pages from non-China
+  // IPs) requires JS execution. Run a hidden WKWebView to load m.weibo.cn so the
+  // visitor JS fires and sets the SUB cookie in the WKHTTPCookieStore. Then retry
+  // the server extraction — extractViaServer reads those same WKWebView cookies
+  // via extractSessionCookies() and forwards them to the Fly.io backend.
+  if (Platform.OS === 'ios') {
+    try {
+      const ok = await prewarmWeiboVisitorSession();
+      if (ok) {
+        try {
+          const retryItems = await extractViaServer(pageUrl);
+          if (retryItems.length > 0) {
+            return retryItems.map(i => ({ ...i, label: i.label ?? 'Weibo' }));
+          }
+        } catch (e) {
+          debugWarn('[extractWeibo] retry after prewarm failed:', String(e).slice(0, 200));
+        }
+      }
+    } catch {}
+  }
+
   try {
     let targetUrl = pageUrl;
     if (targetUrl.includes('mapp.api.weibo.cn')) {
       const res = await fetch(targetUrl, { redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
       targetUrl = res.url;
     }
+    // If we ended up at the Weibo visitor/passport page, extract the embedded
+    // target URL so we can try the statuses API directly.
+    if (targetUrl.includes('passport.weibo') || targetUrl.includes('visitor.passport')) {
+      try {
+        const urlMatch = targetUrl.match(/[?&]url=([^&]+)/);
+        if (urlMatch) targetUrl = decodeURIComponent(urlMatch[1]);
+      } catch {}
+    }
+
+    // Try the Weibo statuses JSON API directly.
+    // On iOS: inject fetch() into the still-live WKWebView (which holds the visitor
+    // SUB cookie in WKHTTPCookieStore) to bypass NSURLSession's cookie isolation.
+    // On Android/web: use native fetch with an explicit Cookie header.
+    const weiboDeviceCookies = Platform.OS !== 'ios'
+      ? await extractSessionCookies('https://m.weibo.cn/').catch(() => '')
+      : '';
+    const idMatch = targetUrl.match(/\/(?:status|detail)\/([A-Za-z0-9]+)/) ||
+                    targetUrl.match(/[?&]id=([A-Za-z0-9]+)/);
+    if (idMatch) {
+      const wid = idMatch[1];
+      for (const apiUrl of [
+        `https://m.weibo.cn/statuses/show?id=${wid}`,
+        `https://weibo.com/ajax/statuses/show?id=${wid}`,
+      ]) {
+        try {
+          let meta: any;
+          if (Platform.OS === 'ios') {
+            meta = await fetchWeiboStatuses(apiUrl);
+          } else {
+            const reqHeaders: Record<string, string> = { 'User-Agent': MOBILE_UA, 'Referer': targetUrl, 'Accept': 'application/json' };
+            if (weiboDeviceCookies) reqHeaders['Cookie'] = weiboDeviceCookies;
+            const apiRes = await fetch(apiUrl, { headers: reqHeaders });
+            if (!apiRes.ok) continue;
+            meta = await apiRes.json();
+          }
+          if (!meta) continue;
+          const post = meta?.data ?? meta;
+          if (!post || post.ok === -100) continue;
+          const results: DetectedMedia[] = [];
+          // Images
+          (post.pics ?? []).forEach((pic: any) => {
+            const u = pic?.large?.url || pic?.url;
+            if (u) pushUnique(results, makeItem(u, pageUrl, 'Weibo Image', 'social-extractor', 0.88));
+          });
+          // Video: check playback_list (newer format), urls.mp4_*, then stream_url fields
+          const mediaInfo = post.page_info?.media_info ?? {};
+          let videoUrl: string | undefined;
+          for (const item of (Array.isArray(mediaInfo.playback_list) ? mediaInfo.playback_list : [])) {
+            const u = item?.play_info?.url;
+            if (typeof u === 'string' && u.startsWith('http')) { videoUrl = u; break; }
+          }
+          if (!videoUrl && mediaInfo.urls) {
+            for (const key of ['mp4_uhd_mp4', 'mp4_hd_mp4', 'mp4_ld_mp4', 'mp4_hd', 'mp4_ld']) {
+              const v = (mediaInfo.urls as any)[key];
+              if (typeof v === 'string' && v.startsWith('http')) { videoUrl = v; break; }
+            }
+          }
+          if (!videoUrl) videoUrl = mediaInfo.stream_url_hd || mediaInfo.stream_url || undefined;
+          if (videoUrl) pushUnique(results, makeItem(videoUrl, pageUrl, 'Weibo Video', 'social-extractor', 0.88));
+          if (results.length > 0) return results;
+        } catch {}
+      }
+    }
+
     const html = await fetchHtml(targetUrl, MOBILE_UA);
     const results: DetectedMedia[] = [];
 
@@ -1112,32 +1133,80 @@ async function extractNicoNico(pageUrl: string): Promise<DetectedMedia[]> {
     debugWarn('[extractNicoNico] server extractor errored:', String(e).slice(0, 200));
   }
 
-  // Tier 2: on-page JSON. NicoNico embeds video info in window.__INITIAL_WATCH_DATA__
-  // or a <script type="application/ld+json"> block.
+  // Tier 2: NicoNico domand API (replaces the old window.__INITIAL_WATCH_DATA__ scrape).
+  // Flow: V3 guest API → accessRightKey + track ID → POST access-rights/hls → HLS URL.
   try {
-    const html = await fetchHtml(pageUrl, DESKTOP_UA, getAcceptLanguage(pageUrl));
-    const results: DetectedMedia[] = [];
+    const videoIdMatch = pageUrl.match(/\/watch\/((?:sm|nm|so|lv)\d+|\d+)/);
+    if (!videoIdMatch) throw new Error('no video id');
+    const videoId = videoIdMatch[1];
 
-    // Try window.__INITIAL_WATCH_DATA__ (newer layout)
-    const dataMatch = html.match(/window\.__INITIAL_WATCH_DATA__\s*=\s*(\{[\s\S]+?\});?\s*<\/script>/);
-    if (dataMatch) {
-      try {
-        const json = JSON.stringify(JSON.parse(dataMatch[1]));
-        extractUrls(json, /(https?:\/\/[^"\\]+\.m3u8[^"\\]*)/g)
-          .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'NicoNico')));
-        extractUrls(json, /"contentUrl"\s*:\s*"(https?:\/\/[^"]+)"/g)
-          .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'NicoNico')));
-      } catch {}
-    }
+    // actionTrackId must survive the session: same value for all requests.
+    const trackId = `NICONICOAPP_${Date.now()}`;
+    // Accept must include */* — nicovideo.jp returns 406 for strict application/json.
+    const nicoHeaders = {
+      'User-Agent': DESKTOP_UA,
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'ja',
+      'X-Frontend-Id': '6',
+      'X-Frontend-Version': '0',
+      'Origin': 'https://www.nicovideo.jp',
+      'Referer': `https://www.nicovideo.jp/watch/${videoId}`,
+    };
 
-    // Fallback: scan for HLS CDN URLs (dmc.nico / nicovideo CDN)
-    if (results.length === 0) {
-      extractUrls(html, /(https?:\/\/[^"'\\<>\s]*(?:nicovideo\.cdn|dmc\.nico)[^"'\\<>\s]*\.m3u8[^"'\\<>\s]*)/g)
-        .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'NicoNico')));
-    }
+    const v3Res = await fetch(
+      `https://www.nicovideo.jp/api/watch/v3_guest/${videoId}?_frontendId=6&_frontendVersion=0&actionTrackId=${trackId}`,
+      { headers: nicoHeaders },
+    );
+    if (!v3Res.ok) throw new Error(`v3_guest HTTP ${v3Res.status}`);
+    const v3: any = await v3Res.json();
 
-    return results;
-  } catch { return []; }
+    const domand = v3?.data?.media?.domand;
+    const accessKey: string | undefined = domand?.accessRightKey;
+    if (!accessKey) throw new Error('no accessRightKey in domand response');
+
+    const bestVideo = (domand.videos as any[]).find((v: any) => v.isAvailable)?.id;
+    const bestAudio = (domand.audios as any[]).find((a: any) => a.isAvailable)?.id;
+    if (!bestVideo || !bestAudio) throw new Error('no available domand streams');
+
+    const postRes = await fetch(
+      `https://nvapi.nicovideo.jp/v1/watch/${videoId}/access-rights/hls?actionTrackId=${trackId}`,
+      {
+        method: 'POST',
+        headers: {
+          ...nicoHeaders,
+          'Content-Type': 'application/json',
+          'X-Request-With': 'https://www.nicovideo.jp',
+          'X-Access-Right-Key': accessKey,
+        },
+        body: JSON.stringify({ outputs: [[bestVideo, bestAudio]] }),
+      },
+    );
+    if (!postRes.ok) throw new Error(`access-rights/hls HTTP ${postRes.status}`);
+
+    // The CDN (delivery.domand.nicovideo.jp) gates the HLS master manifest behind
+    // the domand_bid cookie set by this POST response. Capture and forward it.
+    const setCookieHeader = postRes.headers.get('set-cookie') ?? '';
+    const domandBidMatch = setCookieHeader.match(/domand_bid=([^;,\s]+)/);
+    const domandBid: string | undefined = domandBidMatch?.[1];
+
+    const postData: any = await postRes.json();
+    const hlsUrl: string | undefined = postData?.data?.contentUrl;
+    if (!hlsUrl) throw new Error('no contentUrl in access-rights response');
+
+    const hlsHeaders: Record<string, string> = {
+      'User-Agent': DESKTOP_UA,
+      'Origin': 'https://www.nicovideo.jp',
+      'Referer': `https://www.nicovideo.jp/watch/${videoId}`,
+    };
+    if (domandBid) hlsHeaders['Cookie'] = `domand_bid=${domandBid}`;
+
+    debugLog('[extractNicoNico] domand HLS:', hlsUrl.slice(0, 80));
+    return [{ ...makeItem(hlsUrl, pageUrl, 'NicoNico'), httpHeaders: hlsHeaders }];
+  } catch (e) {
+    debugWarn('[extractNicoNico] domand API failed:', String(e).slice(0, 200));
+  }
+
+  return [];
 }
 
 // ── Abema ─────────────────────────────────────────────────────────────────────
@@ -1181,15 +1250,27 @@ async function extractNaver(pageUrl: string): Promise<DetectedMedia[]> {
     let html = await fetchHtml(pageUrl, DESKTOP_UA, lang);
 
     // Naver Blog pages are framesets — the actual content lives in a PostView iframe.
-    // Follow the iframe src so we can scan the real article HTML.
+    // Follow the iframe src (if present) or construct the PostView URL from path components.
     if (/blog\.naver\.com/i.test(pageUrl)) {
       const iframeMatch = html.match(/<iframe\b[^>]*\bid=["']mainFrame["'][^>]*\bsrc=["']([^"']+)["']/i)
         ?? html.match(/<iframe\b[^>]*\bsrc=["']([^"']+)["'][^>]*\bid=["']mainFrame["']/i);
+      let iframeUrl: string | null = null;
       if (iframeMatch) {
+        try { iframeUrl = new URL(iframeMatch[1].replace(/&amp;/g, '&'), pageUrl).toString(); } catch {}
+      } else {
+        // Naver Blog sometimes dynamically sets the iframe src via JS; fall back to
+        // constructing the PostView URL directly from the blog URL path components.
         try {
-          const iframeUrl = new URL(iframeMatch[1].replace(/&amp;/g, '&'), pageUrl).toString();
-          html = await fetchHtml(iframeUrl, DESKTOP_UA, lang);
+          const { pathname } = new URL(pageUrl);
+          const parts = pathname.split('/').filter(Boolean);
+          if (parts.length >= 2 && parts[0] !== 'PostView.naver') {
+            const params = new URLSearchParams({ blogId: parts[0], logNo: parts[1], redirect: 'Dlog', widgetTypeCall: 'true', directAccess: 'false' });
+            iframeUrl = `https://blog.naver.com/PostView.naver?${params}`;
+          }
         } catch {}
+      }
+      if (iframeUrl) {
+        try { html = await fetchHtml(iframeUrl, DESKTOP_UA, lang); } catch {}
       }
     }
 
@@ -1200,6 +1281,12 @@ async function extractNaver(pageUrl: string): Promise<DetectedMedia[]> {
       /(https?:\/\/[^"'\\<>\s]*(?:pstatic\.net|naver\.com)[^"'\\<>\s]*\.(?:m3u8|mp4|jpe?g|png|webp|gif)[^"'\\<>\s]*)/gi,
     ).filter(u => !isLikelyNonContentMediaUrl(u))
       .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'Naver', 'social-extractor', 0.65)));
+    // blogfiles/postfiles CDN serves post images without file extensions (base64-encoded filenames)
+    extractUrls(
+      html,
+      /(https?:\/\/(?:blogfiles|postfiles)\.pstatic\.net\/[^"'\\<>\s]{10,})/gi,
+    ).filter(u => !isLikelyNonContentMediaUrl(u))
+      .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'Naver', 'social-extractor', 0.65, 'image')));
     return results;
   } catch { return []; }
 }
@@ -1296,19 +1383,22 @@ async function extractJapaneseGeneric(pageUrl: string): Promise<DetectedMedia[]>
     const html = await fetchHtml(pageUrl, DESKTOP_UA, getAcceptLanguage(pageUrl));
     const results: DetectedMedia[] = [];
 
-    const patterns: RegExp[] = [
+    const mediaPatterns: RegExp[] = [
       /(https?:\/\/[^"'\\<>\s]+?\.m3u8[^"'\\<>\s]*)/gi,
       /(https?:\/\/[^"'\\<>\s]+?\.mpd[^"'\\<>\s]*)/gi,
       /(https?:\/\/[^"'\\<>\s]+?\.(?:mp4|m4v|webm|mov)[^"'\\<>\s]*)/gi,
       /(https?:\/\/[^"'\\<>\s]+?\.(?:mp3|m4a|ogg|opus|aac)[^"'\\<>\s]*)/gi,
       /(https?:\/\/[^"'\\<>\s]+?\.(?:jpe?g|png|webp|gif|avif|heic)[^"'\\<>\s]*)/gi,
-      /(https?:\/\/[^"'\\<>\s]*(?:contents\.oricon\.co\.jp|img-mdpr\.freetls\.fastly\.net|mdpr\.jp\/photo|ogre\.natalie\.mu|img\.thetv\.jp|img\.mantan-web\.jp|img\.cinematoday\.jp)[^"'\\<>\s]*)/gi,
     ];
-    patterns.forEach(re => {
+    mediaPatterns.forEach(re => {
       extractUrls(html, re)
         .filter((u) => !isLikelyNonContentMediaUrl(u))
         .forEach(u => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.6)));
     });
+    // CDN image domains — force image kind; URLs may lack a file extension (CDN transform params)
+    extractUrls(html, /(https?:\/\/[^"'\\<>\s]*(?:contents\.oricon\.co\.jp|img-mdpr\.freetls\.fastly\.net|mdpr\.jp\/photo|ogre\.natalie\.mu|img\.thetv\.jp|img\.mantan-web\.jp|storage\.mantan-web\.jp|img\.cinematoday\.jp|res\.cloudinary\.com)[^"'\\<>\s)]*)/gi)
+      .filter((u) => !isLikelyNonContentMediaUrl(u))
+      .forEach(u => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.6, 'image')));
 
     // OG/twitter card, including article lead images — both attribute orderings.
     const ogPatterns = [
@@ -1547,6 +1637,23 @@ async function extractMastodon(pageUrl: string): Promise<DetectedMedia[]> {
   } catch { return []; }
 }
 
+// ── TwitCasting ───────────────────────────────────────────────────
+async function extractTwitCasting(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const html = await fetchHtml(pageUrl, DESKTOP_UA);
+    const m = html.match(/https?:\/\/dl\d+\.twitcasting\.tv[^\s"'<>]*\.m3u8[^\s"'<>]*/);
+    if (!m) return [];
+    const item = makeItem(m[0], pageUrl, 'TwitCasting', 'social-extractor', 0.92);
+    item.httpHeaders = {
+      'User-Agent': DESKTOP_UA,
+      'Accept': '*/*',
+      'Origin': 'https://twitcasting.tv',
+      'Referer': 'https://twitcasting.tv/',
+    };
+    return [item];
+  } catch { return []; }
+}
+
 // ── Platform registry ─────────────────────────────────────────────
 const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[]> }> = [
   { re: /tiktok\.com\/@[^/]+\/(?:video|photo|item)\/\d+|tiktok\.com\/(?:t|v)\/[A-Za-z0-9]+|vm\.tiktok\.com\/[A-Za-z0-9]+/, fn: extractTikTok },
@@ -1568,6 +1675,7 @@ const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[
   { re: /(?:weibo\.com\/(?:tv\/show\/|u\/\d+|(?:\d+|0)\/[A-Za-z0-9]+)|m\.weibo\.cn\/(?:status|detail)\/[A-Za-z0-9]+|video\.weibo\.com\/show\?|mapp\.api\.weibo\.cn\/)/, fn: extractWeibo },
   { re: /(?:(?:xiaohongshu|rednote)\.com\/(?:explore|discovery\/item)\/[\da-f]+|xhslink\.com\/[A-Za-z0-9/?=&._-]+)/i, fn: extractXiaohongshu },
   // ── Japanese sites ──────────────────────────────────────────────────────────
+  { re: /twitcasting\.tv\/[^/]+\/movie\/\d+/,                                       fn: extractTwitCasting },
   { re: /(?:nicovideo\.jp\/watch\/|nico\.ms\/)[a-zA-Z0-9]+/,                       fn: extractNicoNico    },
   { re: /abema\.tv\/video\/(?:episode|series)\/[A-Za-z0-9_-]+/,                    fn: extractAbema       },
   { re: /(?:tv\.naver\.com\/v\/\d+|now\.naver\.com\/|blog\.naver\.com\/|m\.blog\.naver\.com\/|news\.naver\.com\/|n\.news\.naver\.com\/|m\.news\.naver\.com\/|entertain\.naver\.com\/|m\.entertain\.naver\.com\/|sports\.news\.naver\.com\/|m\.sports\.naver\.com\/|naver\.me\/[A-Za-z0-9]+)/, fn: extractNaver },
@@ -1575,7 +1683,7 @@ const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[
   { re: /(?:ameba\.jp\/[^/]+\/entry\/\d+|ameblo\.jp\/[^/]+\/entry-\d+)/,           fn: extractAmeba       },
   { re: /pixiv\.net\/(?:en\/)?artworks?\/\d+|pixiv\.net\/.*illust_id=\d+/,         fn: extractPixiv       },
   { re: /(?:lemino\.docomo\.ne\.jp|animestore\.docomo\.ne\.jp|video\.dmkt-sp\.jp|unext\.jp|video\.unext\.jp|hulu\.jp|telasa\.jp|plus\.nhk\.jp|nhk-ondemand\.jp|wowow\.co\.jp|wod\.wowow\.co\.jp|b-ch\.com|bandainamcoid\.com|tv\.rakuten\.co\.jp|jod\.jsports\.co\.jp|jsports\.co\.jp|spoox\.skyperfectv\.co\.jp|skyperfectv\.co\.jp|locipo\.jp|dougaizm\.mbs\.jp|mbs\.jp\/douga|ytv\.co\.jp\/mydo|video\.tv-tokyo\.co\.jp|douga\.tv-asahi\.co\.jp|ktv-smart\.jp|ktv\.jp|vod\.ntv\.co\.jp|cu\.ntv\.co\.jp)/i, fn: extractJapaneseGeneric },
-  { re: /(?:natalie\.mu|oricon\.co\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net|trilltrill\.jp|note\.com|lineblog\.me|hatenablog\.(?:com|jp)|hatenadiary\.(?:com|jp)|hatena\.ne\.jp|blog\.fc2\.com|gyazo\.com|seiga\.nicovideo\.jp|story\.kakao\.com)/i, fn: extractCuratedArticle },
+  { re: /(?:natalie\.mu|oricon\.co\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net|trilltrill\.jp|note\.com|lineblog\.me|hatenablog\.(?:com|jp)|hatenadiary\.(?:com|jp)|hatena\.ne\.jp|blog\.fc2\.com|gyazo\.com|seiga\.nicovideo\.jp|story\.kakao\.com|news\.yahoo\.co\.jp)/i, fn: extractCuratedArticle },
 ];
 
 /** Returns true if the URL looks like a social-media post page (not a CDN media URL). */

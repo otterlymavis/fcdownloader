@@ -9,6 +9,7 @@ type NativeCookie = {
 type NativeCookieManager = {
   get: (url: string, useWebKit?: boolean) => Promise<Record<string, NativeCookie>>;
   getAll: (useWebKit?: boolean) => Promise<Record<string, NativeCookie>>;
+  set: (url: string, cookie: Record<string, unknown>, useWebKit?: boolean) => Promise<boolean>;
 };
 
 declare const require: (moduleName: string) => { default?: NativeCookieManager } & NativeCookieManager;
@@ -102,4 +103,28 @@ export async function extractSessionCookies(url: string): Promise<string> {
   } catch {}
 
   return '';
+}
+
+/**
+ * Copies Weibo cookies from WKHTTPCookieStore to NSHTTPCookieStorage.shared so
+ * that React Native's fetch() (which uses NSURLSession and ignores manually set
+ * Cookie headers) sends the visitor SUB cookie when hitting Weibo APIs.
+ */
+export async function syncWeiboSessionToNative(): Promise<void> {
+  if (Platform.OS !== 'ios') return;
+  const CookieManager = getCookieManager();
+  if (!CookieManager?.set) return;
+  try {
+    const all = await CookieManager.getAll(true); // WKHTTPCookieStore
+    const weiboCookies = Object.values(all).filter(
+      (c) => (c.domain ?? '').replace(/^\./, '').endsWith('weibo.cn'),
+    );
+    for (const cookie of weiboCookies) {
+      const cookieObj: Record<string, unknown> = { ...cookie };
+      // Set for both m.weibo.cn and weibo.com (domain .weibo.cn covers both)
+      for (const url of ['https://m.weibo.cn/', 'https://weibo.com/']) {
+        try { await CookieManager.set(url, cookieObj, false); } catch {}
+      }
+    }
+  } catch {}
 }
