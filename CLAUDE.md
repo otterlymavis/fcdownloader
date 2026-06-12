@@ -21,8 +21,17 @@ uvicorn main:app --port 8080 --reload   # Dev server
 
 # Test extraction against the running server
 python3 test_all_urls.py                             # All URLs
-python3 test_all_urls.py --backend http://localhost:8080  # Local backend
+python3 test_all_urls.py --server http://localhost:8080  # Local backend
 python3 test_all_strategies.py reddit bilibili       # Filter by site name
+
+# Web app strategy test (requires expo web running + playwright installed)
+python3 scripts/test_web_all_strategies.py           # All URLs → artifacts/web_all_strategies_report.md
+python3 scripts/test_web_all_strategies.py YouTube Bilibili  # Subset
+python3 scripts/test_web_all_strategies.py --web-app http://localhost:19006  # Custom port
+
+# Backend media-probe test (Node.js, checks extracted URLs are actually fetchable)
+node test_webapp_media.js
+FCDOWNLOADER_TEST_LIMIT=0 node test_webapp_media.js  # Full sweep (default: 10 URLs)
 
 # Syntax-check server files without the full env
 python3 -m py_compile server/extractors.py server/strategies.py

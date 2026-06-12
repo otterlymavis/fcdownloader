@@ -9,26 +9,6 @@ import importlib.util
 ROOT = Path(__file__).resolve().parents[1]
 
 
-EXTRA_URLS: dict[str, tuple[str, str]] = {
-    "Direct-MP4": (
-        "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
-        "stable direct MP4 smoke test",
-    ),
-    "Direct-Audio": (
-        "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg",
-        "stable direct audio smoke test",
-    ),
-    "Direct-HLS": (
-        "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-        "Mux sample HLS manifest",
-    ),
-    "Direct-DASH": (
-        "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd",
-        "DASH manifest smoke test",
-    ),
-}
-
-
 def _load_test_all_urls() -> dict[str, tuple[str, str]]:
     path = ROOT / "test_all_urls.py"
     spec = importlib.util.spec_from_file_location("fcdownloader_test_all_urls", path)
@@ -40,10 +20,7 @@ def _load_test_all_urls() -> dict[str, tuple[str, str]]:
 
 
 def all_urls(include_extra: bool = True) -> dict[str, tuple[str, str]]:
-    urls = _load_test_all_urls()
-    if include_extra:
-        urls.update(EXTRA_URLS)
-    return urls
+    return _load_test_all_urls()
 
 
 def select_urls(names: list[str], include_extra: bool = True) -> list[tuple[str, str, str]]:

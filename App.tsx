@@ -35,6 +35,7 @@ import { DetectedMedia, DownloadTask } from './src/types';
 import { extractionManager } from './src/lib/extractionManager';
 import { ServerExtractOptions, setRemoveWatermark, setPreferredQuality } from './src/lib/serverExtractor';
 import { runAutomatedStrategyTest } from './src/lib/automatedTester';
+import { debugLog } from './src/lib/releaseLogger';
 import { signalWeiboPrewarmComplete, signalWeiboFetchComplete } from './src/lib/weiboPrewarm';
 import { extractSessionCookies } from './src/lib/cookieManager';
 import {
@@ -320,7 +321,8 @@ export default function App() {
   const handleIncomingUrl = useCallback((raw: string) => {
     try {
       const parsed = Linking.parse(raw);
-      if (parsed.path === 'test_strategies' || parsed.hostname === 'test_strategies') {
+      debugLog('Incoming URL:', raw, parsed);
+      if (parsed.path === 'test_strategies' || parsed.path === '/test_strategies' || parsed.hostname === 'test_strategies') {
         const mediaUrl = parsed.queryParams?.url ? String(parsed.queryParams.url) : null;
         const reportUrl = parsed.queryParams?.reportUrl ? String(parsed.queryParams.reportUrl) : null;
         if (mediaUrl && reportUrl) {
