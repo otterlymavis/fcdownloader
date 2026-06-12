@@ -518,11 +518,11 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: webRequest captures tiktokcdn.com video segments as page plays"),
 
-    ("Threads", "https://www.threads.net/@instagram/post/CuZsgc9vQ0M", [
+    ("Threads", "https://www.threads.com/@nasa/post/DZceA72Drjf", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
         ("local helper",             strat_local_helper,  {}),
-    ], "🌐 browser-only: Threads app-based extraction"),
+    ], "🌐 browser-only: Threads app-based extraction; domain moved threads.net → threads.com"),
 
     ("Twitter/X", "https://x.com/NASA/status/1902118174591521056", [
         ("server /extract",          strat_server,        {}),
@@ -622,7 +622,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: twitcasting VOD extraction"),
 
-    ("FC2 Video", "http://video.fc2.com/en/content/20231103kUan1KHs", [
+    ("FC2 Video", "https://video.fc2.com/en/content/20121103kUan1KHs", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -773,7 +773,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: tistory photo extraction"),
 
-    ("Livedoor Blog", "http://blog.livedoor.jp/dqnplus/archives/2051261.html", [
+    ("Livedoor Blog", "http://blog.livedoor.jp/new_alces/archives/4980902.html", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -791,7 +791,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: pixiv/fanbox media extraction"),
 
-    ("Bunshun", "https://bunshun.jp/articles/photo/88467", [
+    ("Bunshun", "https://bunshun.jp/articles/-/89384", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -911,7 +911,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: ananweb gallery extraction"),
 
-    ("Croissant Online", "https://croissant-online.jp/wp-content/themes/croissant2024/manifest.webmanifest", [
+    ("Croissant Online", "https://croissant-online.jp/life/268743/", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),

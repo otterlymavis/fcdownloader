@@ -75,7 +75,7 @@ const REGISTRY: SiteEntry[] = [
   },
   // ── Instagram / Threads ───────────────────────────────────────────────────
   {
-    pattern: /(?:instagram\.com\/|threads\.net\/)/i,
+    pattern: /(?:instagram\.com\/|threads\.(?:net|com)\/)/i,
     caps: {
       preferredStrategies: ['server-download', 'direct'],
       requiresAuth: true,

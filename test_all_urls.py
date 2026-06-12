@@ -48,7 +48,7 @@ URLS = {
     "TikTok":        ("https://vm.tiktok.com/ZNR7eeRqB/", "photo/gallery post"),
     "TikTok-NASA":   ("https://www.tiktok.com/@nasa.tiktok2/video/7624845650504469780", "video"),
     "Instagram":     ("https://www.instagram.com/reel/C7VgIvhsKgR/", "LOGIN-GATED: only public images without IG cookies"),
-    "Threads":       ("https://www.threads.net/@zuck/post/C7VgIvhsKgR", "LOGIN-GATED: Threads requires auth from datacenter IPs"),
+    "Threads":       ("https://www.threads.com/@nasa/post/DZceA72Drjf", "public post; domain moved threads.net → threads.com"),
     "Twitter/X":     ("https://x.com/NASA/status/1902118174591521056", "vxtwitter API → direct video.twimg.com URL"),
     "Bluesky":       ("https://bsky.app/profile/bsky.app/post/3mmwmla3xph26", "public AT Protocol API → video/images"),
     "Mastodon":      ("https://mastodon.social/@Gargron/116690424322009521", "public Mastodon API → media_attachments"),
@@ -67,7 +67,7 @@ URLS = {
     "Bilibili":      ("https://www.bilibili.com/video/BV1PkR2BkEUt", "small video"),
     "Bilibili-large":("https://www.bilibili.com/video/BV12DEg69EtX?track_id=", "~66MB; exercises download-ahead"),
     "Bilibili dynamic / opus": ("https://t.bilibili.com/892040939527667727", "LOGIN-GATED: Bilibili dynamic API triggers risk control on datacenter IPs"),
-    "Weibo":         ("https://m.weibo.cn/detail/4904263725515320", "LOGIN-GATED: Weibo visitor session required; works when user has opened Weibo in Browse tab first (sets visitor cookies forwarded to server)"),
+    "Weibo":         ("https://m.weibo.cn/detail/4904263725515320", "LOGIN-GATED: Weibo visitor session required; works when user has opened Weibo in Browse tab first (sets visitor cookies forwarded to server); expect TIMEOUT in automated tests without cookies"),
     "Xiaohongshu":   ("http://xhslink.com/o/AuDpBCMNn0z", "server /extract is gated -> FAIL here is expected; the APP extracts on-device (use --device)"),
     "Douyin":        ("https://www.douyin.com/video/6918273131559881997", ""),
     # ── Japanese / Korean Video & Streaming ──────────────────────────────

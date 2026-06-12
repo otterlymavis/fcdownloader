@@ -321,6 +321,6 @@ function isLikelyThumbnailUrl(url: string): boolean {
       .filter((value) => Number.isFinite(value) && value > 0);
     if (dimensions.length && Math.max(...dimensions) <= 512) return true;
   } catch {}
-  if (/(?:^|[\/_-])(?:\d{1,3}x\d{1,3}|s\d{2,4}x\d{2,4})(?:[\/_.-]|$)/i.test(u)) return true;
+  if (/(?:^|[\/_-])(?:\d{1,3}x\d{1,3}|s\d{2,3}x\d{2,3})(?:[\/_.-]|$)/i.test(u)) return true;
   return false;
 }
