@@ -1017,6 +1017,11 @@ const XHS_MEDIA_MARKERS = [
 function isXhsMediaUrl(url: string): boolean {
   const lower = String(url || '').replace(/\\\//g, '/').toLowerCase();
   if (!lower || /(?:sns-avatar|\/avatar\/|avatar|profile)/i.test(lower)) return false;
+  // Reject bare-domain URLs like "https://sns-webpic.xhscdn.com/" — real CDN paths always have content after the first slash
+  const schemeEnd = lower.indexOf('://');
+  if (schemeEnd === -1) return false;
+  const domainSlash = lower.indexOf('/', schemeEnd + 3);
+  if (domainSlash === -1 || lower.length <= domainSlash + 1) return false;
   return XHS_MEDIA_MARKERS.some(marker => lower.includes(marker));
 }
 
