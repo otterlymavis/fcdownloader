@@ -57,7 +57,7 @@ function contentTypeLooksLikeMedia(contentType: string, media: DetectedMedia): b
   }
   if (ct.includes('application/octet-stream') || ct.includes('binary/octet-stream')) return true;
   if (media.mediaKind === 'image' || mediaIsImage(media.url, media.mimeType)) return ct.startsWith('image/');
-  if (media.mediaKind === 'audio' || mediaIsAudio(media.url, media.mimeType)) return ct.startsWith('audio/') || ct === 'application/ogg';
+  if (media.mediaKind === 'audio' || mediaIsAudio(media.url, media.mimeType)) return ct.startsWith('audio/') || ct.startsWith('application/ogg') || ct.startsWith('video/ogg');
   return ct.startsWith('video/') || ct.includes('mp4') || ct.includes('mpegurl');
 }
 

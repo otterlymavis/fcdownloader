@@ -17,7 +17,8 @@
     "bake:web": "node scripts/bake-web-config.mjs",
     "dist:companion": "npm --prefix desktop-companion run dist",
     "dist:companion:nobrowser-go": "npm --prefix desktop-companion run variants:nobrowser-go",
-    "test:companion:nobrowser-go": "npm --prefix desktop-companion run test:nobrowser-go"
+    "test:companion:nobrowser-go": "npm --prefix desktop-companion run test:nobrowser-go",
+    "test:ios-urls:manual": "python3 scripts/test_manual_ios.py"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",

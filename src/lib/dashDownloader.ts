@@ -60,10 +60,17 @@ function expandTemplate(tpl: string, repId: string, num: number, time: number): 
     .replace(/\$Bandwidth\$/g, '0');
 }
 
+function parseIsoDuration(s: string): number {
+  const m = s.match(/PT(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?/i);
+  if (!m) return 0;
+  return (parseFloat(m[1] ?? '0') * 3600) + (parseFloat(m[2] ?? '0') * 60) + parseFloat(m[3] ?? '0');
+}
+
 function resolveSegmentsFromTemplate(
   rep: Record<string, any>,
   segTemplate: Record<string, any>,
   baseUrl: string,
+  mediaDurationSec: number = 3600,
 ): { initUrl?: string; segmentUrls: string[] } {
   const repId = String(rep['@_id'] ?? '');
   const mediaTpl = String(segTemplate['@_media'] ?? '');
@@ -91,7 +98,7 @@ function resolveSegmentsFromTemplate(
       }
     }
   } else if (durationAttr > 0) {
-    const maxSegs = Math.ceil((3600 * timescale) / durationAttr);
+    const maxSegs = Math.ceil((mediaDurationSec * timescale) / durationAttr);
     for (let i = 0; i < maxSegs; i++) {
       segments.push(resolveUrl(expandTemplate(mediaTpl, repId, startNumber + i, 0), baseUrl));
     }
@@ -119,6 +126,7 @@ export function parseMPD(xml: string, mpdUrl: string): ParsedMPD {
 
   const mpdBaseRaw = toArray(mpd.BaseURL)[0] ?? '';
   const resolvedBase = mpdBaseRaw ? resolveUrl(String(mpdBaseRaw), baseUrlBase) : baseUrlBase;
+  const mediaDurationSec = parseIsoDuration(String(mpd['@_mediaPresentationDuration'] ?? '')) || 3600;
   const result: ParsedMPD = { video: [], audio: [] };
 
   for (const period of toArray(mpd.Period)) {
@@ -146,10 +154,10 @@ export function parseMPD(xml: string, mpdUrl: string): ParsedMPD {
         if (rep.SegmentBase || as.SegmentBase) {
           segmentUrls = repBase ? [repBase] : [];
         } else if (rep.SegmentTemplate) {
-          const r = resolveSegmentsFromTemplate(rep, rep.SegmentTemplate, repBase || asBase);
+          const r = resolveSegmentsFromTemplate(rep, rep.SegmentTemplate, repBase || asBase, mediaDurationSec);
           initUrl = r.initUrl; segmentUrls = r.segmentUrls;
         } else if (asTpl) {
-          const r = resolveSegmentsFromTemplate(rep, asTpl, repBase || asBase);
+          const r = resolveSegmentsFromTemplate(rep, asTpl, repBase || asBase, mediaDurationSec);
           initUrl = r.initUrl; segmentUrls = r.segmentUrls;
         } else if (rep.SegmentList || as.SegmentList) {
           const sl = rep.SegmentList ?? as.SegmentList;

@@ -98,7 +98,12 @@ function parseMedia(content: string, baseUrl: string): ParsedPlaylist {
     } else if (line.startsWith('#EXTINF:')) {
       pendingExtinf = line;
     } else if (line && !line.startsWith('#')) {
-      segments.push(resolveUrl(line, baseUrl));
+      const segUrl = resolveUrl(line, baseUrl);
+      // Reject lines that resolve to a non-HTTP or whitespace-containing URL
+      // (e.g. JS comment lines like "// Source: script.js" that start with "//"
+      // would otherwise become "https:// Source: script.js" and crash the download).
+      if (!/^https?:\/\/\S/i.test(segUrl)) continue;
+      segments.push(segUrl);
       extinf.push(pendingExtinf || '#EXTINF:10.0,');
       pendingExtinf = '';
 

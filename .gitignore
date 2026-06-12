@@ -115,3 +115,7 @@ test_find_frame.py
 test_inspect_mockup_tabbar.py
 test_mockup_pixels.py
 scripts/generate_ios_report.py
+
+# Generated test artifacts
+fresh_urls.json
+ios_url_report.md

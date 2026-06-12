@@ -107,7 +107,7 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
 
   // Meta/TikTok/Twitter direct CDN URLs are usually signed MP4/WebM responses
   // even when the URL path does not expose a file extension.
-  if (/(?:cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|video\.twimg\.com|tiktokcdn\.com|tiktokcdn-us\.com|v\d+-webapp\.tiktok\.com|weibocdn\.com|xhscdn\.com|akamaized\.net|cloudfront\.net|jwpcdn\.com|jwplatform\.com|kaltura\.com|mux\.com|mux\.dev)/i.test(url)) {
+  if (/(?:cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|video\.twimg\.com|tiktokcdn\.com|tiktokcdn-us\.com|v\d+-webapp[^/]*\.tiktok\.com|weibocdn\.com|xhscdn\.com|akamaized\.net|cloudfront\.net|jwpcdn\.com|jwplatform\.com|kaltura\.com|mux\.com|mux\.dev)/i.test(url)) {
     return 'direct';
   }
 
@@ -138,6 +138,10 @@ export async function runDownload(
     if (strategy === 'server-download' || opts.signal?.aborted || err instanceof DRMProtectedError) {
       throw err;
     }
+    // Sites marked preferOnDevice are geo-blocked or require a local IP on the server;
+    // falling back to downloadViaServer would always fail with a misleading error.
+    const pageCaps = getSiteCapabilities(media.pageUrl);
+    if (pageCaps?.preferOnDevice) throw err;
     if (media.sourcePageUrl || media.provenance === 'social-extractor') {
       opts.onStatus?.('fetching_manifest');
       return downloadViaServer(media, taskId, opts);

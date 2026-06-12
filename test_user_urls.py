@@ -24,7 +24,7 @@ URLS = {
     "Bilibili": "https://www.bilibili.com/video/BV1PkR2BkEUt",
     "Bilibili Large": "https://www.bilibili.com/video/BV1ux411U7Dp/",
     "Xiaohongshu Shortlink": "http://xhslink.com/o/AuDpBCMNn0z",
-    "Weibo API": "https://mapp.api.weibo.cn/fx/d98fa849fa97fd2e8221047514eef64c.html",
+    "Weibo": "https://m.weibo.cn/detail/4904263725515320",
     "Twitter/X": "https://x.com/NASA/status/1902118174591521056",
     "Threads": "https://www.threads.net/@zuck/post/C7VgIvhsKgR",
     "Bluesky": "https://bsky.app/profile/bsky.app/post/3mmwmla3xph26",
