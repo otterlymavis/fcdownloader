@@ -821,6 +821,12 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: pixiv/fanbox media extraction"),
 
+    ("Gyazo", "https://gyazo.com/5593f3bbe109c38ebf07c16dd25dc4c4", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "public screenshot"),
+
     ("Bunshun", "https://bunshun.jp/articles/-/89384", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
