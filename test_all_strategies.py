@@ -809,6 +809,12 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: livedoor blog photo extraction"),
 
+    ("Hatena Blog", "https://staff.hatenablog.com/entry/2026/06/05/145729", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "official Hatena blog with images"),
+
     ("Yahoo Japan articles", "https://news.yahoo.co.jp/articles/20ed9737a7a5411fbd2456f7df836fca68579d2f", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
