@@ -52,7 +52,7 @@ URLS = {
     "Twitter/X":     ("https://x.com/NASA/status/1902118174591521056", "vxtwitter API → direct video.twimg.com URL"),
     "Bluesky":       ("https://bsky.app/profile/bsky.app/post/3mmwmla3xph26", "public AT Protocol API → video/images"),
     "Mastodon":      ("https://mastodon.social/@Gargron/116690424322009521", "public Mastodon API → media_attachments"),
-    "Tumblr":        ("https://humansofnewyork.tumblr.com/post/753752476340060160", "public /api/read/json → photos array"),
+    "Tumblr":        ("https://www.tumblr.com/humansofnewyork/753752476340060160", "BROWSER-ONLY: /api/read/json now Cloudflare-blocked; yt-dlp handles video posts; photo galleries require browser session"),
     "Facebook":      ("https://www.facebook.com/watch/?v=10153231379946729", ""),
     "Reddit":        ("https://www.reddit.com/r/shiba/s/nC3HbrECzI", "server IP often blocked -> on-device path"),
     "Pinterest":     ("https://www.pinterest.com/pin/84301824269690044/", ""),
@@ -71,7 +71,7 @@ URLS = {
     "Xiaohongshu":   ("http://xhslink.com/o/AuDpBCMNn0z", "server /extract is gated -> FAIL here is expected; the APP extracts on-device (use --device)"),
     "Douyin":        ("https://www.douyin.com/video/6918273131559881997", ""),
     # ── Japanese / Korean Video & Streaming ──────────────────────────────
-    "NicoNico":      ("https://www.nicovideo.jp/watch/sm17517479", ""),
+    "NicoNico":      ("https://www.nicovideo.jp/watch/sm9", ""),
     "TVer":          ("https://tver.jp/episodes/epqbt0uzhh", "GEO-LOCKED: on-device Streaks pipeline works from Japan IP; server geo-blocked; update episode ID if expired (check tver.jp/sitemap.xml)"),
     "ABEMA":         ("https://abema.tv/video/episode/194-25_s2_p1", "GEO-SENSITIVE/AUTH: passes from a Japan IP when DRM-free"),
     "NHK":           ("https://www3.nhk.or.jp/nhkworld/en/shows/2049165/", ""),

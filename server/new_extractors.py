@@ -1522,13 +1522,22 @@ def extract_tumblr(page_url: str, cookies: str | None) -> dict[str, Any] | None:
     /api/read/json endpoint — no API key required for public posts.
     """
     parsed = urllib.parse.urlsplit(page_url)
-    # Tumblr post URL: {blogname}.tumblr.com/post/{id}[/slug]
-    m = re.search(r"/post/(\d+)", parsed.path)
-    if not m:
-        return None
-    post_id = m.group(1)
-    # The blog may be on a custom domain; build the API URL from the request host
-    host = parsed.netloc
+
+    # Modern URL: www.tumblr.com/{blogname}/{post_id}[/slug]
+    www_m = re.search(r"www\.tumblr\.com/([^/?#]+)/(\d{15,})", page_url)
+    if www_m:
+        blog_name = www_m.group(1)
+        post_id = www_m.group(2)
+        host = f"{blog_name}.tumblr.com"
+    else:
+        # Legacy URL: {blogname}.tumblr.com/post/{id}[/slug]
+        m = re.search(r"/post/(\d+)", parsed.path)
+        if not m:
+            return None
+        post_id = m.group(1)
+        # The blog may be on a custom domain; build the API URL from the request host
+        host = parsed.netloc
+
     api_url = f"https://{host}/api/read/json?id={post_id}"
 
     hdrs = safe_headers({

@@ -585,7 +585,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: scanXiaohongshu() reads window.__INITIAL_STATE__ after login; xhscdn.com webRequest capture"),
 
-    ("Douyin", "https://www.douyin.com/video/7212345678901234567", [
+    ("Douyin", "https://www.douyin.com/video/7465568516827773226", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
         ("local helper",             strat_local_helper,  {}),

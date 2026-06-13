@@ -352,7 +352,9 @@ def _strategy_platform_extractors(
                 return _result(name, True, media=info)
             return _result(name, False, reason="Reddit extractor found no media")
 
-        if ".tumblr.com/post/" in page_url:
+        if ".tumblr.com/post/" in page_url or (
+            "www.tumblr.com/" in page_url and re.search(r"/\d{15,}(?:/|$)", page_url)
+        ):
             info = extractors.extract_tumblr(page_url, cookies)
             if info:
                 return _result(name, True, media=info)
