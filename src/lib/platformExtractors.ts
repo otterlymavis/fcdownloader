@@ -185,6 +185,13 @@ function extractUrlCandidates(text: string, re: RegExp): string[] {
   return results;
 }
 
+function normalizeWordPressImageUrl(url: string): string {
+  // Strip WordPress size suffix before the extension (e.g. image-300x200.jpg → image.jpg).
+  // WordPress stores the original at the unsuffixed path; this makes on-device
+  // extraction return full-size images rather than layout thumbnails.
+  return url.replace(/-\d{1,4}x\d{1,4}(?=\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$))/i, '');
+}
+
 function _scanHtml(html: string, pageUrl: string, mode: 'hls' | 'dash' | 'generic'): DetectedMedia[] {
   const results: DetectedMedia[] = [];
   type PatternSpec = { re: RegExp; kind?: DetectedMedia['mediaKind'] };
@@ -211,6 +218,7 @@ function _scanHtml(html: string, pageUrl: string, mode: 'hls' | 'dash' | 'generi
     extractUrlCandidates(html, re)
       .filter((u) => !/^(?:data:|blob:|javascript:|mailto:|#)/i.test(u))
       .filter((u) => !isLikelyNonContentMediaUrl(u))
+      .map(normalizeWordPressImageUrl)
       .forEach((u) => pushUnique(results, makeItem(u, pageUrl, undefined, 'social-extractor', 0.65, kind)));
   });
   return results;
@@ -1712,7 +1720,7 @@ async function resolveShortUrl(url: string): Promise<string> {
   return url;
 }
 
-export async function extractFromSocialUrl(pageUrl: string): Promise<DetectedMedia[]> {
+export async function extractFromSocialUrl(pageUrl: string, opts?: { skipServer?: boolean }): Promise<DetectedMedia[]> {
   if (!/^https?:\/\//i.test(pageUrl)) {
     debugWarn('[extract] invalid URL or unsupported protocol:', pageUrl);
     return [];
@@ -1723,12 +1731,15 @@ export async function extractFromSocialUrl(pageUrl: string): Promise<DetectedMed
   // For sites the server can't extract without a session (Xiaohongshu), run the
   // on-device platform extractor before the gated, slow server round-trip.
   const serverFirst = !getSiteCapabilities(pageUrl)?.preferOnDevice;
+  // skipServer: caller (extractionManager Tier 2) already tried the server in Tier 1 and
+  // got nothing — don't retry; go straight to on-device extractors to save the 45 s timeout.
+  const skipServer = opts?.skipServer ?? false;
   const serverStep: [string, () => Promise<DetectedMedia[]>] =
     ['yt-dlp extraction', () => extractViaServer(pageUrl)];
   const platformStep: [string, () => Promise<DetectedMedia[]>] =
     ['platform-specific extractor', () => platform ? platform.fn(pageUrl) : Promise.resolve([])];
   const strategies: Array<[string, () => Promise<DetectedMedia[]>]> = [
-    ...(serverFirst ? [serverStep, platformStep] : [platformStep, serverStep]),
+    ...(skipServer ? [platformStep] : serverFirst ? [serverStep, platformStep] : [platformStep, serverStep]),
     // For Japanese URLs without a specific extractor, try the generic locale-aware
     // scraper before the generic English paths.
     ...(japaneseUrl && !platform

@@ -1555,6 +1555,7 @@ def build_ydl_opts(
         "skip_download": True,
         "outtmpl": "/tmp/%(id)s.%(ext)s",
         "extractor_args": extractor_args,
+        "socket_timeout": 30,
     }
     if concurrent_fragments > 1:
         opts["concurrent_fragment_downloads"] = concurrent_fragments

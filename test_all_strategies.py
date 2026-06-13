@@ -512,11 +512,11 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: webRequest captures googlevideo.com CDN; DOM scan finds <video> blob URL"),
 
-    ("TikTok (short URL)", "https://vm.tiktok.com/ZNR7eeRqB/", [
+    ("TikTok (short URL / photo)", "https://vm.tiktok.com/ZNR7eeRqB/", [
         ("server /extract",          strat_server,        {}),
         ("client: TikTok mobile API",strat_tiktok,        {}),
         ("local helper",             strat_local_helper,  {}),
-    ], "🌐 browser-only: webRequest captures tiktokcdn.com video segments as page plays"),
+    ], "🌐 browser-only: webRequest captures tiktokcdn.com media URLs; short link now resolves to a photo slideshow"),
 
     ("Threads", "https://www.threads.com/@nasa/post/DZceA72Drjf", [
         ("server /extract",          strat_server,        {}),
@@ -664,7 +664,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: Kakao video stream capture"),
 
-    ("Yahoo Japan video/news", "https://news.yahoo.co.jp/articles/45145b4c10a34b22c7eb16a04a6fc6b490d1f7c3", [
+    ("Yahoo Japan video/news", "https://news.yahoo.co.jp/articles/197bd0c92eca977bb77b3503f890a5f0e3f3e5fe", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -1377,7 +1377,28 @@ def expected_failure_reason(platform, label, r, platform_results):
     if "not running" in detail:
         return ""
 
-    if label == "server /extract" and "read operation timed out" in detail:
+    _TIMEOUT_TOKENS = (
+        "read operation timed out", "handshake operation timed out",
+        "the read operation timed out", "timed out",
+    )
+    is_connectivity_failure = any(t in detail for t in _TIMEOUT_TOKENS) or any(
+        tok in detail for tok in ("no route to host", "nodename nor servname",
+                                  "urlopen error [errno 65]", "urlopen error [errno 8]")
+    )
+
+    if label == "server /extract" and is_connectivity_failure:
+        return "remote backend timeout"
+
+    # If the server itself was unreachable, client/helper failures are collateral
+    server_detail = next(
+        ((r2.detail or "").lower() for lbl, r2, _ in platform_results if lbl == "server /extract"),
+        "",
+    )
+    server_unreachable = any(t in server_detail for t in _TIMEOUT_TOKENS) or any(
+        tok in server_detail for tok in ("no route to host", "nodename nor servname",
+                                         "urlopen error [errno 65]", "urlopen error [errno 8]")
+    )
+    if server_unreachable and is_connectivity_failure:
         return "remote backend timeout"
 
     if label == "local helper":
@@ -1385,18 +1406,36 @@ def expected_failure_reason(platform, label, r, platform_results):
             return "helper unsupported for this page"
         if platform in {
             "Threads", "Reddit (gallery)", "Bilibili dynamic / opus", "Douyin",
-            "TVer", "DMM", "Bunshun",
+            "TVer", "DMM", "Bunshun", "Xiaohongshu (explore)",
         }:
             return "helper needs browser/session or unsupported fixture"
+        # Helper also fails when the whole site is unreachable from the test environment
+        if server_unreachable:
+            return "remote backend timeout"
 
-    if label == "client: OG meta + CDN" and "no og/cdn media" in detail:
+    # Bilibili returns HTTP 412 to datacenter/test IPs; __playinfo__ won't be in page HTML
+    if label == "client: __playinfo__ page" and ("http 412" in detail or "__playinfo__ not in page" in detail):
         if any(other.ok for other_label, other, _ in platform_results if other_label != label):
+            return "expected server-side block"
+
+    if label == "client: OG meta + CDN":
+        # Site blocked the scraper (403/308/etc.) or returned nothing — OG scrape is unavailable
+        _og_blocked = "no og/cdn media" in detail or any(
+            c in detail for c in ("http 308", "http 403", "http 404", "http 429", "http 5")
+        )
+        if _og_blocked and any(other.ok for other_label, other, _ in platform_results if other_label != label):
             return "generic OG scrape unavailable"
 
     expected_platforms = {
         "Threads", "Reddit (gallery)", "Bilibili dynamic / opus", "Weibo (share link)",
-        "Xiaohongshu (xhslink)", "Douyin", "TVer", "ABEMA", "FC2 Video", "FC2 Live",
-        "OpenREC", "FOD / Fuji TV", "DMM", "Hulu Japan / TELASA", "Bunshun",
+        "Xiaohongshu (xhslink)", "Xiaohongshu (explore)", "Douyin", "TVer", "ABEMA",
+        "FC2 Video", "FC2 Live", "OpenREC", "FOD / Fuji TV", "DMM",
+        "Hulu Japan / TELASA", "Bunshun",
+        # Yahoo Japan video/news: Fly.io routing-blocked; Yahoo bots get 403
+        "Yahoo Japan video/news",
+        # Japanese streaming portals: geo-locked to Japan; server returns a clear restriction message
+        "Lemino / docomo video", "U-NEXT", "Locipo / broadcaster catch-up",
+        "MBS Dougaizm", "NHK Plus / On Demand",
     }
     if platform not in expected_platforms:
         return ""
@@ -1404,8 +1443,9 @@ def expected_failure_reason(platform, label, r, platform_results):
     if any(token in detail for token in (
         "sign in", "login", "auth", "cookie", "geo-restricted", "geo-sensitive",
         "drm", "no valid video", "getaddrinfo failed", "http 403", "http 404",
-        "not found", "no media", "no og/cdn media", "no detectable media", "nonetype",
-        "age-gated", "current episode", "requires",
+        "http error 4", "http 502", "not found", "no media", "no og/cdn media",
+        "no detectable media", "nonetype", "age-gated", "current episode", "requires",
+        "nodename nor servname", "no route to host", "unable to download",
     )):
         return "expected source/browser restriction"
 

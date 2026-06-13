@@ -158,7 +158,8 @@ export class ExtractionManager {
     // platform extractor → HLS detector → DASH detector → OG/meta → generic.
     // Skipped when preferOnDevice already ran it above.
     if ((isSocialPageUrl(pageUrl) || caps) && !caps?.preferOnDevice) {
-      const attempt = await runAttempt('platform-extractors', () => extractFromSocialUrl(pageUrl));
+      // skipServer: Tier 1 already tried the server above; don't retry and waste another 45 s timeout.
+      const attempt = await runAttempt('platform-extractors', () => extractFromSocialUrl(pageUrl, { skipServer: true }));
       if (attempt.success && attempt.media) {
         const best = pickBestMedia(attempt.media);
         debugLog('[ExtractionManager] success via platform-extractors, best:', best?.mediaType, best?.label);

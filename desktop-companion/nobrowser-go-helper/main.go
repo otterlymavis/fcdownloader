@@ -344,11 +344,16 @@ func runYtDlpJSONWithPath(ctx context.Context, ytDlp, rawURL string) (map[string
 		"--dump-single-json",
 		"--skip-download",
 		"--no-warnings",
+		"--socket-timeout", "30",
 		"--js-runtimes", "node",
 		"--remote-components", "ejs:github",
 		rawURL,
 	}
-	out, err := exec.CommandContext(ctx, ytDlp, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, ytDlp, args...)
+	// Prevent orphaned node.js subprocesses from holding stdout/stderr pipes
+	// open after context cancellation; abandon I/O after 5 s.
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("%s", tail(out))
 	}

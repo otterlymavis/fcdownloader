@@ -120,7 +120,7 @@ URLS = {
     "Ameblo":        ("https://ameblo.jp/chunta-2011/", ""),
     "Kstyle":        ("https://kstyle.com/topicNews.ksn?topicNo=1107", ""),
     "Daum / Tistory": ("https://lovelyddodam.tistory.com/114", "mobile view to bypass layout images"),
-    "Livedoor Blog": ("http://blog.livedoor.jp/new_alces/archives/4980902.html", "livedoor.blogimg.jp CDN images; update article ID if 404"),
+    "Livedoor Blog": ("http://blog.livedoor.jp/new_alces/archives/4980902.html", "SERVER-ONLY: blog.livedoor.jp is HTTP-only; iOS ATS blocks direct fetch so server extraction is required; update article ID if 404"),
     "Yahoo Japan articles": ("https://news.yahoo.co.jp/articles/73a63ae0801bb59edfa56f0c529cae091b84386b", "AUTH/SERVER IP: Yahoo Japan blocks datacenter fetches; browser HTML/cookies path is supported"),
     "Pixiv / Fanbox": ("https://www.pixiv.net/artworks/100000000", ""),
     "Bunshun":       ("https://bunshun.jp/articles/-/89384", "ismcdn.jp images; /articles/-/<id> format; increment ID if 404"),
