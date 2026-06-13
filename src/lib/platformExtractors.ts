@@ -186,10 +186,10 @@ function extractUrlCandidates(text: string, re: RegExp): string[] {
 }
 
 function normalizeWordPressImageUrl(url: string): string {
-  // Strip WordPress size suffix before the extension (e.g. image-300x200.jpg → image.jpg).
-  // WordPress stores the original at the unsuffixed path; this makes on-device
-  // extraction return full-size images rather than layout thumbnails.
-  return url.replace(/-\d{1,4}x\d{1,4}(?=\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$))/i, '');
+  // Strip WordPress size/scaled suffix before the extension so on-device extraction
+  // returns full-size originals rather than layout thumbnails.
+  // Handles: image-300x200.jpg, image_1024x768.png, image-scaled.jpg
+  return url.replace(/[-_](?:\d{2,4}x\d{2,4}|scaled)(?=\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$))/i, '');
 }
 
 function _scanHtml(html: string, pageUrl: string, mode: 'hls' | 'dash' | 'generic'): DetectedMedia[] {
