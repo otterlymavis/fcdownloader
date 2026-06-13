@@ -75,7 +75,7 @@ URLS = {
     "TVer":          ("https://tver.jp/episodes/epqbt0uzhh", "GEO-LOCKED: on-device Streaks pipeline works from Japan IP; server geo-blocked; update episode ID if expired (check tver.jp/sitemap.xml)"),
     "ABEMA":         ("https://abema.tv/video/episode/194-25_s2_p1", "GEO-SENSITIVE/AUTH: passes from a Japan IP when DRM-free"),
     "NHK":           ("https://www3.nhk.or.jp/nhkworld/en/shows/2049165/", ""),
-    "TwitCasting":   ("https://twitcasting.tv/c:tcbnwst/movie/836596193", "PAST-BROADCAST/AUTH: past TwitCasting recordings require different API access or authentication"),
+    "TwitCasting":   ("https://twitcasting.tv/ivetesangalo/movie/2357609", "public VOD archive"),
     "FC2 Video":     ("https://video.fc2.com/en/content/20121103kUan1KHs", "HLS via yt-dlp"),
     "FC2 Live":      ("https://live.fc2.com/99999999/", "OFFLINE: sample channel is not currently live"),
     # "OpenREC":       ("https://www.openrec.tv/capture/l9nk2x4gn14", "verified public capture; HLS manifest requires OpenREC session or updated URL"),
