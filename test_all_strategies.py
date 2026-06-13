@@ -1447,7 +1447,7 @@ def expected_failure_reason(platform, label, r, platform_results):
     if any(token in detail for token in (
         "sign in", "login", "auth", "cookie", "geo-restricted", "geo-sensitive",
         "drm", "no valid video", "getaddrinfo failed", "http 403", "http 404",
-        "http error 4", "http 502", "not found", "no media", "no og/cdn media",
+        "http error 4", "http 412", "http 502", "not found", "no media", "no og/cdn media",
         "no detectable media", "nonetype", "age-gated", "current episode", "requires",
         "nodename nor servname", "no route to host", "unable to download",
         # Server total-failure prefix — the 120-char truncation in strat_server often
