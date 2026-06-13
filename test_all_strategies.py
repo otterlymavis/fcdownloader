@@ -530,6 +530,24 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: twimg.com capture"),
 
+    ("Bluesky", "https://bsky.app/profile/bsky.app/post/3mmwmla3xph26", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "public AT Protocol API → video/images"),
+
+    ("Mastodon", "https://mastodon.social/@Gargron/116690424322009521", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "public Mastodon API → media_attachments"),
+
+    ("Tumblr", "https://www.tumblr.com/humansofnewyork/753752476340060160", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "🌐 browser-only: photo galleries require session; yt-dlp handles public posts"),
+
     ("Facebook", "https://www.facebook.com/watch/?v=10153231379946729", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
@@ -730,6 +748,18 @@ PLATFORMS = [
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: natalie.mu image parsing"),
+
+    ("TRILL", "https://trilltrill.jp/articles/4750322/photos/1", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "article photo gallery"),
+
+    ("note.com", "https://note.com/info/n/nea1b96233fbf", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "article with images"),
 
     ("Naver Blog", "https://blog.naver.com/jalee3228/224297926556", [
         ("server /extract",          strat_server,        {}),
