@@ -1187,6 +1187,11 @@ def extract_article_photo_gallery(page_url: str, cookies: str | None) -> dict[st
     if not first_html or status == 404:
         return None
 
+    _wp_size_re = re.compile(
+        r"(?:-|_)(?:\d{2,4}x\d{2,4}|scaled)(?=\.(?:jpe?g|png|webp|gif|avif)(?:[?#]|$))",
+        re.IGNORECASE,
+    )
+
     def _collect_images(html_text: str) -> list[str]:
         """Return all article images found in *html_text* (deduplicated)."""
         imgs: list[str] = []
@@ -1201,13 +1206,13 @@ def extract_article_photo_gallery(page_url: str, cookies: str | None) -> dict[st
                 r'"(?:[a-z_]*(?:photo|image|picture|img|link)[a-z_]*)"\s*:\s*"(https?://[^"]{10,})"',
                 script, re.IGNORECASE,
             ):
-                url = html.unescape(key_m.group(1).replace("\\/", "/"))
+                url = _wp_size_re.sub("", html.unescape(key_m.group(1).replace("\\/", "/")))
                 if _ok(url) and url not in imgs:
                     imgs.append(url)
         if not imgs:
             single = _best_image(html_text)
             if single:
-                imgs.append(single)
+                imgs.append(_wp_size_re.sub("", single))
         return imgs
 
     title = _page_title(first_html)
@@ -1381,6 +1386,11 @@ def extract_generic_media_images(page_url: str, cookies: str | None) -> dict[str
                 pass
         if not url.startswith("http") or not _is_article_image(url):
             return
+        # Strip WordPress size suffix so image-300x200.jpg deduplicates against image.jpg
+        url = re.sub(
+            r"(?:-|_)(?:\d{2,4}x\d{2,4}|scaled)(?=\.(?:jpe?g|png|webp|gif|avif)(?:[?#]|$))",
+            "", url, flags=re.I,
+        )
         dedup = re.sub(r"\?.*$", "", url)
         if dedup not in seen:
             seen.add(dedup)

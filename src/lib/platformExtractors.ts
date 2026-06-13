@@ -302,11 +302,11 @@ function _scanStructuredMediaData(html: string, pageUrl: string): DetectedMedia[
       const thumb = record.thumbnailUrl ?? record.thumbnailURL ?? record.thumbnail;
       const thumbValue = Array.isArray(thumb) ? thumb[0] : thumb;
       if (typeof thumbValue === 'string') {
-        try { thumbnails.push(new URL(thumbValue, pageUrl).toString()); } catch {}
+        try { thumbnails.push(normalizeWordPressImageUrl(new URL(thumbValue, pageUrl).toString())); } catch {}
       } else if (thumbValue && typeof thumbValue === 'object') {
         const nested = (thumbValue as Record<string, unknown>).url ?? (thumbValue as Record<string, unknown>).contentUrl;
         if (typeof nested === 'string') {
-          try { thumbnails.push(new URL(nested, pageUrl).toString()); } catch {}
+          try { thumbnails.push(normalizeWordPressImageUrl(new URL(nested, pageUrl).toString())); } catch {}
         }
       }
     }
@@ -332,7 +332,7 @@ function _scanStructuredMediaData(html: string, pageUrl: string): DetectedMedia[
           add(value);
         }
         if (/thumb|poster|image/i.test(key) && !isLikelyNonContentMediaUrl(value)) {
-          try { thumbnails.push(new URL(value, pageUrl).toString()); } catch {}
+          try { thumbnails.push(normalizeWordPressImageUrl(new URL(value, pageUrl).toString())); } catch {}
         }
         return;
       }
