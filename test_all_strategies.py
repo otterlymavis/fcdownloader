@@ -1407,6 +1407,8 @@ def expected_failure_reason(platform, label, r, platform_results):
         if platform in {
             "Threads", "Reddit (gallery)", "Bilibili dynamic / opus", "Douyin",
             "TVer", "DMM", "Bunshun", "Xiaohongshu (explore)",
+            # Weibo/ABEMA: yt-dlp hangs or times out without auth — not a code bug
+            "Weibo (share link)", "ABEMA",
         }:
             return "helper needs browser/session or unsupported fixture"
         # Helper also fails when the whole site is unreachable from the test environment
@@ -1419,9 +1421,9 @@ def expected_failure_reason(platform, label, r, platform_results):
             return "expected server-side block"
 
     if label == "client: OG meta + CDN":
-        # Site blocked the scraper (403/308/etc.) or returned nothing — OG scrape is unavailable
+        # Site blocked the scraper (403/308/412/etc.) or returned nothing — OG scrape is unavailable
         _og_blocked = "no og/cdn media" in detail or any(
-            c in detail for c in ("http 308", "http 403", "http 404", "http 429", "http 5")
+            c in detail for c in ("http 308", "http 403", "http 404", "http 412", "http 429", "http 5")
         )
         if _og_blocked and any(other.ok for other_label, other, _ in platform_results if other_label != label):
             return "generic OG scrape unavailable"
@@ -1431,6 +1433,8 @@ def expected_failure_reason(platform, label, r, platform_results):
         "Xiaohongshu (xhslink)", "Xiaohongshu (explore)", "Douyin", "TVer", "ABEMA",
         "FC2 Video", "FC2 Live", "OpenREC", "FOD / Fuji TV", "DMM",
         "Hulu Japan / TELASA", "Bunshun",
+        # TBS: episode-specific URLs expire and playback metadata loads only in the browser
+        "TBS",
         # Yahoo Japan video/news: Fly.io routing-blocked; Yahoo bots get 403
         "Yahoo Japan video/news",
         # Japanese streaming portals: geo-locked to Japan; server returns a clear restriction message
