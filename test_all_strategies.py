@@ -923,7 +923,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: frau gallery extraction"),
 
-    ("mi-mollet", "https://mi-mollet.com/ud/article_photo/search", [
+    ("mi-mollet", "https://mi-mollet.com/articles/-/59656", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -1013,7 +1013,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: asagei gallery extraction"),
 
-    ("Entame Next", "https://entamenext.com/category/lists/news", [
+    ("Entame Next", "https://entamenext.com/articles/gallery/46181/1", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -1115,7 +1115,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: watch impress gallery extraction"),
 
-    ("Mynavi News", "https://news.mynavi.jp/techplus/list/headline/whitepaper/article_type/case/", [
+    ("Mynavi News", "https://news.mynavi.jp/techplus/article/20260612-4571330/", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
