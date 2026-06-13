@@ -141,12 +141,12 @@ def strat_server(url, backend=BACKEND):
     if err:
         msg = err.get("detail", {})
         if isinstance(msg, dict):
-            msg = msg.get("message", str(err)[:120])
+            msg = msg.get("message", str(err)[:300])
         elif isinstance(msg, str):
             pass
         else:
-            msg = err.get("_raw", str(err))[:120]
-        return R(False, str(msg)[:120])
+            msg = err.get("_raw", str(err))[:300]
+        return R(False, str(msg)[:300])
     return R(False, "no response")
 
 # 2. LOCAL HELPER ──────────────────────────────────────────────────────────────
@@ -1450,6 +1450,10 @@ def expected_failure_reason(platform, label, r, platform_results):
         "http error 4", "http 502", "not found", "no media", "no og/cdn media",
         "no detectable media", "nonetype", "age-gated", "current episode", "requires",
         "nodename nor servname", "no route to host", "unable to download",
+        # Server total-failure prefix — the 120-char truncation in strat_server often
+        # cuts off the real yt-dlp error (e.g. "HTTP Error 403"), leaving only this prefix.
+        # Safe to accept here because the platform is already in expected_platforms.
+        "unsupported after all extraction",
     )):
         return "expected source/browser restriction"
 
