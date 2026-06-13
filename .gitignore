@@ -120,3 +120,6 @@ scripts/generate_ios_report.py
 fresh_urls.json
 ios_url_report.md
 extension_helper_report.md
+extension_helper_report_v*.md
+webapp_url_report.md
+generate_webapp_report.py
