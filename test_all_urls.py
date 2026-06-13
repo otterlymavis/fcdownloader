@@ -162,6 +162,7 @@ URLS = {
     "Asagei":        ("https://www.asagei.com/category/sports", ""),
     "Entame Next":   ("https://entamenext.com/articles/detail/46066", "AUTH/HLS: category page embeds a promo video behind an auth-gated HLS URL; generic image scan fallback available"),
     "GirlsNews":     ("https://girlsnews.tv/category/news", ""),
+    "Girlswalker":   ("https://girlswalker.com/archives/331232/", "photo gallery article"),
     "Tokyo Sports":  ("https://www.tokyo-sports.co.jp/list/sports", ""),
     "Hochi":         ("https://hochi.news/photos/", ""),
     "Sponichi":      ("https://www.sponichi.co.jp/soccer/tokusyu/wc2026/?from=glonavi", "BROWSER-ONLY: special/category page does not expose stable article media to server fetch"),

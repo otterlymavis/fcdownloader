@@ -1025,6 +1025,12 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: girlsnews gallery extraction"),
 
+    ("Girlswalker", "https://girlswalker.com/archives/331232/", [
+        ("server /extract",          strat_server,        {}),
+        ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
+        ("local helper",             strat_local_helper,  {}),
+    ], "JP fashion TGC photo gallery"),
+
     ("Tokyo Sports", "https://www.tokyo-sports.co.jp/list/sports", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),

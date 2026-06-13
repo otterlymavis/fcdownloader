@@ -256,6 +256,13 @@ _CURATED_SITE_PROFILES: tuple[dict[str, Any], ...] = (
         "language": "ko-KR,ko;q=0.9,en-US;q=0.6,en;q=0.5",
         "cdn": ("kakaocdn.net", "kakao.com", "story.kakao.com"),
     },
+    {
+        "label": "Girlswalker",
+        "hosts": ("girlswalker.com",),
+        "referer": "https://girlswalker.com/",
+        "language": "ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5",
+        "cdn": ("img.girlswalker.com",),
+    },
 )
 
 
