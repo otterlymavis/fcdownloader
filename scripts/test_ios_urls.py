@@ -190,6 +190,11 @@ def main() -> int:
 
     print(f"\n{passed}/{len(urls)} deep links opened")
     print(f"Results: {results_path}")
+    if len(urls) > 50:
+        # Late-position URLs (positions 90+) need ~45 s to complete server extraction.
+        # generate_ios_report.py --wait 30 gives them enough headroom.
+        print(f"\nNext step (after ~30s):")
+        print(f"  python3 scripts/generate_ios_report.py --wait 30")
     return 0 if passed == len(urls) else 1
 
 
