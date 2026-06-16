@@ -63,6 +63,7 @@ import source_audit
 import languages
 import registry
 import supervisor
+import universal
 from config import (
     ALLOWED_ORIGINS,
     CACHE_MAX,
@@ -204,6 +205,7 @@ def _cache_put(key: str, val: dict[str, Any]) -> None:
 # ── Response shaping ──────────────────────────────────────────────────────────
 
 _IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "heic"}
+_UNIVERSAL_PAGE_FETCH_TIMEOUT = 8
 
 
 def _without_thumbnail_fields(item: dict[str, Any]) -> dict[str, Any]:
@@ -234,6 +236,7 @@ def _mime_for(f: dict[str, Any]) -> str | None:
     if not ext:
         return None
     return {
+        "mpd": "application/dash+xml",
         "m4a": "audio/mp4",
         "mp4": "video/mp4",
         "webm": "video/webm",
@@ -366,6 +369,22 @@ def _to_response(info: dict[str, Any]) -> dict[str, Any]:
             "thumbnail": info.get("thumbnail"),
         }
 
+    if ext == "mpd" or safe_text(info.get("protocol")).lower() == "http_dash_segments":
+        return {
+            "kind":      "dash",
+            "url":       url,
+            "headers":   _headers_for(info),
+            "label":     _label_for(info),
+            "width":     info.get("width"),
+            "height":    info.get("height"),
+            "mimeType":  "application/dash+xml",
+            "expire":    expire_of(url),
+            "extractor": info.get("extractor"),
+            "formatId":  info.get("format_id"),
+            "formats":   _format_options(info),
+            "thumbnail": info.get("thumbnail"),
+        }
+
     if looks_like_hls(url, info.get("protocol")):
         return {
             "kind":      "hls",
@@ -450,14 +469,14 @@ def _to_gallery_response(info: dict[str, Any]) -> dict[str, Any]:
         ext = (entry.get("ext") or guess_ext_from_url(url) or "").lower()
         is_image = ext in _IMAGE_EXTS
         items.append(_without_thumbnail_fields({
-            "kind":      "image" if is_image else ("hls" if looks_like_hls(url, entry.get("protocol")) else "direct"),
+            "kind":      "image" if is_image else ("dash" if ext == "mpd" or safe_text(entry.get("protocol")).lower() == "http_dash_segments" else ("hls" if looks_like_hls(url, entry.get("protocol")) else "direct")),
             "url":       url,
             "headers":   _headers_for(entry),
             "label":     _label_for(entry),
             "width":     entry.get("width"),
             "height":    entry.get("height"),
             "ext":       ext or ("mp4" if not is_image else "jpg"),
-            "mimeType":  _mime_for({**entry, "ext": ext or "jpg"}) if is_image else _mime_for(entry),
+            "mimeType":  _mime_for({**entry, "ext": ext or "jpg"}) if is_image else ("application/dash+xml" if ext == "mpd" else _mime_for(entry)),
             "title":     entry.get("title"),
             "duration":  entry.get("duration"),
             "extractor": entry.get("extractor"),
@@ -531,6 +550,14 @@ _MEDIA_HINT_HOST_RE = re.compile(
     r"vod\.ntv\.co\.jp|cu\.ntv\.co\.jp|edgekey\.net|edgesuite\.net|hdslb\.com|biliimg\.com)",
     re.I,
 )
+_MEDIA_HINT_MIME_RE = re.compile(
+    r"^(?:video/|audio/|image/|application/(?:dash\+xml|x-mpegdash\+xml|vnd\.apple\.mpegurl|x-mpegurl))",
+    re.I,
+)
+_NON_MEDIA_HINT_MIME_RE = re.compile(
+    r"^(?:text/html|text/plain|text/css|application/(?:json|javascript|x-javascript|xml))",
+    re.I,
+)
 
 
 def _decode_replay_headers(encoded: str | None) -> dict[str, str]:
@@ -566,6 +593,133 @@ def _direct_media_url_kind(url: str) -> str:
     return ""
 
 
+def _media_hint_kind(url: str, mime_type: str, raw_kind: str = "") -> str:
+    kind = raw_kind.lower()
+    if kind in {"dash", "hls", "audio", "image", "video", "direct"}:
+        return kind
+    if "dash+xml" in mime_type.lower() or "x-mpegdash" in mime_type.lower():
+        return "dash"
+    if "mpegurl" in mime_type.lower() or "m3u8" in mime_type.lower():
+        return "hls"
+    if mime_type.lower().startswith("audio/"):
+        return "audio"
+    if mime_type.lower().startswith("image/"):
+        return "image"
+    if mime_type.lower().startswith("video/"):
+        return "video"
+    return _direct_media_url_kind(url) or "direct"
+
+
+def _media_hint_ext(url: str, kind: str, mime_type: str) -> str:
+    ext = guess_ext_from_url(url)
+    if ext:
+        return ext
+    lower = mime_type.lower()
+    if kind == "dash":
+        return "mpd"
+    if kind == "hls":
+        return "m3u8"
+    if kind == "audio":
+        if "mpeg" in lower or "mp3" in lower:
+            return "mp3"
+        if "ogg" in lower or "opus" in lower:
+            return "ogg"
+        if "wav" in lower:
+            return "wav"
+        return "m4a"
+    if kind == "image":
+        if "png" in lower:
+            return "png"
+        if "webp" in lower:
+            return "webp"
+        if "gif" in lower:
+            return "gif"
+        return "jpg"
+    if "webm" in lower:
+        return "webm"
+    return "mp4"
+
+
+def _media_hint_supported(url: str, mime_type: str) -> bool:
+    if _MEDIA_HINT_HOST_RE.search(url):
+        return True
+    if not mime_type or _NON_MEDIA_HINT_MIME_RE.search(mime_type):
+        return False
+    return bool(_MEDIA_HINT_MIME_RE.search(mime_type))
+
+
+def _accept_language_for_url(url: str) -> str:
+    """Return a sensible Accept-Language value based on the URL's hostname TLD."""
+    try:
+        host = urllib.parse.urlparse(url).hostname or ""
+    except Exception:
+        return "en-US,en;q=0.9"
+    if re.search(r"(?:^|\.)(?:jp|co\.jp|ne\.jp|or\.jp|ac\.jp)$", host, re.I):
+        return "ja-JP,ja;q=0.9,en;q=0.5"
+    if re.search(r"(?:^|\.)(?:kr|co\.kr)$", host, re.I):
+        return "ko-KR,ko;q=0.9,en;q=0.5"
+    if re.search(r"(?:^|\.)(?:cn|com\.cn|net\.cn|org\.cn)$", host, re.I):
+        return "zh-CN,zh;q=0.9,en;q=0.5"
+    if re.search(r"(?:^|\.)(?:tw|com\.tw|net\.tw)$", host, re.I):
+        return "zh-TW,zh;q=0.9,en;q=0.5"
+    return "en-US,en;q=0.9"
+
+
+def _fetch_page_content(req: ExtractRequest) -> tuple[str | None, str, str | None]:
+    """Fetch the request URL and return (decoded_text, content_type, link_header).
+
+    Returns (None, '', None) on failure.  link_header is the raw HTTP Link:
+    response header value (used for feed auto-discovery on podcast hosts that
+    don't include <link rel="alternate"> in their HTML).
+    """
+    if not universal.should_fetch_page_html(req.pageUrl):
+        return None, "", None
+    headers = safe_headers({
+        "User-Agent": MOBILE_UA,
+        "Accept": "text/html,application/xhtml+xml,application/rss+xml,application/atom+xml,application/xml,*/*;q=0.2",
+        "Accept-Language": _accept_language_for_url(req.pageUrl),
+    })
+    if req.referer:
+        headers["Referer"] = safe_header_value("Referer", req.referer)
+    if req.cookies:
+        headers["Cookie"] = safe_header_value("Cookie", req.cookies)
+    for _attempt in range(2):
+        try:
+            request = urllib.request.Request(req.pageUrl, headers=headers, method="GET")
+            with urllib.request.urlopen(request, timeout=_UNIVERSAL_PAGE_FETCH_TIMEOUT) as resp:
+                status = int(getattr(resp, "status", 200) or 200)
+                if status >= 400:
+                    return None, "", None
+                content_type = getattr(resp, "headers", {}).get("Content-Type", "") or ""
+                link_header = getattr(resp, "headers", {}).get("Link", None)
+                # Content-Disposition: attachment; filename="video.mp4" — treat
+                # as binary even when Content-Type is application/octet-stream.
+                cd = getattr(resp, "headers", {}).get("Content-Disposition", "") or ""
+                if re.search(r"\battachment\b", cd, re.I) and not re.match(r"^(?:video|audio)/", content_type, re.I):
+                    _cd_filename = re.search(r'filename[*]?=(?:UTF-8\'\')?["\']?([^"\';\s]+)', cd, re.I)
+                    if _cd_filename:
+                        _cd_ext = guess_ext_from_url(_cd_filename.group(1).strip('"\'')).lower()
+                        if _cd_ext in {"mp4", "m4v", "webm", "mov", "avi", "mkv", "flv", "mpg", "mpeg",
+                                       "mp3", "m4a", "aac", "wav", "ogg", "opus", "flac"}:
+                            _cd_kind = "audio" if _cd_ext in {"mp3", "m4a", "aac", "wav", "ogg", "opus", "flac"} else "video"
+                            content_type = f"{_cd_kind}/{_cd_ext}"
+                max_bytes = max(universal.PAGE_FETCH_MAX_BYTES, 2_000_000)
+                body = resp.read(max_bytes + 1)
+                if len(body) > max_bytes:
+                    return None, content_type, link_header
+                return body.decode(universal.charset_from_content_type(content_type), errors="replace"), content_type, link_header
+        except Exception:
+            if _attempt == 0:
+                continue
+            return None, "", None
+    return None, "", None
+
+
+def _fetch_universal_page_html(req: ExtractRequest) -> str | None:
+    text, ct, _lh = _fetch_page_content(req)
+    return text if text and universal.is_htmlish_content_type(ct) else None
+
+
 def _info_from_media_hints(page_url: str, hints: list[dict[str, Any]] | None) -> dict[str, Any] | None:
     entries: list[dict[str, Any]] = []
     audit: list[dict[str, Any]] = []
@@ -574,16 +728,17 @@ def _info_from_media_hints(page_url: str, hints: list[dict[str, Any]] | None) ->
         if not isinstance(raw, dict):
             continue
         url = normalize_url(safe_text(raw.get("url")))
+        mime_type = safe_text(raw.get("mimeType"))
         if not url.startswith(("http://", "https://")):
             audit.append({"strategy": "browser-capture", "source": "mediaHints", "url": url, "selected": False, "rejectedReason": "not an http(s) URL"})
             continue
-        if not _MEDIA_HINT_HOST_RE.search(url):
+        if not _media_hint_supported(url, mime_type):
             audit.append({"strategy": "browser-capture", "source": "mediaHints", "url": url, "selected": False, "rejectedReason": "not a supported media URL"})
             continue
         if url in seen:
             continue
         seen.add(url)
-        kind = safe_text(raw.get("kind")).lower() or _direct_media_url_kind(url) or "direct"
+        kind = _media_hint_kind(url, mime_type, safe_text(raw.get("kind")))
         if kind == "dash":
             protocol = "http_dash_segments"
         elif kind == "hls" or looks_like_hls(url, None):
@@ -598,7 +753,7 @@ def _info_from_media_hints(page_url: str, hints: list[dict[str, Any]] | None) ->
             "title": safe_text(raw.get("title")) or "Captured media",
             "url": url,
             "webpage_url": page_url,
-            "ext": guess_ext_from_url(url) or ("mp4" if kind != "audio" else "m4a"),
+            "ext": _media_hint_ext(url, kind, mime_type),
             "protocol": protocol,
             "http_headers": headers,
             "extractor": "browser-captured",
@@ -1405,25 +1560,236 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
             info = extractors.extract_weibo_from_html(req.pageUrl, req.pageHtml)
         if not info and req.pageHtml:
             info = extractors.extract_curated_site(req.pageUrl, req.cookies, page_html=req.pageHtml)
+        # Media hints (URLs the browser actually fetched to play media) are
+        # higher-confidence than HTML parsing — check them first.
         if not info:
             info = _info_from_media_hints(req.pageUrl, req.mediaHints)
+        # An image-only HTML result (OG thumbnail with no video/audio) is kept as
+        # a last-resort fallback rather than a definitive answer so that the
+        # iframe scanner and yt-dlp still get a chance to find the real video.
+        _image_only_fallback: dict[str, Any] | None = None
+        if not info and req.pageHtml:
+            _uhtml = universal.extract_universal_from_html(req.pageUrl, req.pageHtml)
+            if _uhtml and universal.has_video_or_audio(_uhtml):
+                info = _uhtml
+            elif _uhtml:
+                _image_only_fallback = _uhtml
+        # For URL-paste mode (no browser HTML), fetch the page once and run
+        # the universal parser or feed extractor. Reuse the HTML below for
+        # iframe scanning.
+        _html_for_embeds: str | None = req.pageHtml
+        if not info and not req.pageHtml:
+            _page_text, _page_ct, _link_header = _fetch_page_content(req)
+            # Direct binary response: server returned video/audio content-type
+            # for the URL itself — treat it as a direct download without parsing.
+            if _page_ct and re.match(r"^(?:video|audio)/", _page_ct.strip(), re.I):
+                _direct_kind = "audio" if _page_ct.lower().startswith("audio/") else "video"
+                _direct_ext = guess_ext_from_url(req.pageUrl) or ("mp3" if _direct_kind == "audio" else "mp4")
+                info = {
+                    "id": cache_key(req.pageUrl),
+                    "url": req.pageUrl,
+                    "ext": _direct_ext,
+                    "protocol": "https",
+                    "extractor": "direct-binary",
+                    "_universal_confidence": 0.95,
+                }
+            elif _page_text and universal.is_htmlish_content_type(_page_ct):
+                _html_for_embeds = _page_text
+                _uhtml = universal.extract_universal_from_html(req.pageUrl, _page_text)
+                if _uhtml and universal.has_video_or_audio(_uhtml):
+                    info = _uhtml
+                elif _uhtml:
+                    _image_only_fallback = _image_only_fallback or _uhtml
+            elif _page_text and universal.is_feed_content_type(_page_ct):
+                if "json" in _page_ct.lower():
+                    info = universal.extract_universal_from_json_feed(req.pageUrl, _page_text)
+                else:
+                    info = universal.extract_universal_from_feed(req.pageUrl, _page_text)
+            elif _page_text and universal.looks_like_feed_text(_page_text):
+                # Some CDNs / podcast hosts serve RSS as text/plain or
+                # application/octet-stream; fall back to XML sniffing.
+                info = universal.extract_universal_from_feed(req.pageUrl, _page_text)
+            elif _page_text and "json" in _page_ct.lower() and universal.looks_like_json_feed_text(_page_text):
+                # JSON Feed spec (jsonfeed.org) served as application/json.
+                info = universal.extract_universal_from_json_feed(req.pageUrl, _page_text)
+            elif _page_text and "json" in _page_ct.lower():
+                # Arbitrary JSON API response — run hydration + player-config
+                # scanners on the JSON blob to find media URLs.
+                info = universal.extract_universal_from_json_api(req.pageUrl, _page_text)
+            # HTTP Link: header feed discovery — some podcast hosts advertise
+            # the RSS feed only via response header, not in the page HTML.
+            if not info and _link_header:
+                _header_feed_url = universal.scan_feed_link_from_header(req.pageUrl, _link_header)
+                if _header_feed_url and _header_feed_url != (_html_for_embeds and req.pageUrl):
+                    try:
+                        _hfl_req = urllib.request.Request(
+                            _header_feed_url,
+                            headers={
+                                "User-Agent": MOBILE_UA,
+                                "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*;q=0.8",
+                            },
+                        )
+                        with urllib.request.urlopen(_hfl_req, timeout=8) as _hfl_resp:
+                            _hfl_text = _hfl_resp.read(1_500_000).decode("utf-8", errors="replace")
+                            _hfl_ct = safe_text(_hfl_resp.headers.get("Content-Type", ""))
+                        if universal.is_feed_content_type(_hfl_ct) or universal.looks_like_feed_text(_hfl_text):
+                            info = universal.extract_universal_from_feed(_header_feed_url, _hfl_text)
+                    except Exception:
+                        pass
+        # Canonical redirect: AMP pages and syndicated articles declare
+        # <link rel="canonical"> pointing to the original article with the
+        # real video player.  If extraction failed on the fetched page, retry
+        # on the canonical URL using the universal HTML parser.
+        if not info and _html_for_embeds and not (_image_only_fallback and universal.has_video_or_audio(_image_only_fallback)):
+            _canonical_url = universal.scan_canonical_url(req.pageUrl, _html_for_embeds)
+            if _canonical_url:
+                try:
+                    _can_hdrs: dict[str, str] = {
+                        "User-Agent": MOBILE_UA,
+                        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                        "Accept-Language": _accept_language_for_url(_canonical_url),
+                    }
+                    if req.cookies:
+                        _can_hdrs["Cookie"] = safe_header_value("Cookie", req.cookies)
+                    _can_req = urllib.request.Request(_canonical_url, headers=safe_headers(_can_hdrs))
+                    with urllib.request.urlopen(_can_req, timeout=10) as _can_resp:
+                        _can_text = _can_resp.read(1_500_000).decode("utf-8", errors="replace")
+                    _can_result = universal.extract_universal_from_html(_canonical_url, _can_text)
+                    if _can_result and universal.has_video_or_audio(_can_result):
+                        info = _can_result
+                except Exception:
+                    pass
+        # RSS/Atom auto-discovery: blog/podcast CMS pages often advertise their
+        # feed via <link rel="alternate" type="application/rss+xml"> in <head>.
+        # Fetch and parse it to find media the HTML parser wouldn't see.
+        if not info and _html_for_embeds:
+            _feed_link = universal.scan_feed_link_url(req.pageUrl, _html_for_embeds)
+            if _feed_link:
+                try:
+                    _fl_req = urllib.request.Request(
+                        _feed_link,
+                        headers={
+                            "User-Agent": MOBILE_UA,
+                            "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*;q=0.8",
+                        },
+                    )
+                    with urllib.request.urlopen(_fl_req, timeout=8) as _fl_resp:
+                        _fl_text = _fl_resp.read(1_500_000).decode("utf-8", errors="replace")
+                        _fl_ct = safe_text(_fl_resp.headers.get("Content-Type", ""))
+                    if universal.is_feed_content_type(_fl_ct):
+                        if "json" in _fl_ct.lower():
+                            info = universal.extract_universal_from_json_feed(_feed_link, _fl_text)
+                        else:
+                            info = universal.extract_universal_from_feed(_feed_link, _fl_text)
+                    elif universal.looks_like_feed_text(_fl_text):
+                        info = universal.extract_universal_from_feed(_feed_link, _fl_text)
+                    elif universal.looks_like_json_feed_text(_fl_text):
+                        info = universal.extract_universal_from_json_feed(_feed_link, _fl_text)
+                except Exception:
+                    pass
+        # Try known-player iframes from page HTML (browser-provided or server-fetched).
+        # Handles news/blog pages where the video lives inside a Vimeo/Brightcove/
+        # JWPlayer/etc. iframe that yt-dlp's generic detector might miss.
+        if not info and _html_for_embeds:
+            for _embed_url in universal.scan_iframe_embed_urls(req.pageUrl, _html_for_embeds):
+                try:
+                    _embed_info = run_extraction(
+                        _embed_url,
+                        referer=req.pageUrl,
+                        cookies=req.cookies,
+                        subtitles=req.subtitles,
+                        sub_langs=req.subLangs,
+                        proxy=req.proxy,
+                        request_source_audit=req.sourceAudit,
+                        ctx=ctx,
+                    )
+                    if _embed_info:
+                        info = _embed_info
+                        break
+                except Exception:
+                    continue
+        # oEmbed discovery: fetch the JSON endpoint, extract known-player iframes
+        # from the response html field. Common on WordPress/Ghost/news sites.
+        if not info and _html_for_embeds:
+            _oembed_url = universal.scan_oembed_endpoint_url(req.pageUrl, _html_for_embeds)
+            if _oembed_url:
+                try:
+                    _oe_req = urllib.request.Request(
+                        _oembed_url,
+                        headers={"Accept": "application/json", "User-Agent": MOBILE_UA},
+                    )
+                    with urllib.request.urlopen(_oe_req, timeout=8) as _oe_resp:
+                        _oe_data = json.loads(_oe_resp.read(65_536))
+                    if isinstance(_oe_data, dict):
+                        _oe_html = safe_text(_oe_data.get("html", ""))
+                        for _embed_url in universal.scan_iframe_embed_urls(_oembed_url, _oe_html):
+                            try:
+                                _embed_info = run_extraction(
+                                    _embed_url,
+                                    referer=req.pageUrl,
+                                    cookies=req.cookies,
+                                    subtitles=req.subtitles,
+                                    sub_langs=req.subLangs,
+                                    proxy=req.proxy,
+                                    request_source_audit=req.sourceAudit,
+                                    ctx=ctx,
+                                )
+                                if _embed_info:
+                                    info = _embed_info
+                                    break
+                            except Exception:
+                                continue
+                except Exception:
+                    pass
+        # meta-refresh redirect following: if all other techniques failed and
+        # the page declared a redirect via <meta http-equiv="refresh">, fetch
+        # the target URL and re-run the universal HTML parser on it.
+        if not info and _html_for_embeds:
+            _refresh_url = universal.scan_meta_refresh_url(req.pageUrl, _html_for_embeds)
+            if _refresh_url:
+                try:
+                    _rf_hdrs: dict[str, str] = {
+                        "User-Agent": MOBILE_UA,
+                        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                        "Accept-Language": _accept_language_for_url(_refresh_url),
+                    }
+                    if req.cookies:
+                        _rf_hdrs["Cookie"] = safe_header_value("Cookie", req.cookies)
+                    _rf_req = urllib.request.Request(_refresh_url, headers=safe_headers(_rf_hdrs))
+                    with urllib.request.urlopen(_rf_req, timeout=10) as _rf_resp:
+                        _rf_text = _rf_resp.read(1_500_000).decode("utf-8", errors="replace")
+                    _rf_result = universal.extract_universal_from_html(_refresh_url, _rf_text)
+                    if _rf_result and universal.has_video_or_audio(_rf_result):
+                        info = _rf_result
+                except Exception:
+                    pass
         if not info:
-            info = run_extraction(
-                req.pageUrl,
-                referer=req.referer,
-                cookies=req.cookies,
-                subtitles=req.subtitles,
-                sub_langs=req.subLangs,
-                proxy=req.proxy,
-                request_source_audit=req.sourceAudit,
-                ctx=ctx,
-                remove_watermark=req.removeWatermark,
-                preferred_quality=req.preferredQuality,
-            )
+            try:
+                info = run_extraction(
+                    req.pageUrl,
+                    referer=req.referer,
+                    cookies=req.cookies,
+                    subtitles=req.subtitles,
+                    sub_langs=req.subLangs,
+                    proxy=req.proxy,
+                    request_source_audit=req.sourceAudit,
+                    ctx=ctx,
+                    remove_watermark=req.removeWatermark,
+                    preferred_quality=req.preferredQuality,
+                )
+            except HTTPException:
+                if _image_only_fallback:
+                    # yt-dlp found nothing; fall back to the OG/meta image the
+                    # HTML parser found earlier rather than returning an error.
+                    info = _image_only_fallback
+                else:
+                    raise
     except HTTPException:
         ctx.emit(status="error")
         raise
 
+    if req.preferredQuality and info.get("_type") == "playlist":
+        info = universal.reorder_by_preferred_quality(info, req.preferredQuality)
     if info.get("_type") == "playlist" and info.get("entries"):
         response = _to_gallery_response(info)
         response["title"] = info.get("title")

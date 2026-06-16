@@ -4,6 +4,7 @@ import { DetectedMedia, DownloadStatus, DownloadStrategy, DownloadTask } from '.
 import { deleteDownload } from '../lib/hlsDownloader';
 import { DRMProtectedError, pickStrategy, runDownload } from '../lib/downloadStrategies';
 import { ServerExtractionError } from '../lib/serverExtractor';
+import { extractionManager } from '../lib/extractionManager';
 
 const STORAGE_KEY = '@fcdownloader/tasks_v1';
 
@@ -73,6 +74,23 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
       const controller = new AbortController();
       controllers.current.set(id, controller);
 
+      // When a CDN URL expires mid-download (HTTP 403), re-extract the page to
+      // get a fresh signed URL.  Only attempted once per download to avoid loops.
+      const onTokenExpired = async (expiredUrl: string): Promise<string | null> => {
+        try {
+          const result = await extractionManager.extract(media.pageUrl);
+          if (!result.success || !result.media?.length) return null;
+          // Prefer a replacement with the same kind+type, fall back to any fresh URL.
+          const fresh =
+            result.media.find((m) => m.url !== expiredUrl && m.mediaKind === media.mediaKind && m.mediaType === media.mediaType) ??
+            result.media.find((m) => m.url !== expiredUrl && m.mediaKind === media.mediaKind) ??
+            result.media.find((m) => m.url !== expiredUrl);
+          return fresh?.url ?? null;
+        } catch {
+          return null;
+        }
+      };
+
       try {
         const localPlaylistPath = await runDownload(media, id, strategy, {
           signal: controller.signal,
@@ -84,6 +102,7 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
               totalSegments: total,
               progress: total > 0 ? done / total : 0,
             }),
+          onTokenExpired,
         });
 
         const completedTask: DownloadTask = {

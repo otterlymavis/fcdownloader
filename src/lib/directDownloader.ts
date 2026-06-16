@@ -9,14 +9,19 @@ const MEDIA_EXTS = new Set([
   'mp4', 'm4v', 'webm', 'mov',
   'jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'heic',
   'mp3', 'm4a', 'aac', 'wav', 'ogg', 'opus', 'flac',
+  // subtitle/caption formats
+  'vtt', 'webvtt', 'srt', 'ttml', 'dfxp', 'ass', 'ssa',
 ]);
 
 function guessExt(url: string, mimeType?: string | null, mediaKind?: DetectedMedia['mediaKind']): string {
   const path = url.split('?')[0].toLowerCase();
-  const m = path.match(/\.([a-z0-9]{2,5})$/);
+  const m = path.match(/\.([a-z0-9]{2,6})$/);
   if (m && MEDIA_EXTS.has(m[1])) return m[1];
   if (mimeType) {
     const mt = mimeType.toLowerCase();
+    if (mt.includes('text/vtt') || mt.includes('x-webvtt') || mt.includes('webvtt')) return 'vtt';
+    if (mt.includes('subrip') || mt.includes('x-srt')) return 'srt';
+    if (mt.includes('ttml') || mt.includes('dfxp')) return 'ttml';
     if (mt.includes('jpeg')) return 'jpg';
     if (mt.includes('png')) return 'png';
     if (mt.includes('webp')) return 'webp';
@@ -31,6 +36,7 @@ function guessExt(url: string, mimeType?: string | null, mediaKind?: DetectedMed
     if (mt.includes('webm')) return 'webm';
     if (mt.includes('mov') || mt.includes('quicktime')) return 'mov';
   }
+  if (mediaKind === 'subtitle') return 'vtt';
   if (mediaKind === 'image' || mediaIsImage(url, mimeType)) return 'jpg';
   if (mediaIsAudio(url, mimeType)) return 'mp3';
   return 'mp4';
@@ -42,6 +48,13 @@ function mediaIsImage(url: string, mimeType?: string | null): boolean {
 
 function mediaIsAudio(url: string, mimeType?: string | null): boolean {
   return /^audio\//i.test(mimeType || '') || /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i.test(url);
+}
+
+function mediaIsSubtitle(url: string, mimeType?: string | null, mediaKind?: DetectedMedia['mediaKind']): boolean {
+  if (mediaKind === 'subtitle') return true;
+  const mt = (mimeType || '').toLowerCase();
+  if (/text\/vtt|x-subrip|x-webvtt|ttml|dfxp/.test(mt)) return true;
+  return /\.(vtt|webvtt|srt|ttml|dfxp|ass|ssa)(?:[?#]|$)/i.test(url);
 }
 
 function contentTypeLooksLikeMedia(contentType: string, media: DetectedMedia): boolean {
@@ -56,6 +69,9 @@ function contentTypeLooksLikeMedia(contentType: string, media: DetectedMedia): b
     return false;
   }
   if (ct.includes('application/octet-stream') || ct.includes('binary/octet-stream')) return true;
+  if (mediaIsSubtitle(media.url, media.mimeType, media.mediaKind)) {
+    return ct.startsWith('text/vtt') || ct.startsWith('text/plain') || ct.startsWith('application/x-subrip') || ct.startsWith('text/');
+  }
   if (media.mediaKind === 'image' || mediaIsImage(media.url, media.mimeType)) return ct.startsWith('image/');
   if (media.mediaKind === 'audio' || mediaIsAudio(media.url, media.mimeType)) return ct.startsWith('audio/') || ct.startsWith('application/ogg') || ct.startsWith('video/ogg');
   return ct.startsWith('video/') || ct.includes('mp4') || ct.includes('mpegurl');
@@ -91,11 +107,13 @@ export async function downloadDirect(
 
   const ext = guessExt(media.url, media.mimeType, media.mediaKind);
   const dir = `${FileSystem.documentDirectory}downloads/${taskId}/`;
-  const baseName = media.mediaKind === 'image' || mediaIsImage(media.url, media.mimeType)
-    ? 'image'
-    : media.mediaKind === 'audio' || mediaIsAudio(media.url, media.mimeType)
-      ? 'audio'
-      : 'video';
+  const baseName = mediaIsSubtitle(media.url, media.mimeType, media.mediaKind)
+    ? 'subtitle'
+    : media.mediaKind === 'image' || mediaIsImage(media.url, media.mimeType)
+      ? 'image'
+      : media.mediaKind === 'audio' || mediaIsAudio(media.url, media.mimeType)
+        ? 'audio'
+        : 'video';
   const filePath = `${dir}${baseName}.${ext}`;
 
   await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
@@ -105,12 +123,26 @@ export async function downloadDirect(
 
   const MAX_ATTEMPTS = 3;
   let lastErr: Error = new Error('Download failed');
+  let downloadUrl = media.url;
+  let tokenRefreshed = false;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     if (signal?.aborted) throw new Error('Cancelled');
     try {
-      const res = await expoFetch(media.url, { headers, signal });
+      const res = await expoFetch(downloadUrl, { headers, signal });
       if (signal?.aborted) throw new Error('Cancelled');
-      if (!res.ok) throw new Error(`HTTP ${res.status} — server rejected the request`);
+      if (!res.ok) {
+        // On a first 403, try refreshing the CDN token before giving up.
+        if (res.status === 403 && !tokenRefreshed && opts.onTokenExpired) {
+          const freshUrl = await opts.onTokenExpired(media.url);
+          if (freshUrl) {
+            downloadUrl = freshUrl;
+            tokenRefreshed = true;
+            attempt--; // don't count this as one of MAX_ATTEMPTS
+            continue;
+          }
+        }
+        throw new Error(`HTTP ${res.status} — server rejected the request`);
+      }
       if (!res.body) throw new Error('Download returned an empty body');
 
       const ct = (res.headers.get('content-type') ?? '').toLowerCase();

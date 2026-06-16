@@ -15,6 +15,9 @@ export interface DownloadOptions {
   signal?: AbortSignal;
   onProgress?: ProgressCallback;
   onStatus?: StatusCallback;
+  /** Called when a 403 response suggests a token-expired CDN URL.
+   *  Return a fresh URL to retry, or null to fail immediately. */
+  onTokenExpired?: (expiredUrl: string) => Promise<string | null>;
 }
 
 interface HLSKey { method: string; uri: string; iv?: string; }
@@ -30,6 +33,7 @@ interface ParsedPlaylist {
 }
 
 const SEGMENT_BATCH = 12;
+const SEGMENT_STALL_MS = 30_000; // per-segment wall-clock timeout before retry
 const MUX_READ_CHUNK_SIZE = 1024 * 1024;
 
 function getTaskDir(taskId: string): string {
@@ -150,7 +154,13 @@ async function downloadSegment(
   for (let attempt = 0; attempt < 3; attempt++) {
     if (signal?.aborted) throw new Error('Cancelled');
     try {
-      const result = await FileSystem.downloadAsync(url, destPath, { headers });
+      // Race the download against a stall timeout so a frozen CDN connection
+      // does not block the whole batch indefinitely.
+      const downloadPromise = FileSystem.downloadAsync(url, destPath, { headers });
+      const stallPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Segment stalled')), SEGMENT_STALL_MS),
+      );
+      const result = await Promise.race([downloadPromise, stallPromise]);
       if (signal?.aborted) {
         try { await FileSystem.deleteAsync(destPath, { idempotent: true }); } catch {}
         throw new Error('Cancelled');
@@ -273,8 +283,20 @@ export async function downloadHLS(
   };
   const resolvedHeaders = await makeResolvedHeaders(media.url);
 
-  let playlistUrl = media.url;
-  let raw = await fetchText(playlistUrl, resolvedHeaders, signal);
+  // Fetch a manifest URL, retrying once with a refreshed URL on 403.
+  const fetchManifest = async (url: string): Promise<{ raw: string; url: string }> => {
+    try {
+      return { raw: await fetchText(url, resolvedHeaders, signal), url };
+    } catch (err) {
+      if (opts.onTokenExpired && /HTTP 403/i.test(String(err))) {
+        const freshUrl = await opts.onTokenExpired(url);
+        if (freshUrl) return { raw: await fetchText(freshUrl, resolvedHeaders, signal), url: freshUrl };
+      }
+      throw err;
+    }
+  };
+
+  let { raw, url: playlistUrl } = await fetchManifest(media.url);
 
   // Every HLS playlist MUST begin with #EXTM3U (RFC 8216 §4.1).
   // An HTML error page or CDN redirect page that leaks into media detection
@@ -288,8 +310,7 @@ export async function downloadHLS(
   if (raw.includes('#EXT-X-STREAM-INF')) {
     const variant = parseMaster(raw, playlistUrl);
     if (!variant) throw new Error('No variant streams in master playlist');
-    playlistUrl = variant;
-    raw = await fetchText(playlistUrl, resolvedHeaders, signal);
+    ({ raw, url: playlistUrl } = await fetchManifest(variant));
     if (!raw.trimStart().startsWith('#EXTM3U')) {
       throw new Error('Not a valid HLS media playlist (missing #EXTM3U)');
     }

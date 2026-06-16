@@ -42,6 +42,13 @@ const MIME_BY_EXT: Record<string, string> = {
   opus: 'audio/opus',
   flac: 'audio/flac',
   aac: 'audio/aac',
+  vtt: 'text/vtt',
+  webvtt: 'text/vtt',
+  srt: 'application/x-subrip',
+  ttml: 'application/ttml+xml',
+  dfxp: 'application/ttml+xml',
+  ass: 'text/x-ssa',
+  ssa: 'text/x-ssa',
 };
 
 const SEGMENT_RE = /\.(ts|m4s|cmfv|cmfa)(\?|#|$)/i;
@@ -87,6 +94,7 @@ export function getSourceName(url: string, mediaKind?: string): string {
   // Kind-aware fallback when hostname can't be parsed
   if (mediaKind === 'audio') return 'Audio';
   if (mediaKind === 'image') return 'Image';
+  if (mediaKind === 'subtitle') return 'Subtitle';
   return 'Video';
 }
 

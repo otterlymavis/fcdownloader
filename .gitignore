@@ -83,8 +83,8 @@ replace.txt
 # Companion generated helper binary and PyInstaller work dirs
 desktop-companion/build/
 desktop-companion/dist-*/
-desktop-companion/nobrowser-*/
 desktop-companion/build/helper/
+desktop-companion/build/nobrowser-*/
 desktop-companion/build/electron-cache/
 desktop-companion/build/electron-builder-cache/
 desktop-companion/build/pyinstaller-venv/
@@ -95,11 +95,13 @@ desktop-companion/build/pyinstaller-spec/
 CLAUDE.md
 
 .vercel
+**/.vercel/
 
 # Root-level build and run logs
 *.log
 metro-server.log
 metro.log
+test_all.log
 
 # Root-level screenshots and test images
 screenshot_*.png

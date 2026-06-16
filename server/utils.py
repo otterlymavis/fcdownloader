@@ -93,7 +93,7 @@ def url_quote(s: str) -> str:
 
 
 def guess_ext_from_url(url: str) -> str:
-    m = re.search(r"\.([a-z0-9]{2,5})(?:\?|$)", url.split("?")[0].lower())
+    m = re.search(r"\.([a-z0-9]{2,6})(?:\?|$)", url.split("?")[0].lower())
     return m.group(1) if m else ""
 
 

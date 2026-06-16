@@ -1,5 +1,5 @@
 export type MediaType = 'hls' | 'dash' | 'direct' | 'mse';
-export type MediaKind = 'video' | 'image' | 'audio';
+export type MediaKind = 'video' | 'image' | 'audio' | 'subtitle';
 
 export type DownloadStatus =
   | 'pending'
@@ -14,6 +14,10 @@ export type DownloadStrategy = 'hls-segments' | 'direct' | 'dash' | 'vimeo-json'
 
 export interface FormatOption {
   id: string;
+  url?: string;
+  selectable?: boolean;
+  mediaKind?: MediaKind;
+  audioFormatId?: string;
   label?: string;
   ext?: string;
   protocol?: string;
@@ -25,6 +29,8 @@ export interface FormatOption {
   acodec?: string;
   filesize?: number;
   filesizeApprox?: number;
+  language?: string;
+  bitrate?: number;
 }
 
 export interface SourceAuditEntry {
@@ -58,6 +64,9 @@ export type Provenance =
   | 'mutation-observer'     // dynamically added <video>/<source> element
   | 'social-extractor'      // server-side platformExtractors.ts fetch
   | 'manifest-parser'       // content-based: #EXTM3U or <MPD detected in response body
+  | 'websocket-message'     // URL extracted from a WebSocket text frame
+  | 'eventsource-message'   // URL extracted from a Server-Sent Events frame
+  | 'message-event'         // URL extracted from a window.postMessage or SW→page message
   | 'manual';               // user typed/pasted the URL
 
 export interface DetectedMedia {
@@ -84,6 +93,7 @@ export interface DetectedMedia {
   sourceTitle?: string;
   thumbnailUrl?: string;
   duration?: number;
+  liveStream?: boolean;         // HLS/DASH live stream (no #EXT-X-ENDLIST)
   extractor?: string;
   formatId?: string;
   availableFormats?: FormatOption[];

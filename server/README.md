@@ -19,10 +19,10 @@ Response (200):
 
 ```json
 {
-  "kind": "paired",          // or "hls" or "direct"
+  "kind": "paired",          // or "hls", "dash", or "direct"
   "videoUrl": "https://...", // when kind=paired
   "audioUrl": "https://...", // when kind=paired
-  "url":      "https://...", // when kind=hls or kind=direct
+  "url":      "https://...", // when kind=hls, dash, or kind=direct
   "headers":  { "User-Agent": "...", "Origin": "...", "Referer": "..." },
   "label":         "1080p",
   "mimeType":      "video/mp4",
@@ -45,6 +45,14 @@ cd server
 python3.12 -m venv .venv && source .venv/bin/activate    # Windows: py -3.12 -m venv .venv; .venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn main:app --port 8080 --reload
+```
+
+For local server tests, install the dev requirements and run pytest from the
+repo root:
+
+```bash
+pip install -r server/requirements-dev.txt
+npm run test:server
 ```
 
 Test it:

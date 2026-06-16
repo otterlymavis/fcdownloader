@@ -10,7 +10,7 @@ import {
   isXhsMediaCandidate,
   isSegmentMediaUrl,
 } from '../lib/mediaHelpers';
-import { extractHtmlAuditCandidates, mediaHintsFromDetected } from '../lib/browserSessionStrategies';
+import { extractHtmlAuditCandidates, mediaHintsFromDetected, mediaHintsFromNetworkLog } from '../lib/browserSessionStrategies';
 
 let _seq = 0;
 const genId = () => `media_${Date.now()}_${_seq++}`;
@@ -23,6 +23,20 @@ export interface BrowserSessionSnapshot {
   pageHtml?: string;
   mediaHints?: Array<Record<string, unknown>>;
   sourceAudit?: SourceAuditEntry[];
+}
+
+export interface BrowserNetworkEntry {
+  url: string;
+  pageUrl?: string;
+  method?: string;
+  status?: number;
+  mimeType?: string;
+  contentLength?: number;
+  transferSize?: number;
+  encodedBodySize?: number;
+  provenance?: Provenance;
+  initiatorType?: string;
+  timestamp?: number;
 }
 
 function guessType(url: string): MediaType {
@@ -42,13 +56,13 @@ function guessKind(url: string, mimeType?: string | null): DetectedMedia['mediaK
 
 export function useMediaDetection() {
   const [detected, setDetected]     = useState<DetectedMedia[]>([]);
-  const [networkLog, setNetworkLog] = useState<string[]>([]);
+  const [networkLog, setNetworkLog] = useState<BrowserNetworkEntry[]>([]);
   const [mseActive, setMseActive]   = useState(false);
   const [scanDone, setScanDone]     = useState(false);
   const [bridgeOk, setBridgeOk]     = useState(false);
   const currentPageUrl = useRef('');
   const detectedRef = useRef<DetectedMedia[]>([]);
-  const networkLogRef = useRef<string[]>([]);
+  const networkLogRef = useRef<BrowserNetworkEntry[]>([]);
   const pendingSnapshots = useRef(new Map<string, {
     resolve: (snapshot: BrowserSessionSnapshot) => void;
     timer: ReturnType<typeof setTimeout>;
@@ -67,13 +81,19 @@ export function useMediaDetection() {
 
   const buildSessionSnapshot = useCallback((pageData: BrowserSessionSnapshot = {}): BrowserSessionSnapshot => {
     const pageUrl = pageData.pageUrl || currentPageUrl.current || '';
-    const mediaHints = mediaHintsFromDetected(detectedRef.current, pageUrl);
+    const mediaHints = [
+      ...mediaHintsFromDetected(detectedRef.current, pageUrl),
+      ...mediaHintsFromNetworkLog(networkLogRef.current, pageUrl),
+    ];
     const htmlAudit = extractHtmlAuditCandidates(pageUrl, pageData.pageHtml);
-    const networkAudit: SourceAuditEntry[] = networkLogRef.current.slice(0, 120).map((url) => ({
+    const networkAudit: SourceAuditEntry[] = networkLogRef.current.slice(0, 120).map((entry) => ({
       strategy: 'network-request',
-      source: 'wkwebview-runtime',
-      url,
+      source: entry.provenance || entry.initiatorType || 'wkwebview-runtime',
+      url: entry.url,
       selected: false,
+      mimeType: entry.mimeType,
+      contentLength: entry.contentLength ?? entry.encodedBodySize ?? entry.transferSize,
+      status: entry.status,
     }));
     const sourceAudit: SourceAuditEntry[] = [...networkAudit, ...htmlAudit];
     return {
@@ -183,9 +203,37 @@ export function useMediaDetection() {
         const fromXhsPage = isXhsPageUrl(currentPageUrl.current);
         if (fromXhsPage && !isXhsMediaCandidate(url)) return;
         if (isNonContentMediaUrl(url)) return;
+        const networkEntry: BrowserNetworkEntry = {
+          url,
+          pageUrl: typeof data.pageUrl === 'string' ? data.pageUrl : currentPageUrl.current,
+          method: typeof data.method === 'string' ? data.method : undefined,
+          status: typeof data.status === 'number' ? data.status : undefined,
+          mimeType: typeof data.mimeType === 'string' ? data.mimeType : undefined,
+          contentLength: typeof data.contentLength === 'number' ? data.contentLength : undefined,
+          transferSize: typeof data.transferSize === 'number' ? data.transferSize : undefined,
+          encodedBodySize: typeof data.encodedBodySize === 'number' ? data.encodedBodySize : undefined,
+          provenance: typeof data.provenance === 'string' ? data.provenance as Provenance : undefined,
+          initiatorType: typeof data.initiatorType === 'string' ? data.initiatorType : undefined,
+          timestamp: typeof data.timestamp === 'number' ? data.timestamp : Date.now(),
+        };
         setNetworkLog((prev) => {
-          if (prev.includes(url)) return prev;
-          return [url, ...prev].slice(0, 500);
+          const idx = prev.findIndex((entry) => entry.url === url);
+          if (idx === -1) return [networkEntry, ...prev].slice(0, 500);
+          const existing = prev[idx];
+          const merged: BrowserNetworkEntry = {
+            ...existing,
+            ...networkEntry,
+            mimeType: networkEntry.mimeType ?? existing.mimeType,
+            contentLength: networkEntry.contentLength ?? existing.contentLength,
+            transferSize: networkEntry.transferSize ?? existing.transferSize,
+            encodedBodySize: networkEntry.encodedBodySize ?? existing.encodedBodySize,
+            status: networkEntry.status ?? existing.status,
+            provenance: networkEntry.provenance ?? existing.provenance,
+            initiatorType: networkEntry.initiatorType ?? existing.initiatorType,
+          };
+          const next = [...prev];
+          next[idx] = merged;
+          return next;
         });
         // Auto-promote manifests, direct media files, and known media CDN URLs
         const isImageCdn = /(?:cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|pinimg\.com\/(?:originals|736x|1200x|564x)\/|sinaimg\.cn\/|xhscdn\.com\/)/i.test(url);
@@ -232,8 +280,64 @@ export function useMediaDetection() {
       }
 
       if (data.event === 'MSE_TRACK') {
-        // MSE codec info — could enhance display later
         setMseActive(true);
+        return;
+      }
+
+      if (data.event === 'MSE_MANIFEST') {
+        // appendBuffer fired — MSE is actively playing.  Promote any recently-
+        // captured manifest URLs (HLS/DASH) to detected so they appear in the UI
+        // even if they were previously filtered or arrived at low confidence.
+        setMseActive(true);
+        const manifests = Array.isArray(data.manifests)
+          ? (data.manifests as Array<{ url: string; mimeType: string }>)
+          : [];
+        if (manifests.length > 0) {
+          const pageUrl = currentPageUrl.current;
+          setDetected((prev) => {
+            const existingUrls = new Set(prev.map((m) => m.url));
+            const additions: DetectedMedia[] = [];
+            for (const m of manifests) {
+              const mUrl = String(m?.url ?? '').trim();
+              if (!mUrl || existingUrls.has(mUrl) || isSegmentMediaUrl(mUrl)) continue;
+              const mimeType = String(m?.mimeType ?? '');
+              const mediaType: MediaType = /mpegurl|m3u8/i.test(mimeType) ? 'hls' : 'dash';
+              additions.push({
+                id: genId(),
+                url: mUrl,
+                pageUrl,
+                userAgent: '',
+                timestamp: Date.now(),
+                mediaType,
+                mediaKind: 'video',
+                mimeType: mimeType || undefined,
+                confidence: 0.92,
+                provenance: 'manifest-parser',
+              });
+            }
+            return additions.length > 0 ? [...additions, ...prev] : prev;
+          });
+        }
+        return;
+      }
+
+      if (data.event === 'MEDIA_SESSION_META') {
+        // Sites set navigator.mediaSession.metadata exactly when media starts
+        // playing. Use the title to label the most recently detected video item
+        // that still has a generic or missing label.
+        const sessionTitle = String(data.title || '').trim();
+        if (sessionTitle) {
+          setDetected((prev) => {
+            const idx = prev.findIndex(
+              (m) => (m.mediaKind === 'video' || m.mediaKind === 'audio' || !m.mediaKind) &&
+                     (!m.label || m.label === 'HLS' || m.label === 'DASH' || m.label === 'HLS master playlist' || m.label === 'HLS media playlist' || m.label === 'DASH MPD'),
+            );
+            if (idx === -1) return prev;
+            const updated = [...prev];
+            updated[idx] = { ...updated[idx], label: sessionTitle };
+            return updated;
+          });
+        }
         return;
       }
 
@@ -298,6 +402,28 @@ export function useMediaDetection() {
     return added;
   }, []);
 
+  const addDetectedItems = useCallback((items: DetectedMedia[]) => {
+    if (!items.length) return 0;
+    let added = 0;
+    setDetected((prev) => {
+      const seen = new Set(prev.map((m) => m.url));
+      const additions: DetectedMedia[] = [];
+      for (const item of items) {
+        if (!item.url || seen.has(item.url)) continue;
+        seen.add(item.url);
+        additions.push({
+          ...item,
+          id: item.id || genId(),
+          pageUrl: item.pageUrl || currentPageUrl.current,
+          timestamp: item.timestamp || Date.now(),
+        });
+        added += 1;
+      }
+      return added > 0 ? [...additions, ...prev] : prev;
+    });
+    return added;
+  }, []);
+
   const dismiss = useCallback((id: string) => {
     setDetected((prev) => prev.filter((m) => m.id !== id));
   }, []);
@@ -311,6 +437,6 @@ export function useMediaDetection() {
 
   return {
     detected, networkLog, mseActive, scanDone, bridgeOk,
-    onPageChange, onMessage, addDetected, dismiss, clear, captureSessionSnapshot,
+    onPageChange, onMessage, addDetected, addDetectedItems, dismiss, clear, captureSessionSnapshot,
   };
 }

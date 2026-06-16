@@ -35,7 +35,7 @@ function makeHeaders(cookies: string, ua: string, referer: string): Record<strin
 
 // ── MPD parsing ────────────────────────────────────────────────
 
-interface Representation {
+export interface Representation {
   id: string;
   bandwidth: number;
   width?: number;
@@ -47,9 +47,14 @@ interface Representation {
   segmentUrls: string[];
 }
 
-interface ParsedMPD {
+export interface ParsedMPD {
   video: Representation[];
   audio: Representation[];
+}
+
+export interface SelectedDashRepresentations {
+  video?: Representation;
+  audio?: Representation;
 }
 
 function expandTemplate(tpl: string, repId: string, num: number, time: number): string {
@@ -211,6 +216,29 @@ export function parseMPD(xml: string, mpdUrl: string): ParsedMPD {
   result.video.sort((a, b) => b.bandwidth - a.bandwidth);
   result.audio.sort((a, b) => b.bandwidth - a.bandwidth);
   return result;
+}
+
+export function selectDashRepresentations(
+  parsed: ParsedMPD,
+  media: Pick<DetectedMedia, 'formatId' | 'availableFormats'>,
+): SelectedDashRepresentations {
+  const selectedFormat = media.formatId
+    ? media.availableFormats?.find((format) => format.id === media.formatId)
+    : undefined;
+  const audioFormatId = selectedFormat?.audioFormatId;
+  const video = media.formatId
+    ? parsed.video.find((rep) => rep.id === media.formatId)
+    : parsed.video[0];
+  if (media.formatId && !video) {
+    throw new Error(`Requested DASH video representation not found: ${media.formatId}`);
+  }
+  const audio = audioFormatId
+    ? parsed.audio.find((rep) => rep.id === audioFormatId)
+    : parsed.audio[0];
+  if (audioFormatId && !audio) {
+    throw new Error(`Requested DASH audio representation not found: ${audioFormatId}`);
+  }
+  return { video, audio };
 }
 
 // ── Segment download helpers ───────────────────────────────────
@@ -393,8 +421,18 @@ export async function downloadDASH(
   onStatus?.('fetching_manifest');
 
   const manifestHeaders = await buildHeaders(media.url);
-  const mpdRes = await fetch(media.url, { signal, headers: manifestHeaders });
-  if (!mpdRes.ok) throw new Error(`HTTP ${mpdRes.status} fetching MPD manifest`);
+  let mpdUrl = media.url;
+  let mpdRes = await fetch(mpdUrl, { signal, headers: manifestHeaders });
+  if (!mpdRes.ok) {
+    if (mpdRes.status === 403 && opts.onTokenExpired) {
+      const freshUrl = await opts.onTokenExpired(mpdUrl);
+      if (freshUrl) {
+        mpdUrl = freshUrl;
+        mpdRes = await fetch(mpdUrl, { signal, headers: manifestHeaders });
+      }
+    }
+    if (!mpdRes.ok) throw new Error(`HTTP ${mpdRes.status} fetching MPD manifest`);
+  }
   const mpdXml = (await mpdRes.text()) ?? '';
   if (signal?.aborted) throw new Error('Cancelled');
 
@@ -408,14 +446,80 @@ export async function downloadDASH(
     throw new Error('No playable tracks found in DASH manifest');
   }
 
-  const bestVideo = parsed.video[0];
-  const bestAudio = parsed.audio[0];
+  const { video: selectedVideo, audio: selectedAudio } = selectDashRepresentations(parsed, media);
+  const shouldMuxSelectedAudio = !!selectedVideo && !!selectedAudio && (media.extractor === 'universal-probe' || !!media.formatId);
+  const isSingleFileTrack = (track: Representation | undefined) =>
+    !!track && track.segmentUrls.length === 1 && !track.initUrl;
+
+  if (shouldMuxSelectedAudio) {
+    const videoPath = `${dir}video.track.mp4`;
+    const audioPath = `${dir}audio.track.m4a`;
+    const outputPath = `${dir}video.mp4`;
+
+    onStatus?.('downloading');
+    if (isSingleFileTrack(selectedVideo)) {
+      const headers = await buildHeaders(selectedVideo.segmentUrls[0]);
+      await downloadLargeFile(selectedVideo.segmentUrls[0], videoPath, headers,
+        (w, t) => onProgress?.(Math.floor(w * 0.45), t || 1),
+        signal,
+      );
+    } else {
+      const firstSeg = selectedVideo.segmentUrls[0] ?? selectedVideo.initUrl ?? '';
+      const headers = await buildHeaders(firstSeg);
+      await downloadTrack(
+        selectedVideo.segmentUrls,
+        selectedVideo.initUrl,
+        taskId,
+        'video_track',
+        headers,
+        (done, total) => onProgress?.(done, Math.max(total * 2, 1)),
+        signal,
+      );
+    }
+    if (signal?.aborted) throw new Error('Cancelled');
+
+    if (isSingleFileTrack(selectedAudio)) {
+      const headers = await buildHeaders(selectedAudio.segmentUrls[0]);
+      await downloadLargeFile(selectedAudio.segmentUrls[0], audioPath, headers,
+        (w, t) => onProgress?.(Math.floor((t || 1) * 0.45 + w * 0.45), t || 1),
+        signal,
+      );
+    } else {
+      const firstSeg = selectedAudio.segmentUrls[0] ?? selectedAudio.initUrl ?? '';
+      const headers = await buildHeaders(firstSeg);
+      await downloadTrack(
+        selectedAudio.segmentUrls,
+        selectedAudio.initUrl,
+        taskId,
+        'audio_track',
+        headers,
+        (done, total) => onProgress?.(Math.max(selectedVideo.segmentUrls.length, 1) + done, Math.max(selectedVideo.segmentUrls.length + total, 1)),
+        signal,
+      );
+    }
+    if (signal?.aborted) throw new Error('Cancelled');
+
+    const vInfo = await FileSystem.getInfoAsync(videoPath);
+    const aInfo = await FileSystem.getInfoAsync(audioPath);
+    if (!vInfo.exists || (vInfo.size ?? 0) === 0) throw new Error('Video track is empty');
+    if (!aInfo.exists || (aInfo.size ?? 0) === 0) throw new Error('Audio track is empty');
+
+    onStatus?.('assembling');
+    onProgress?.(90, 100);
+    const strip = (p: string) => p.replace(/^file:\/\//, '');
+    await muxVideoAudio(strip(videoPath), strip(audioPath), strip(outputPath));
+    try { await FileSystem.deleteAsync(videoPath, { idempotent: true }); } catch {}
+    try { await FileSystem.deleteAsync(audioPath, { idempotent: true }); } catch {}
+    const outInfo = await FileSystem.getInfoAsync(outputPath);
+    if (!outInfo.exists || (outInfo.size ?? 0) === 0) throw new Error('Muxed file is empty');
+    onProgress?.(1, 1);
+    return outputPath;
+  }
 
   // ── Case 2a: SegmentBase (single-URL byte-range track) — download directly ──
-  const isSegmentBase = (bestVideo?.segmentUrls.length === 1 && !bestVideo.initUrl) ||
-                        (!bestVideo && bestAudio?.segmentUrls.length === 1 && !bestAudio.initUrl);
+  const isSegmentBase = isSingleFileTrack(selectedVideo) || (!selectedVideo && isSingleFileTrack(selectedAudio));
   if (isSegmentBase) {
-    const trackUrl = bestVideo?.segmentUrls[0] ?? bestAudio?.segmentUrls[0] ?? '';
+    const trackUrl = selectedVideo?.segmentUrls[0] ?? selectedAudio?.segmentUrls[0] ?? '';
     if (!trackUrl) throw new Error('No segment URL in SegmentBase track');
     onStatus?.('downloading');
     const outPath = `${dir}video.mp4`;
@@ -435,7 +539,9 @@ export async function downloadDASH(
   // Try tracks from highest to lowest quality; skip a track if its first segment
   // returns HTTP 404 (stale CDN segment rotation is common for public test streams).
   onStatus?.('downloading');
-  const candidates = parsed.video.length > 0 ? parsed.video : [bestAudio!];
+  const candidates = media.formatId && selectedVideo
+    ? [selectedVideo]
+    : parsed.video.length > 0 ? parsed.video : selectedAudio ? [selectedAudio] : [];
   let lastErr: Error = new Error('No video track had accessible segments');
   for (const track of candidates) {
     if (signal?.aborted) throw new Error('Cancelled');

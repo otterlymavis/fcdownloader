@@ -11,8 +11,8 @@
  *   POST {url}/extract
  *   Body:  { "pageUrl": "https://www.youtube.com/watch?v=..." }
  *   200:   {
- *     "kind":           "hls" | "paired" | "direct",
- *     "url":            string,             // for kind=hls or kind=direct
+ *     "kind":           "hls" | "dash" | "paired" | "direct",
+ *     "url":            string,             // for kind=hls, dash, or direct
  *     "videoUrl":       string?,            // for kind=paired (downloaded → native mux)
  *     "audioUrl":       string?,            // for kind=paired
  *     "headers":        { [name]: string }, // headers to replay on download
@@ -93,7 +93,7 @@ let _seq = 0;
 const genId = () => `srv_${Date.now()}_${_seq++}`;
 
 export interface ServerExtractResponse {
-  kind: 'hls' | 'paired' | 'direct' | 'image' | 'audio' | 'gallery';
+  kind: 'hls' | 'dash' | 'paired' | 'direct' | 'image' | 'audio' | 'gallery';
   url?: string;
   videoUrl?: string;
   audioUrl?: string;
@@ -259,6 +259,17 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
       mediaType: 'hls',
       mediaKind: 'video',
       label: r.label ?? 'HLS',
+    }];
+  }
+
+  if (r.kind === 'dash' && r.url) {
+    return [{
+      ...baseItem,
+      url: r.url,
+      mimeType: r.mimeType ?? 'application/dash+xml',
+      mediaType: 'dash',
+      mediaKind: 'video',
+      label: r.label ?? 'DASH',
     }];
   }
 

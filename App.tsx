@@ -66,6 +66,9 @@ import {
   isRuntimeDownloadCandidate,
   smartDedup,
 } from './src/lib/mediaHelpers';
+import { decideUniversalResultHandling } from './src/lib/universalResultPicker';
+import { inspectUniversalManifestCandidates } from './src/lib/universalManifestInspector';
+import { verifyUniversalDirectCandidates } from './src/lib/universalUrlVerifier';
 
 // ── Layout constants ──────────────────────────────────────────
 // ── Ripple ────────────────────────────────────────────────────
@@ -127,11 +130,31 @@ function formatOptionLabel(format: NonNullable<DetectedMedia['availableFormats']
   return parts.length > 0 ? parts.join('  ') : format.id;
 }
 
+function selectableFormatOptions(item: DetectedMedia): NonNullable<DetectedMedia['availableFormats']> {
+  const formats = item.availableFormats ?? [];
+  if (item.extractor === 'universal-probe') {
+    return formats.filter((format) => format.selectable !== false && (item.mediaType === 'dash' || !!format.url));
+  }
+  return formats;
+}
+
 function compactMediaDetails(...parts: Array<string | null | undefined>): string {
   return parts
     .filter((part): part is string => Boolean(part))
     .filter((part, index, all) => all.indexOf(part) === index)
     .join('  |  ');
+}
+
+function candidateSourceDetails(item: DetectedMedia): string | null {
+  const audit = item.sourceAudit?.find((entry) => entry.selected) ?? item.sourceAudit?.[0];
+  const source = audit?.source || item.provenance || item.extractor;
+  const sourceLabel = source
+    ? String(source).replace(/-/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase())
+    : null;
+  const status = audit?.status ? `HTTP ${audit.status}` : null;
+  const size = audit?.contentLength ? formatBytes(audit.contentLength) : null;
+  const confidence = typeof item.confidence === 'number' ? `${Math.round(item.confidence * 100)}%` : null;
+  return compactMediaDetails(sourceLabel, status, size, confidence);
 }
 
 export default function App() {
@@ -201,6 +224,7 @@ export default function App() {
 
   // ── UI ────────────────────────────────────────────────────
   const [videosOpen, setVideosOpen]     = useState(false);
+  const [universalPickerOpen, setUniversalPickerOpen] = useState(false);
   const [previewItem, setPreviewItem]   = useState<DetectedMedia | null>(null);
   const [selectedFormatId, setSelectedFormatId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -221,12 +245,19 @@ export default function App() {
     onPageChange,
     onMessage,
     addDetected,
+    addDetectedItems,
     captureSessionSnapshot,
   } = useMediaDetection();
   const { bookmarks, toggle: toggleBM, remove: removeBM, isSaved } = useBookmarks();
 
   const showToast = useCallback((msg: string, type: ToastMessage['type'] = 'info') => {
     setToast({ id: String(Date.now()), text: msg, type });
+  }, []);
+
+  const closeVideosSheet = useCallback(() => {
+    setVideosOpen(false);
+    setPreviewItem(null);
+    setUniversalPickerOpen(false);
   }, []);
 
   const homepageSet = useRef(false);
@@ -278,17 +309,34 @@ export default function App() {
     setExtracting(true);
     try {
       const result = await extractionManager.extract(targetUrl);
-      const items = result.media ?? [];
-      if (items.length > 0) {
-        for (const item of items) await enqueue(item);
+      const inspected = await inspectUniversalManifestCandidates(result.strategy, result.media ?? []);
+      const items = await verifyUniversalDirectCandidates(result.strategy, inspected);
+      const decision = decideUniversalResultHandling(result.strategy, items);
+      if (decision.action === 'enqueue') {
+        for (const item of decision.items) await enqueue(item);
         setPasteUrl('');
         showToast(
-          items.length === 1
+          decision.items.length === 1
             ? translate('startedDownload', resolvedLangRef.current)
-            : translate('startedDownloads', resolvedLangRef.current, { count: items.length }),
+            : translate('startedDownloads', resolvedLangRef.current, { count: decision.items.length }),
           'success'
         );
         setTab('library');
+        return;
+      }
+      if (decision.action === 'pick') {
+        addDetectedItems(decision.items);
+        setPasteUrl('');
+        setLoadedUrl(targetUrl);
+        setBrowserInput(targetUrl);
+        setUniversalPickerOpen(true);
+        setVideosOpen(true);
+        showToast(
+          decision.items.length === 1
+            ? translate('mediaItemFound', resolvedLangRef.current)
+            : translate('mediaItemsFound', resolvedLangRef.current, { count: decision.items.length }),
+          'info'
+        );
         return;
       }
       const lang = resolvedLangRef.current;
@@ -302,7 +350,7 @@ export default function App() {
       setExtracting(false);
     }
     setLoadedUrl(targetUrl); setBrowserInput(targetUrl); setTab('browser');
-  }, [enqueue, showToast, setPasteUrl, setTab, setLoadedUrl, setBrowserInput]);
+  }, [addDetectedItems, enqueue, showToast, setPasteUrl, setTab, setLoadedUrl, setBrowserInput]);
 
   useEffect(() => {
     if (extracting || extractionQueue.length === 0) return;
@@ -352,12 +400,29 @@ export default function App() {
   const allVideos = useMemo<DetectedMedia[]>(() => {
     const seen = new Set(detected.map((m) => m.url));
     const fromNet: DetectedMedia[] = networkLog
-      .filter((url) => isRuntimeDownloadCandidate(url, loadedUrl) && !seen.has(url))
-      .map((url) => ({
-        id: `net_${url}`, url, pageUrl: loadedUrl, userAgent: '',
+      .filter((entry) => isRuntimeDownloadCandidate(entry.url, loadedUrl) && !seen.has(entry.url))
+      .map((entry) => ({
+        id: `net_${entry.url}`,
+        url: entry.url,
+        pageUrl: entry.pageUrl || loadedUrl,
+        userAgent: '',
         timestamp: Date.now(),
-        mediaType: guessMediaType(url),
-        mediaKind: getMediaKind({ url }),
+        mediaType: guessMediaType(entry.url),
+        mediaKind: getMediaKind({ url: entry.url, mimeType: entry.mimeType }),
+        mimeType: entry.mimeType,
+        confidence: entry.provenance === 'fetch-hook' || entry.provenance === 'xhr-hook' ? 0.62 : 0.5,
+        provenance: entry.provenance,
+        label: entry.mimeType,
+        sourcePageUrl: entry.pageUrl,
+        sourceAudit: [{
+          strategy: 'network-request',
+          source: entry.provenance || entry.initiatorType || 'wkwebview-runtime',
+          url: entry.url,
+          selected: false,
+          mimeType: entry.mimeType,
+          contentLength: entry.contentLength ?? entry.encodedBodySize ?? entry.transferSize,
+          status: entry.status,
+        }],
       }));
     return smartDedup([...detected, ...fromNet]);
   }, [detected, networkLog, loadedUrl]);
@@ -459,16 +524,31 @@ export default function App() {
     setExtracting(true);
     try {
       const session = await browserSessionFor(url);
-      const items = await extractionManager.extractMedia(url, session);
-      if (items.length > 0) {
-        for (const item of items) await enqueue(item);
+      const result = await extractionManager.extract(url, session);
+      const inspected = await inspectUniversalManifestCandidates(result.strategy, result.media ?? []);
+      const items = await verifyUniversalDirectCandidates(result.strategy, inspected);
+      const decision = decideUniversalResultHandling(result.strategy, items);
+      if (decision.action === 'enqueue') {
+        for (const item of decision.items) await enqueue(item);
         showToast(
-          items.length === 1
+          decision.items.length === 1
             ? translate('startedDownload', resolvedLangRef.current)
-            : translate('startedDownloads', resolvedLangRef.current, { count: items.length }),
+            : translate('startedDownloads', resolvedLangRef.current, { count: decision.items.length }),
           'success'
         );
         setTab('library');
+        return;
+      }
+      if (decision.action === 'pick') {
+        addDetectedItems(decision.items);
+        setUniversalPickerOpen(true);
+        setVideosOpen(true);
+        showToast(
+          decision.items.length === 1
+            ? translate('mediaItemFound', resolvedLangRef.current)
+            : translate('mediaItemsFound', resolvedLangRef.current, { count: decision.items.length }),
+          'info'
+        );
         return;
       }
       showToast(translate('scanningPage', resolvedLangRef.current), 'info');
@@ -476,7 +556,7 @@ export default function App() {
     } finally {
       setExtracting(false);
     }
-  }, [browserSessionFor, enqueue, extracting, loadedUrl, scanBrowserPage, showToast]);
+  }, [addDetectedItems, browserSessionFor, enqueue, extracting, loadedUrl, scanBrowserPage, showToast]);
 
   // XHS gates its note pages and there's no inline player to detect, so a manual
   // Scan rarely surfaces anything. When an XHS note page finishes loading in the
@@ -496,28 +576,28 @@ export default function App() {
 
   // ── Browser: download detected video ─────────────────────
   const handleDetectedDownload = useCallback(async (item: DetectedMedia) => {
-    setVideosOpen(false);
-    setPreviewItem(null);
-    const selected = selectedFormatId && item.availableFormats?.some((f) => f.id === selectedFormatId)
-      ? item.availableFormats.find((f) => f.id === selectedFormatId)
+    closeVideosSheet();
+    const formats = selectableFormatOptions(item);
+    const selected = selectedFormatId && formats.some((f) => f.id === selectedFormatId)
+      ? formats.find((f) => f.id === selectedFormatId)
       : null;
     await enqueue(selected
       ? {
           ...item,
+          url: item.mediaType === 'dash' ? item.url : selected.url ?? item.url,
           formatId: selected.id,
           label: selected.label ?? item.label,
           mimeType: selected.ext ? `${item.mediaKind === 'audio' ? 'audio' : 'video'}/${selected.ext}` : item.mimeType,
-          forceServerDownload: true,
+          forceServerDownload: item.mediaType === 'dash' || selected.url ? item.forceServerDownload : true,
         }
       : item);
     setSelectedFormatId(null);
     showToast(translate('downloadStarted', resolvedLangRef.current), 'success');
     setTab('library');
-  }, [enqueue, selectedFormatId, showToast]);
+  }, [closeVideosSheet, enqueue, selectedFormatId, showToast]);
 
   const handleDetectedAudioDownload = useCallback(async (item: DetectedMedia) => {
-    setVideosOpen(false);
-    setPreviewItem(null);
+    closeVideosSheet();
     await enqueue({
       ...item,
       id: `${item.id}_audio_${Date.now()}`,
@@ -534,12 +614,11 @@ export default function App() {
     setSelectedFormatId(null);
     showToast(translate('audioDownloadStarted', resolvedLangRef.current), 'success');
     setTab('library');
-  }, [enqueue, showToast]);
+  }, [closeVideosSheet, enqueue, showToast]);
 
   const handleDownloadAllDetected = useCallback(async () => {
     if (!allVideos.length) return;
-    setVideosOpen(false);
-    setPreviewItem(null);
+    closeVideosSheet();
     for (const item of allVideos) await enqueue(item);
     showToast(
       allVideos.length === 1
@@ -548,13 +627,12 @@ export default function App() {
       'success'
     );
     setTab('library');
-  }, [allVideos, enqueue, showToast]);
+  }, [allVideos, closeVideosSheet, enqueue, showToast]);
 
   const handleDownloadAllAudio = useCallback(async () => {
     const audioItems = allVideos.filter((item) => getMediaKind(item) !== 'image');
     if (!audioItems.length) return;
-    setVideosOpen(false);
-    setPreviewItem(null);
+    closeVideosSheet();
     for (const item of audioItems) {
       await enqueue({
         ...item,
@@ -577,7 +655,7 @@ export default function App() {
       'success'
     );
     setTab('library');
-  }, [allVideos, enqueue, showToast]);
+  }, [allVideos, closeVideosSheet, enqueue, showToast]);
 
   // ── Export / Gallery ──────────────────────────────────────
   const handleExport = useCallback(async (task: DownloadTask) => {
@@ -874,7 +952,7 @@ export default function App() {
 
             {(videoCount > 0 || mseActive) && (
               <Pressable android_ripple={RIPPLE} style={[s.floatingBadge, { backgroundColor: t.btn }]}
-                onPress={() => setVideosOpen(true)}>
+                onPress={() => { setUniversalPickerOpen(false); setVideosOpen(true); }}>
                 <Text style={[s.floatingBadgeLabel, { color: t.btnTxt }]}>
                   {mediaCount > 0
                     ? (mediaCount === 1
@@ -1448,8 +1526,8 @@ export default function App() {
       {/*  VIDEOS SHEET (from browser)                      */}
       {/* ══════════════════════════════════════════════════ */}
       <Modal visible={videosOpen} transparent animationType="slide"
-        onRequestClose={() => { setVideosOpen(false); setPreviewItem(null); }}>
-        <Pressable style={s.backdrop} onPress={() => { setVideosOpen(false); setPreviewItem(null); }} />
+        onRequestClose={closeVideosSheet}>
+        <Pressable style={s.backdrop} onPress={closeVideosSheet} />
         <View style={[s.sheet, { backgroundColor: t.bg }]}>
           <View style={[s.sheetHandle, { backgroundColor: t.ink3 }]} />
 
@@ -1462,7 +1540,7 @@ export default function App() {
                 </Pressable>
                 <Pressable android_ripple={RIPPLE_BL}
                   style={[s.closeRound, { backgroundColor: t.card }]}
-                  onPress={() => { setVideosOpen(false); setPreviewItem(null); }} hitSlop={S.sm}>
+                  onPress={closeVideosSheet} hitSlop={S.sm}>
                   <Text style={[s.closeRoundLabel, { color: t.ink2 }]}>✕</Text>
                 </Pressable>
               </View>
@@ -1511,12 +1589,12 @@ export default function App() {
                   </View>
                 )}
 
-                {previewItem.availableFormats && previewItem.availableFormats.length > 0 && (
+                {selectableFormatOptions(previewItem).length > 0 && (
                   <View style={{ marginTop: S.md }}>
                     <Text style={[s.sectionLabel, { color: t.ink2, fontSize: fs(11), marginBottom: S.xs, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
                       {translate('formats', resolvedLanguage)}
                     </Text>
-                    {previewItem.availableFormats.slice(0, 8).map((format) => {
+                    {selectableFormatOptions(previewItem).slice(0, 8).map((format) => {
                       const selected = selectedFormatId === format.id || (!selectedFormatId && format.id === previewItem.formatId);
                       return (
                         <Pressable
@@ -1561,13 +1639,15 @@ export default function App() {
             <>
               <View style={[s.sheetHead, { backgroundColor: t.bg }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
                 <Text style={[s.sheetTitle, { color: t.ink, fontSize: fs(20) }]}>
-                  {mediaCount > 0
+                  {universalPickerOpen
+                    ? translate('chooseMediaToDownload', resolvedLanguage)
+                    : mediaCount > 0
                     ? (mediaCount === 1 ? translate('mediaItemFound', resolvedLanguage) : translate('mediaItemsFound', resolvedLanguage, { count: mediaCount }))
                     : translate('media', resolvedLanguage)}
                 </Text>
                 <Pressable android_ripple={RIPPLE_BL}
                   style={[s.closeRound, { backgroundColor: t.card }]}
-                  onPress={() => setVideosOpen(false)} hitSlop={S.sm}>
+                  onPress={closeVideosSheet} hitSlop={S.sm}>
                   <Text style={[s.closeRoundLabel, { color: t.ink2 }]}>✕</Text>
                 </Pressable>
               </View>
@@ -1608,6 +1688,7 @@ export default function App() {
                   const source  = getSourceName(item.url);
                   const quality = getQuality(item.url, item.label) || getMediaFormat(item);
                   const resolution = getMediaResolution(item);
+                  const candidateDetails = candidateSourceDetails(item);
                   return (
                     <Pressable key={item.id} android_ripple={RIPPLE}
                       style={[s.videoRow, { backgroundColor: t.card, borderBottomColor: t.sep }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}
@@ -1620,7 +1701,7 @@ export default function App() {
                       <View style={[s.videoMeta, resolvedLanguage === 'ar' && { alignItems: 'flex-end' }]}>
                         <Text style={[s.videoSource, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{source}</Text>
                         <Text style={[s.videoQuality, { color: t.ink2, fontSize: fs(12), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>
-                          {compactMediaDetails(quality, resolution)}
+                          {compactMediaDetails(quality, resolution, candidateDetails)}
                         </Text>
                       </View>
                       <Pressable android_ripple={RIPPLE}
@@ -1643,12 +1724,12 @@ export default function App() {
                   placeholderTextColor={t.ink3}
                   autoCapitalize="none" autoCorrect={false}
                   keyboardType="url" returnKeyType="done"
-                  onSubmitEditing={() => { setVideosOpen(false); handleHomeDownload(); }}
+                  onSubmitEditing={() => { closeVideosSheet(); handleHomeDownload(); }}
                   editable={!extracting}
                 />
                 <Pressable android_ripple={RIPPLE}
                   style={[s.dlBtn, { backgroundColor: t.btn }, extracting && { opacity: 0.5 }]}
-                  onPress={() => { setVideosOpen(false); handleHomeDownload(); }}
+                  onPress={() => { closeVideosSheet(); handleHomeDownload(); }}
                   disabled={extracting}>
                   <Text style={[s.dlBtnLabel, { color: t.btnTxt, fontSize: fs(14) }]}>
                     {extracting ? '…' : translate('add', resolvedLanguage)}

@@ -10,12 +10,14 @@
  * rewrite or replace any existing extractor — it wraps them and adds
  * observability + strategy hints.
  */
-import { DetectedMedia, DownloadStrategy } from '../types';
+import { DetectedMedia, DownloadStrategy, SourceAuditEntry } from '../types';
 import { extractFromSocialUrl, isSocialPageUrl } from './platformExtractors';
 import { extractViaServer, ServerExtractionError, ServerExtractOptions } from './serverExtractor';
 import { getSiteCapabilities } from './siteRegistry';
 import { pickStrategy } from './downloadStrategies';
 import { debugLog, debugWarn } from './releaseLogger';
+import { autoDownloadableUniversalMedia, probeUniversalMediaFromSession, probeUniversalMediaFromUrl } from './universalMediaProbe';
+import { extractUniversalEmbedUrls, extractUniversalOEmbedUrls } from './universalEmbedProbe';
 
 // ── Result types ─────────────────────────────────────────────────────────────
 
@@ -97,7 +99,34 @@ async function runAttempt(
 
 // ── ExtractionManager ─────────────────────────────────────────────────────────
 
+export interface ExtractionManagerDeps {
+  extractViaServer: typeof extractViaServer;
+  extractFromSocialUrl: typeof extractFromSocialUrl;
+  probeUniversalMediaFromUrl: typeof probeUniversalMediaFromUrl;
+  probeUniversalMediaFromSession: typeof probeUniversalMediaFromSession;
+  extractUniversalEmbedUrls: typeof extractUniversalEmbedUrls;
+  extractUniversalOEmbedUrls: typeof extractUniversalOEmbedUrls;
+}
+
+const DEFAULT_DEPS: ExtractionManagerDeps = {
+  extractViaServer,
+  extractFromSocialUrl,
+  probeUniversalMediaFromUrl,
+  probeUniversalMediaFromSession,
+  extractUniversalEmbedUrls,
+  extractUniversalOEmbedUrls,
+};
+
+function appendSourceAudit(items: DetectedMedia[], audit: SourceAuditEntry): DetectedMedia[] {
+  return items.map((item) => ({
+    ...item,
+    sourceAudit: [...(item.sourceAudit ?? []), audit],
+  }));
+}
+
 export class ExtractionManager {
+  constructor(private readonly deps: ExtractionManagerDeps = DEFAULT_DEPS) {}
+
   /**
    * Extract media from a URL using the full non-fatal fallback pipeline.
    *
@@ -117,7 +146,7 @@ export class ExtractionManager {
     // session (Xiaohongshu). The gated server round-trip is slow and usually
     // fails for these, while the on-device scraper reads the page JSON directly.
     if (caps?.preferOnDevice && isSocialPageUrl(pageUrl)) {
-      const attempt = await runAttempt('platform-extractors', () => extractFromSocialUrl(pageUrl));
+      const attempt = await runAttempt('platform-extractors', () => this.deps.extractFromSocialUrl(pageUrl));
       if (attempt.success && attempt.media) {
         const best = pickBestMedia(attempt.media);
         debugLog('[ExtractionManager] success via on-device (preferOnDevice) for', pageUrl);
@@ -137,7 +166,7 @@ export class ExtractionManager {
     // Japanese sites, DRM-lite scenarios, and everything yt-dlp supports. For
     // preferOnDevice sites this is the fallback after the on-device attempt.
     {
-      const attempt = await runAttempt('server-extraction', () => extractViaServer(pageUrl, session));
+      const attempt = await runAttempt('server-extraction', () => this.deps.extractViaServer(pageUrl, session));
       if (attempt.success && attempt.media) {
         debugLog('[ExtractionManager] success via server-extraction for', pageUrl);
         return {
@@ -159,7 +188,7 @@ export class ExtractionManager {
     // Skipped when preferOnDevice already ran it above.
     if ((isSocialPageUrl(pageUrl) || caps) && !caps?.preferOnDevice) {
       // skipServer: Tier 1 already tried the server above; don't retry and waste another 45 s timeout.
-      const attempt = await runAttempt('platform-extractors', () => extractFromSocialUrl(pageUrl, { skipServer: true }));
+      const attempt = await runAttempt('platform-extractors', () => this.deps.extractFromSocialUrl(pageUrl, { skipServer: true }));
       if (attempt.success && attempt.media) {
         const best = pickBestMedia(attempt.media);
         debugLog('[ExtractionManager] success via platform-extractors, best:', best?.mediaType, best?.label);
@@ -174,10 +203,134 @@ export class ExtractionManager {
       diagnostics['platform-extractors'] = attempt.reason ?? 'no media';
     }
 
-    // ── Tier 3: generic fallback — try extractFromSocialUrl even for unknown
+    // ── Tier 3: browser-fed universal parser fallback ───────────────────────
+    // Prefer already-captured browser session data over fetching the page again.
+    // Results are filtered to high-confidence auto-download candidates.
+    if (session?.pageHtml || session?.mediaHints?.length) {
+      const attempt = await runAttempt('universal-browser-probe', async () => this.deps.probeUniversalMediaFromSession({
+        pageUrl,
+        pageHtml: session?.pageHtml ?? undefined,
+        mediaHints: session?.mediaHints ?? undefined,
+      }));
+      if (attempt.success && attempt.media) {
+        const best = pickBestMedia(attempt.media);
+        debugLog('[ExtractionManager] success via universal-browser-probe, best:', best?.mediaType, best?.label);
+        return {
+          success: true,
+          fatal: false,
+          strategy: 'universal-browser-probe',
+          confidence: best?.confidence ?? 0.75,
+          media: attempt.media,
+        };
+      }
+      diagnostics['universal-browser-probe'] = attempt.reason ?? 'no strong media';
+    }
+
+    // ── Tier 3b: browser-fed embed URL fallback ─────────────────────────────
+    // Some pages create the real player iframe only at runtime. The server can
+    // extract many of those iframe URLs directly, but it cannot see them unless
+    // the WebView sends the rendered HTML snapshot.
+    if (session?.pageHtml) {
+      const attemptedEmbedUrls = new Set<string>();
+      const tryEmbedCandidates = async (embeds: ReturnType<typeof extractUniversalEmbedUrls>): Promise<ExtractionResult | undefined> => {
+        for (const embed of embeds.slice(0, 5)) {
+          if (attemptedEmbedUrls.has(embed.url)) continue;
+          attemptedEmbedUrls.add(embed.url);
+          const audit: SourceAuditEntry = {
+            strategy: 'browser-embedded-player',
+            source: embed.source,
+            url: embed.url,
+            selected: true,
+            fieldPath: embed.fieldPath,
+          };
+          const embedSession: ServerExtractOptions = {
+            ...session,
+            referer: session.referer ?? pageUrl,
+            pageHtml: null,
+            mediaHints: null,
+            sourceAudit: [...(session.sourceAudit ?? []), audit],
+          };
+
+          const serverAttempt = await runAttempt('browser-embed-server', () => this.deps.extractViaServer(embed.url, embedSession));
+          if (serverAttempt.success && serverAttempt.media) {
+            const media = appendSourceAudit(serverAttempt.media, audit);
+            const best = pickBestMedia(media);
+            debugLog('[ExtractionManager] success via browser embed server for', embed.url);
+            return {
+              success: true,
+              fatal: false,
+              strategy: 'browser-embed-server',
+              confidence: best?.confidence ?? 0.82,
+              media,
+            };
+          }
+          embedFailures.push(`${embed.url}: server ${serverAttempt.reason ?? 'no media'}`);
+
+          const platformAttempt = await runAttempt('browser-embed-platform', () => this.deps.extractFromSocialUrl(embed.url, { skipServer: true }));
+          if (platformAttempt.success && platformAttempt.media) {
+            const media = appendSourceAudit(platformAttempt.media, audit);
+            const best = pickBestMedia(media);
+            debugLog('[ExtractionManager] success via browser embed platform for', embed.url);
+            return {
+              success: true,
+              fatal: false,
+              strategy: 'browser-embed-platform',
+              confidence: best?.confidence ?? 0.78,
+              media,
+            };
+          }
+          embedFailures.push(`${embed.url}: platform ${platformAttempt.reason ?? 'no media'}`);
+        }
+        return undefined;
+      };
+
+      const embedFailures: string[] = [];
+      const embeds = this.deps.extractUniversalEmbedUrls(pageUrl, session.pageHtml);
+      const embedResult = await tryEmbedCandidates(embeds);
+      if (embedResult) return embedResult;
+
+      let oEmbeds: ReturnType<typeof extractUniversalEmbedUrls> = [];
+      try {
+        oEmbeds = await this.deps.extractUniversalOEmbedUrls(pageUrl, session.pageHtml ?? undefined);
+      } catch (e) {
+        embedFailures.push(`oEmbed: ${String((e as Error)?.message ?? e).slice(0, 120)}`);
+      }
+      const oEmbedResult = await tryEmbedCandidates(oEmbeds);
+      if (oEmbedResult) return oEmbedResult;
+      if (oEmbeds.length === 0) embedFailures.push('oEmbed: no embeds');
+
+      if (embeds.length > 0 || oEmbeds.length > 0) {
+        diagnostics['browser-embed-extraction'] = embedFailures.join('; ').slice(0, 400) || 'no media';
+      }
+    }
+
+    // ── Tier 4: universal URL fetch fallback ────────────────────────────────
+    // Runs only after the existing server/platform paths fail. This keeps known
+    // site behaviour stable while making unknown pages and direct media URLs more
+    // likely to produce useful candidates.
+    {
+      const attempt = await runAttempt('universal-media-probe', async () => autoDownloadableUniversalMedia(
+        await this.deps.probeUniversalMediaFromUrl(pageUrl),
+      ));
+      if (attempt.success && attempt.media) {
+        const best = pickBestMedia(attempt.media);
+        debugLog('[ExtractionManager] success via universal-media-probe, best:', best?.mediaType, best?.label);
+        return {
+          success: true,
+          fatal: false,
+          strategy: 'universal-media-probe',
+          confidence: best?.confidence ?? 0.6,
+          media: attempt.media,
+        };
+      }
+      diagnostics['universal-media-probe'] = attempt.reason ?? 'no media';
+    }
+
+    // ── Tier 5: legacy generic fallback — try extractFromSocialUrl even for unknown
     //    URLs (it has a generic HTML media detector chain as last resort).
     if (!isSocialPageUrl(pageUrl) && !caps) {
-      const attempt = await runAttempt('generic-html-detection', () => extractFromSocialUrl(pageUrl));
+      // skipServer: Tier 1 already tried the server; avoid a redundant 45 s round-trip.
+      const attempt = await runAttempt('generic-html-detection', () => this.deps.extractFromSocialUrl(pageUrl, { skipServer: true }));
       if (attempt.success && attempt.media) {
         const best = pickBestMedia(attempt.media);
         return {
