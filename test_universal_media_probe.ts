@@ -1664,4 +1664,34 @@ const anchorHrefSuffixCollisionMedia = probeUniversalMedia({
 const anchorHrefSuffixCollisionItem = anchorHrefSuffixCollisionMedia.find((m) => m.sourceAudit?.[0]?.strategy === 'media-anchor-href');
 assert.equal(anchorHrefSuffixCollisionItem?.url, 'https://cdn.example.com/r34/real.mp3', 'a later "data-href" attribute must not override the real "href" on the same <a> tag');
 
+// HTML scanning is capped at 1.5M chars (server parity: extract_universal_from_html
+// caps at the same size). A <video> tag placed well past the cap should not be found,
+// while one placed before the cap still is — mobile devices have no other safety net
+// against an unbounded page causing dozens of unbounded regex passes.
+const hugePadding = '<!-- '.padEnd(1_600_000, 'x') + ' -->';
+const cappedMediaBefore = probeUniversalMedia({
+  pageUrl,
+  pageHtml: `<video src="https://cdn.example.com/r37/before-cap.mp4"></video>${hugePadding}`,
+});
+assert.ok(cappedMediaBefore.some((m) => m.url.includes('r37/before-cap.mp4')), 'a <video> tag before the 1.5M cap should still be detected');
+
+const cappedMediaAfter = probeUniversalMedia({
+  pageUrl,
+  pageHtml: `${hugePadding}<video src="https://cdn.example.com/r37/after-cap.mp4"></video>`,
+});
+assert.ok(!cappedMediaAfter.some((m) => m.url.includes('r37/after-cap.mp4')), 'a <video> tag placed past the 1.5M cap should not be scanned');
+
+// JSON Feed parsing must use the FULL, untruncated text — truncating valid JSON
+// document text would corrupt it and silently drop every episode in the feed.
+const hugeJsonFeedPaddingTitle = 'x'.repeat(1_600_000);
+const hugeJsonFeedMedia = probeUniversalMedia({
+  pageUrl,
+  pageHtml: JSON.stringify({
+    version: 'https://jsonfeed.org/version/1.1',
+    title: hugeJsonFeedPaddingTitle,
+    items: [{ id: '1', title: 'Episode 1', attachments: [{ url: 'https://cdn.example.com/r37/huge-feed-ep1.mp3', mime_type: 'audio/mpeg' }] }],
+  }),
+});
+assert.ok(hugeJsonFeedMedia.some((m) => m.url.includes('r37/huge-feed-ep1.mp3')), 'a JSON Feed enclosure past the 1.5M mark (due to a large title field) should still be detected, since JSON Feed parsing is not truncated');
+
 console.log(`universal media probe ok (${media.length} candidates)`);

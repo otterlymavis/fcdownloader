@@ -4145,3 +4145,21 @@ def test_template_script_data_type_does_not_mask_real_type():
     assert info is not None
     urls = [info["url"]] if info.get("url") else [e["url"] for e in info.get("entries", [])]
     assert any("r35/tmpl-video.mp4" in u for u in urls), f"template video not detected: {urls}"
+
+
+# ── Round 37: 1.5M char cap on extract_universal_from_html (TS parity check —
+# TS's probeUniversalMedia previously had no cap at all on the HTML it scanned) ──
+
+def test_html_before_1_5m_cap_detected():
+    html_text = '<video src="https://cdn.example.com/r37/before-cap.mp4"></video>' + ("x" * 1_600_000)
+    info = universal.extract_universal_from_html(PAGE_URL, html_text)
+    assert info is not None
+    urls = [info["url"]] if info.get("url") else [e["url"] for e in info.get("entries", [])]
+    assert any("r37/before-cap.mp4" in u for u in urls), f"video before cap not detected: {urls}"
+
+
+def test_html_past_1_5m_cap_not_detected():
+    html_text = ("x" * 1_600_000) + '<video src="https://cdn.example.com/r37/after-cap.mp4"></video>'
+    info = universal.extract_universal_from_html(PAGE_URL, html_text)
+    urls = ([info["url"]] if info and info.get("url") else [e["url"] for e in info.get("entries", [])]) if info else []
+    assert not any("r37/after-cap.mp4" in u for u in urls), f"video past cap should not be detected: {urls}"

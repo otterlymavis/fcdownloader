@@ -1774,13 +1774,15 @@ export function probeUniversalMedia(input: UniversalProbeInput): DetectedMedia[]
   const html = input.pageHtml ?? '';
   if (html) {
     // JSON Feed 1.0/1.1 is a JSON object; short-circuit HTML scanners when found.
+    // Uses the full, untruncated text — truncating valid JSON would break JSON.parse.
     const beforeJsonFeed = out.length;
     scanJsonFeed(html, pageUrl, out, seen);
     if (out.length > beforeJsonFeed) {
       return out.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
     }
 
-    // RSS / Atom / Media RSS: structurally different from HTML.
+    // RSS / Atom / Media RSS: structurally different from HTML. Also uses the
+    // full text for the same reason as the JSON feed check above.
     // Short-circuit HTML scanners when feed items are found.
     const beforeFeedContent = out.length;
     scanFeedContent(html, pageUrl, out, seen);
@@ -1788,45 +1790,51 @@ export function probeUniversalMedia(input: UniversalProbeInput): DetectedMedia[]
       return out.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
     }
 
-    const resolveUrl = baseUrlFromHtml(html, pageUrl);
+    // Cap the HTML scanned by the ~25 regex-based scanners below (server parity:
+    // extract_universal_from_html caps at the same 1.5M chars). Mobile devices are
+    // more resource-constrained than the server, yet this path previously had no
+    // cap at all — a single huge page could mean dozens of unbounded regex passes.
+    const cappedHtml = html.length > 1_500_000 ? html.slice(0, 1_500_000) : html;
+
+    const resolveUrl = baseUrlFromHtml(cappedHtml, pageUrl);
     // Expand <noscript> blocks: lazy-load sites put the real <img src> inside
     // <noscript> and JS replaces it with a data-src placeholder at runtime.
-    const noscriptExpanded = html.replace(
+    const noscriptExpanded = cappedHtml.replace(
       /<noscript\b[^>]*>([\s\S]*?)<\/noscript>/gi,
       (_, inner: string) => inner.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'"),
     );
-    const htmlWithNoscript = noscriptExpanded !== html ? `${html}\n${noscriptExpanded}` : html;
+    const htmlWithNoscript = noscriptExpanded !== cappedHtml ? `${cappedHtml}\n${noscriptExpanded}` : cappedHtml;
     scanMediaElements(htmlWithNoscript, pageUrl, out, seen, resolveUrl);
     scanBgVideoAttrs(htmlWithNoscript, pageUrl, out, seen, resolveUrl);
-    scanTemplateScripts(html, pageUrl, out, seen, resolveUrl);
-    scanTemplateElements(html, pageUrl, out, seen, resolveUrl);
-    scanWordPressBlocks(html, pageUrl, out, seen, resolveUrl);
-    scanCustomMediaElements(html, pageUrl, out, seen, resolveUrl);
-    scanDataAttributes(html, pageUrl, out, seen, resolveUrl);
-    scanCssBackgroundImages(html, pageUrl, out, seen, resolveUrl);
-    scanResourceLinks(html, pageUrl, out, seen, resolveUrl);
-    scanPodcastFeedLinks(html, pageUrl, out, seen);
-    scanMeta(html, pageUrl, out, seen, resolveUrl);
-    scanMicrodataMedia(html, pageUrl, out, seen, resolveUrl);
-    scanJsonLd(html, pageUrl, out, seen, resolveUrl);
-    scanPlayerConfigs(html, pageUrl, out, seen, resolveUrl);
-    scanHydrationData(html, pageUrl, out, seen, resolveUrl);
-    scanJsonDataAttributes(html, pageUrl, out, seen, resolveUrl);
-    scanKalturaEmbeds(html, pageUrl, out, seen);
+    scanTemplateScripts(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanTemplateElements(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanWordPressBlocks(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanCustomMediaElements(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanDataAttributes(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanCssBackgroundImages(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanResourceLinks(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanPodcastFeedLinks(cappedHtml, pageUrl, out, seen);
+    scanMeta(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanMicrodataMedia(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanJsonLd(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanPlayerConfigs(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanHydrationData(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanJsonDataAttributes(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanKalturaEmbeds(cappedHtml, pageUrl, out, seen);
     scanAmpEmbeds(htmlWithNoscript, pageUrl, out, seen);
     scanWistiaDivEmbeds(htmlWithNoscript, pageUrl, out, seen);
     scanBrightcoveDivEmbeds(htmlWithNoscript, pageUrl, out, seen);
-    scanVidyardEmbeds(html, pageUrl, out, seen);
-    scanDivEmbeds(html, pageUrl, out, seen);
-    scanMuxEmbeds(html, pageUrl, out, seen);
-    scanCloudflareStreamElements(html, pageUrl, out, seen);
-    scanPlyrEmbeds(html, pageUrl, out, seen);
+    scanVidyardEmbeds(cappedHtml, pageUrl, out, seen);
+    scanDivEmbeds(cappedHtml, pageUrl, out, seen);
+    scanMuxEmbeds(cappedHtml, pageUrl, out, seen);
+    scanCloudflareStreamElements(cappedHtml, pageUrl, out, seen);
+    scanPlyrEmbeds(cappedHtml, pageUrl, out, seen);
     scanIframeEmbeds(htmlWithNoscript, pageUrl, out, seen, resolveUrl);
-    scanFlashEmbeds(html, pageUrl, out, seen, resolveUrl);
-    scanGenericUrls(html, pageUrl, out, seen);
+    scanFlashEmbeds(cappedHtml, pageUrl, out, seen, resolveUrl);
+    scanGenericUrls(cappedHtml, pageUrl, out, seen);
   }
 
-  const pageTitle = html ? extractPageTitle(html) : undefined;
+  const pageTitle = html ? extractPageTitle(html.length > 1_500_000 ? html.slice(0, 1_500_000) : html) : undefined;
   if (pageTitle) {
     for (const item of out) {
       if (!item.sourceTitle) item.sourceTitle = pageTitle;
