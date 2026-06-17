@@ -21,7 +21,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   },
   android: {
     package: 'com.otterpia.fcdownloader',
-    versionCode: 24,
+    versionCode: 25,
     allowBackup: false,
     icon: './web/icon-512.png',
     adaptiveIcon: {
@@ -44,7 +44,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   },
   ios: {
     bundleIdentifier: 'com.otterpia.fcdownloader',
-    buildNumber: '24',
+    buildNumber: '25',
     supportsTablet: true,
     infoPlist: {
       ...(allowInsecureHttp ? { NSAppTransportSecurity: { NSAllowsArbitraryLoads: true } } : {}),

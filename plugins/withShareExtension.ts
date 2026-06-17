@@ -28,7 +28,7 @@ const APP_GROUP      = `group.${BUNDLE_ID}`;
 const APP_SCHEME     = 'fcdownloader';
 const DEPLOYMENT_TARGET = '15.1';
 const VERSION = '1.5.20';
-const BUILD_NUMBER = '24';
+const BUILD_NUMBER = '25';
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
