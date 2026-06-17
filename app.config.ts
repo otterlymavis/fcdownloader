@@ -6,6 +6,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   return {
     ...config,
     name: 'FCDownloader',
+  assetBundlePatterns: [
+    'assets/**/*',
+    'node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf',
+  ],
   slug: 'fcdownloader',
   owner: 'mabisuuu',
   version: '1.5.20',
@@ -64,7 +68,6 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   plugins: [
     'expo-font',
     'expo-sharing',
-    'expo-video',
     [
       'expo-media-library',
       {

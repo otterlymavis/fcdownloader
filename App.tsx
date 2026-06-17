@@ -23,7 +23,6 @@ import * as Linking from 'expo-linking';
 
 import BrowserView from './src/components/BrowserView';
 import Toast, { ToastMessage } from './src/components/Toast';
-import VideoPlayerModal from './src/components/VideoPlayerModal';
 import SettingsSheet from './src/components/SettingsSheet';
 import { translate, TranslationKey } from './src/constants/translations';
 
@@ -228,7 +227,6 @@ export default function App() {
   const [previewItem, setPreviewItem]   = useState<DetectedMedia | null>(null);
   const [selectedFormatId, setSelectedFormatId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [playingPath, setPlayingPath]   = useState<string | null>(null);
   const [toast, setToast]               = useState<ToastMessage | null>(null);
   const [extracting, setExtracting]     = useState(false);
   const [fileSizes, setFileSizes]       = useState<Record<string, string>>({});
@@ -1172,7 +1170,6 @@ export default function App() {
                 const size        = fileSizes[task.id];
                 const isDone      = task.status === 'completed';
                 const isFail      = task.status === 'failed';
-                const isPlayable  = !!task.localPlaylistPath && getMediaKind(task.media) === 'video' && /\.(mp4|ts|mov|webm|m4v)$/i.test(task.localPlaylistPath);
                 const canSaveToLibrary = !!task.localPlaylistPath && getMediaKind(task.media) !== 'audio';
                 const isSelected  = libSelected.has(task.id);
                 const showThumbnail = getMediaKind(task.media) === 'video' || getMediaKind(task.media) === 'image';
@@ -1242,13 +1239,6 @@ export default function App() {
                         <View style={[s.libraryActions, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
                           {isDone && task.localPlaylistPath && (
                             <>
-                              {isPlayable && (
-                                <Pressable android_ripple={RIPPLE_BL}
-                                  style={[s.outlineBtn, { borderColor: t.sep }]}
-                                  onPress={() => setPlayingPath(task.localPlaylistPath!)}>
-                                  <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>{translate('play', resolvedLanguage)}</Text>
-                                </Pressable>
-                              )}
                               <Pressable android_ripple={RIPPLE_BL}
                                 style={[s.outlineBtn, { borderColor: t.sep }]}
                                 onPress={() => handleExport(task)}>
@@ -1742,7 +1732,6 @@ export default function App() {
       </Modal>
 
       {/* ── Modals ──────────────────────────────────────── */}
-        {playingPath && <VideoPlayerModal path={playingPath} onClose={() => setPlayingPath(null)} language={resolvedLanguage} />}
         <Toast message={toast} />
         {/* Hidden WebView: runs the Sina Visitor System JS for Weibo sessions.
             m.weibo.cn serves the visitor HTML INLINE (title="Sina Visitor System") so
