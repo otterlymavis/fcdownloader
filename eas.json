@@ -53,5 +53,13 @@
         "FCDL_ALLOW_INSECURE_HTTP": "1"
       }
     }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "appleId": "mavisssz97@gmail.com",
+        "appleTeamId": "D8H3TBWH7P"
+      }
+    }
   }
 }
