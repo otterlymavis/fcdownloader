@@ -281,6 +281,10 @@ function addExtensionToXcodeProject(
       s.SKIP_INSTALL                 = 'YES';
       s.TARGETED_DEVICE_FAMILY       = '"1,2"';
       s.PRODUCT_BUNDLE_IDENTIFIER    = EXT_BUNDLE_ID;
+      // Let Xcode register the App ID and provisioning profile automatically
+      // via the EAS App Store Connect API key (-allowProvisioningUpdates).
+      s.CODE_SIGN_STYLE              = 'Automatic';
+      s.DEVELOPMENT_TEAM             = 'D8H3TBWH7P';
     }
   }
 }
