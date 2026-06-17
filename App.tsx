@@ -13,8 +13,7 @@ import {
 } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import WebView from 'react-native-webview';
-import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
+import Icon from './src/components/Icon';
 import { SafeAreaProvider, SafeAreaView, initialWindowMetrics } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
@@ -730,10 +729,7 @@ export default function App() {
   // ─────────────────────────────────────────────────────────
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-      <LinearGradient
-        colors={t.bgGrad}
-        style={s.root}
-      >
+      <View style={[s.root, { backgroundColor: t.bg }]}>
         <SafeAreaView style={[s.flex, IS_ANDROID && { paddingTop: TOP_PAD }]}>
           <ExpoStatusBar style={isDark ? 'light' : 'dark'} />
 
@@ -828,7 +824,7 @@ export default function App() {
                             {getSourceName(task.media.url)} · {Math.round(task.progress * 100)}%
                           </Text>
                           <Pressable onPress={() => cancel(task.id)} hitSlop={S.xs}>
-                            <Ionicons name="close" size={18} color={t.ink2} />
+                            <Icon name="close" size={18} color={t.ink2} />
                           </Pressable>
                         </View>
                         <View style={[s.progressTrack, { backgroundColor: t.card2, marginTop: S.xs }]}>
@@ -878,7 +874,7 @@ export default function App() {
                 hitSlop={S.sm}
                 style={s.navRowBtn}
               >
-                <Ionicons name="chevron-back" size={24} color={t.ink} />
+                <Icon name="chevron-back" size={24} color={t.ink} />
               </Pressable>
               
               <Text style={[s.browserTitle, { color: t.ink }]}>
@@ -897,7 +893,7 @@ export default function App() {
                   }
                 ]}
               >
-                <Ionicons
+                <Icon
                   name="scan-outline"
                   size={22}
                   color={(videoCount > 0 || mseActive) ? '#A855F7' : t.ink}
@@ -907,7 +903,7 @@ export default function App() {
             
             {/* Row 2 */}
             <View style={[s.addressFieldWrap, { backgroundColor: t.card2, borderColor: t.sep, borderWidth: 1 }, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
-              <Ionicons name="search-outline" size={18} color={t.ink3} style={{ marginHorizontal: S.xs }} />
+              <Icon name="search-outline" size={18} color={t.ink3} style={{ marginHorizontal: S.xs }} />
               <TextInput
                 style={[s.addressField, { color: t.ink, fontSize: fs(14), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}
                 value={browserInput}
@@ -927,7 +923,7 @@ export default function App() {
                 onPress={() => webviewRef.current?.reload()}
                 hitSlop={S.xs}
               >
-                <Ionicons name="refresh" size={18} color={t.ink2} />
+                <Icon name="refresh" size={18} color={t.ink2} />
               </Pressable>
             </View>
           </View>
@@ -973,7 +969,7 @@ export default function App() {
                 }]}
                 onPress={() => toggleBM(loadedUrl, getPageTitle(loadedUrl))}
               >
-                <Ionicons
+                <Icon
                   name={isSaved(loadedUrl, bookmarks) ? 'bookmark' : 'bookmark-outline'}
                   size={22}
                   color={isSaved(loadedUrl, bookmarks) ? t.btnTxt : t.ink2}
@@ -1191,7 +1187,7 @@ export default function App() {
                             {isVideo && isDone && (
                               <View style={s.thumbnailPlayOverlay}>
                                 <View style={s.playCircle}>
-                                  <Ionicons name="play" size={10} color="#000000" style={{ marginLeft: 2 }} />
+                                  <Icon name="play" size={10} color="#000000" style={{ marginLeft: 2 }} />
                                 </View>
                               </View>
                             )}
@@ -1276,12 +1272,12 @@ export default function App() {
                       <View style={s.libraryCardRight}>
                         {isDone ? (
                           <View style={[s.statusCircle, { backgroundColor: t.greenBg, borderColor: t.green, borderWidth: 1 }]}>
-                            <Ionicons name="checkmark" size={16} color={t.green} />
+                            <Icon name="checkmark" size={16} color={t.green} />
                           </View>
                         ) : isFail ? (
                           <>
                             <View style={[s.statusCircle, { backgroundColor: t.redBg, borderColor: t.red, borderWidth: 1 }]}>
-                              <Ionicons name="alert" size={16} color={t.red} />
+                              <Icon name="alert" size={16} color={t.red} />
                             </View>
                             <Pressable onPress={() => handleRetry(task)} style={s.retryTextBtn}>
                               <Text style={{ color: t.red, fontSize: 11, fontWeight: '600', marginTop: S.xs }}>
@@ -1291,7 +1287,7 @@ export default function App() {
                           </>
                         ) : (
                           <View style={[s.statusCircle, { backgroundColor: t.card2, borderColor: t.sep, borderWidth: 1 }]}>
-                            <Ionicons name="close" size={16} color={t.ink3} />
+                            <Icon name="close" size={16} color={t.ink3} />
                           </View>
                         )}
                       </View>
@@ -1371,14 +1367,9 @@ export default function App() {
                 );
 
                 const avatarView = isInstagram ? (
-                  <LinearGradient
-                    colors={['#F91A7F', '#B528BA', '#FF8A00']}
-                    start={{ x: 0, y: 1 }}
-                    end={{ x: 1, y: 0 }}
-                    style={s.bmRowAvatar}
-                  >
+                  <View style={[s.bmRowAvatar, { backgroundColor: '#C13584' }]}>
                     {avatarContent}
-                  </LinearGradient>
+                  </View>
                 ) : (
                   <View style={[s.bmRowAvatar, { backgroundColor: avatarBg }]}>
                     {avatarContent}
@@ -1422,10 +1413,10 @@ export default function App() {
                         hitSlop={S.xs}
                         style={{ padding: S.xs }}
                       >
-                        <Ionicons name="trash-outline" size={20} color={t.red} />
+                        <Icon name="trash-outline" size={20} color={t.red} />
                       </Pressable>
                     ) : (
-                      <Ionicons name="chevron-forward" size={18} color={t.ink3} />
+                      <Icon name="chevron-forward" size={18} color={t.ink3} />
                     )}
                   </Pressable>
                 );
@@ -1470,7 +1461,7 @@ export default function App() {
       ]}>
         {(['home', 'library', 'bookmarks', 'browser', 'settings'] as Tab[]).map((id) => {
           const isActive = tab === id;
-          let iconName: React.ComponentProps<typeof Ionicons>['name'];
+          let iconName: React.ComponentProps<typeof Icon>['name'];
           switch (id) {
             case 'home':
               iconName = isActive ? 'home' : 'home-outline';
@@ -1502,10 +1493,10 @@ export default function App() {
                     backgroundColor: t.glass.pillActive,
                   }
                 ]}>
-                  <Ionicons name={iconName} size={22} color={t.glass.pillActiveTxt} />
+                  <Icon name={iconName} size={22} color={t.glass.pillActiveTxt} />
                 </View>
               ) : (
-                <Ionicons name={iconName} size={22} color={t.ink2} />
+                <Icon name={iconName} size={22} color={t.ink2} />
               )}
             </Pressable>
           );
@@ -1782,7 +1773,7 @@ export default function App() {
           />
         )}
       </SafeAreaView>
-      </LinearGradient>
+      </View>
     </SafeAreaProvider>
   );
 }
