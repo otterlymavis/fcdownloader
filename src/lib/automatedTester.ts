@@ -43,8 +43,9 @@ export async function runAutomatedStrategyTest(url: string, reportUrl: string) {
   }
 
   // Test Strategy 2: On-Device (Platform + Generic)
+  // skipServer: true isolates the on-device tier; server path is already tested above.
   try {
-    const deviceMedia = await extractFromSocialUrl(url);
+    const deviceMedia = await extractFromSocialUrl(url, { skipServer: true });
     payload.results.push({
       strategy: 'ON-DEVICE',
       success: deviceMedia.length > 0,

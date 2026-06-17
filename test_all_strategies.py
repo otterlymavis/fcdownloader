@@ -603,7 +603,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: scanXiaohongshu() reads window.__INITIAL_STATE__ after login; xhscdn.com webRequest capture"),
 
-    ("Douyin", "https://www.douyin.com/video/7465568516827773226", [
+    ("Douyin", "https://www.douyin.com/video/6918273131559881997", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
         ("local helper",             strat_local_helper,  {}),
@@ -616,7 +616,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: nicovideo HLS stream capture"),
 
-    ("TVer", "https://tver.jp/episodes/epc1hdugbk", [
+    ("TVer", "https://tver.jp/episodes/epqbt0uzhh", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -670,13 +670,13 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: FOD video stream capture"),
 
-    ("Naver TV", "http://tv.naver.com/v/81652", [
+    ("Naver TV", "https://tv.naver.com/v/101063470", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
         ("local helper",             strat_local_helper,  {}),
-    ], "🌐 browser-only: Naver TV HLS capture"),
+    ], "server extracts public clips; HLS capture also works via browser/extension"),
 
-    ("Kakao TV", "https://tv.kakao.com/channel/2856/cliplink/463538508", [
+    ("Kakao TV", "https://tv.kakao.com/channel/10235663/cliplink/463188179", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {}),
         ("local helper",             strat_local_helper,  {}),
@@ -731,7 +731,7 @@ PLATFORMS = [
     ], "🌐 browser-only: current episode/session capture; paid On Demand may be DRM"),
 
     # ── Japanese / Korean News, Magazines, Blogs & Galleries ─────────────
-    ("Oricon", "https://www.oricon.co.jp/news/2285123/full/", [
+    ("Oricon", "https://www.oricon.co.jp/news/2452025/full/", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -815,7 +815,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "official Hatena blog with images"),
 
-    ("Yahoo Japan articles", "https://news.yahoo.co.jp/articles/20ed9737a7a5411fbd2456f7df836fca68579d2f", [
+    ("Yahoo Japan articles", "https://news.yahoo.co.jp/articles/73a63ae0801bb59edfa56f0c529cae091b84386b", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -857,7 +857,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: friday gallery extraction"),
 
-    ("Gendai Media", "https://gendai.media/articles/-/167825", [
+    ("Gendai Media", "https://gendai.media/articles/-/168091", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -923,7 +923,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: non-no gallery extraction"),
 
-    ("HP+ SPUR", "https://spur.hpplus.jp/jewelry_watch/", [
+    ("HP+ SPUR", "https://spur.hpplus.jp/fashion/", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -971,7 +971,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: mi-mollet gallery extraction"),
 
-    ("Fashion Press", "https://www.fashion-press.net/news/147206", [
+    ("Fashion Press", "https://www.fashion-press.net/news/", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -995,11 +995,11 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: thetv gallery extraction"),
 
-    ("Mantan Web", "https://mantan-web.jp/article/20240501dog00m200001000c.html", [
+    ("Mantan Web", "https://mantan-web.jp/article/20260610dog00m200060000a.html", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
-    ], "🌐 browser-only: mantan web gallery extraction"),
+    ], "server and browser both extract gallery images"),
 
     ("Crank In", "https://www.crank-in.net/news", [
         ("server /extract",          strat_server,        {}),
@@ -1013,7 +1013,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: cinematoday gallery extraction"),
 
-    ("eiga.com", "https://eiga.com/news/20260522/23/", [
+    ("eiga.com", "https://eiga.com/news/20260611/2/", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -1151,7 +1151,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: jiji gallery extraction"),
 
-    ("ITmedia", "https://www.itmedia.co.jp/news/articles/2606/10/news058.html", [
+    ("ITmedia", "https://www.itmedia.co.jp/news/articles/2606/11/news063.html", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),
@@ -1163,7 +1163,7 @@ PLATFORMS = [
         ("local helper",             strat_local_helper,  {}),
     ], "🌐 browser-only: watch impress gallery extraction"),
 
-    ("Mynavi News", "https://news.mynavi.jp/techplus/article/20260612-4571330/", [
+    ("Mynavi News", "https://news.mynavi.jp/techplus/", [
         ("server /extract",          strat_server,        {}),
         ("client: OG meta + CDN",    strat_og_meta,       {"accept_lang": "ja-JP,ja;q=0.9"}),
         ("local helper",             strat_local_helper,  {}),

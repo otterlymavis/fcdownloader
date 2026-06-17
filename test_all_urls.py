@@ -43,8 +43,8 @@ APP_COMPONENT = "com.mabisuuu.fcdownloader/.MainActivity"
 # platform -> (url, note). Real URLs used during testing.
 URLS = {
     # ── Global / Social ───────────────────────────────────────────────────
-    "YouTube":       ("https://youtu.be/y2EJ8v-efjA?is=EI4PXDdSIXWeOMHr", ""),
-    "YouTube-zoo":   ("https://www.youtube.com/watch?v=jNQXAC9IVRw", "first YouTube video"),
+    "YouTube":       ("https://www.youtube.com/watch?v=jNQXAC9IVRw", "first YouTube video"),
+    "YouTube-zoo":   ("https://youtu.be/y2EJ8v-efjA?is=EI4PXDdSIXWeOMHr", "second YouTube video (short URL)"),
     "TikTok":        ("https://vm.tiktok.com/ZNR7eeRqB/", "photo/gallery post"),
     "TikTok-NASA":   ("https://www.tiktok.com/@nasa.tiktok2/video/7624845650504469780", "video"),
     "Instagram":     ("https://www.instagram.com/reel/C7VgIvhsKgR/", "LOGIN-GATED: only public images without IG cookies"),
@@ -68,7 +68,7 @@ URLS = {
     "Bilibili-large":("https://www.bilibili.com/video/BV12DEg69EtX?track_id=", "~66MB; exercises download-ahead"),
     "Bilibili dynamic / opus": ("https://t.bilibili.com/892040939527667727", "LOGIN-GATED: Bilibili dynamic API triggers risk control on datacenter IPs"),
     "Weibo":         ("https://m.weibo.cn/detail/4904263725515320", "LOGIN-GATED: Weibo visitor session required; works when user has opened Weibo in Browse tab first (sets visitor cookies forwarded to server); expect TIMEOUT in automated tests without cookies"),
-    "Xiaohongshu":   ("http://xhslink.com/o/AuDpBCMNn0z", "server /extract is gated -> FAIL here is expected; the APP extracts on-device (use --device)"),
+    "Xiaohongshu":   ("http://xhslink.com/o/AuDpBCMNn0z", "public post; server can extract via __INITIAL_STATE__; private/auth content requires on-device extraction with cookies"),
     "Douyin":        ("https://www.douyin.com/video/6918273131559881997", ""),
     # ── Japanese / Korean Video & Streaming ──────────────────────────────
     "NicoNico":      ("https://www.nicovideo.jp/watch/sm9", ""),
@@ -81,7 +81,7 @@ URLS = {
     # "OpenREC":       ("https://www.openrec.tv/capture/l9nk2x4gn14", "verified public capture; HLS manifest requires OpenREC session or updated URL"),
     # "TBS":           ("https://cu.tbs.co.jp/episode/11578", "GEO/AUTH/CURRENT-EPISODE: TBS FREE URLs expire or require current playback metadata"),
     # "FOD / Fuji TV": ("https://fod.fujitv.co.jp/title/5d40/5d40110076", "AUTH/CURRENT-EPISODE: sample now returns empty media JSON without a FOD session"),
-    "Naver TV":      ("https://tv.naver.com/v/101063470", "AUTH/SERVER IP: Naver TV stream extraction requires current Naver session cookies"),
+    "Naver TV":      ("https://tv.naver.com/v/101063470", "public clip; accessible from datacenter IPs without session cookies"),
     "Kakao TV":      ("https://tv.kakao.com/channel/10235663/cliplink/463188179", "AUTH/SERVER IP: Kakao TV requires auth from datacenter IPs; browser/session path works"),
     # "Yahoo Japan video/news": ("https://news.yahoo.co.jp/articles/45145b4c10a34b22c7eb16a04a6fc6b490d1f7c3", "AUTH/SERVER IP: video articles expire quickly; refresh from /ranking/access/video when stale"),
     "DMM":           ("https://www.dmm.co.jp/mono/dvd/-/detail/=/cid=3841h_015/", "AGE-GATED/STALE SAMPLE: DMM/FANZA requires age confirmation and current product URLs"),
@@ -105,7 +105,7 @@ URLS = {
     "KTV Smart":     ("https://ktv-smart.jp/", "GEO/CURRENT-EPISODE: broadcaster catch-up playback requires current Japan browser session"),
     # "Nippon TV VOD": ("https://vod.ntv.co.jp/program/11252", "GEO/CURRENT-EPISODE: broadcaster catch-up playback requires current Japan browser session"),
     # ── Japanese / Korean News, Magazines, Blogs & Galleries ─────────────
-    "Oricon":        ("https://www.oricon.co.jp/news/2452025/full/", "BROWSER-ONLY: local Python TLS chain currently fails for oricon.co.jp; browser/session path still works"),
+    "Oricon":        ("https://www.oricon.co.jp/news/2452025/full/", "video via yt-dlp; Fly.io server works; local Python TLS may fail to verify oricon.co.jp"),
     "Modelpress":    ("https://mdpr.jp/photo/detail/20095233", "photo gallery"),
     "TRILL":         ("https://trilltrill.jp/articles/4750322/photos/1", "article photo gallery"),
     "Natalie":       ("https://natalie.mu/music/news/670767", ""),
@@ -115,7 +115,7 @@ URLS = {
     "Naver Sports":  ("https://sports.news.naver.com/kbaseball/news/read?oid=241&aid=0003450000", ""),
     "note.com":      ("https://note.com/info/n/nea1b96233fbf", "article with images — update key if 404"),
     "Hatena Blog":   ("https://staff.hatenablog.com/entry/2026/06/05/145729", "official Hatena blog with images"),
-    "FC2 Blog":      ("https://blog.fc2.com/", "DNS/BROWSER-ONLY: some FC2 blog subdomains still HTTP-only and blocked by iOS ATS"),
+    "FC2 Blog":      ("https://blog.fc2.com/", "BROWSER-ONLY: main domain is HTTPS but user blog subdomains are HTTP-only (ATS blocked on iOS); homepage has no stable article media"),
     "Gyazo":         ("https://gyazo.com/5593f3bbe109c38ebf07c16dd25dc4c4", "public screenshot"),
     "Ameblo":        ("https://ameblo.jp/chunta-2011/", ""),
     "Kstyle":        ("https://kstyle.com/topicNews.ksn?topicNo=1107", ""),
@@ -124,7 +124,7 @@ URLS = {
     "Yahoo Japan articles": ("https://news.yahoo.co.jp/articles/73a63ae0801bb59edfa56f0c529cae091b84386b", "AUTH/SERVER IP: Yahoo Japan blocks datacenter fetches; browser HTML/cookies path is supported"),
     "Pixiv / Fanbox": ("https://www.pixiv.net/artworks/100000000", ""),
     "Bunshun":       ("https://bunshun.jp/articles/-/89384", "ismcdn.jp images; /articles/-/<id> format; increment ID if 404"),
-    "Daily Shincho": ("https://www.dailyshincho.jp/article/2026/06031137/", ""),
+    "Daily Shincho": ("https://www.dailyshincho.jp/article/", ""),
     "News Post Seven / Josei Seven": ("https://www.news-postseven.com/news", ""),
     "FRIDAY":        ("https://friday.kodansha.co.jp/article/469626", ""),
     "Gendai Media":  ("https://gendai.media/articles/-/168091", ""),
@@ -145,13 +145,13 @@ URLS = {
     "ananweb":       ("https://ananweb.jp/categories/horoscope/76522", ""),
     "Croissant Online": ("https://croissant-online.jp/life/268743/", "update article ID if 404"),
     "FRaU":          ("https://frau.tokyo/list/tag/frau/SPORTS", ""),
-    "mi-mollet":     ("https://mi-mollet.com/ud/article_photo/search", "BROWSER-ONLY: search/category page does not expose stable article media to server fetch"),
+    "mi-mollet":     ("https://mi-mollet.com/articles/-/59656", "update article ID if 404"),
     "Fashion Press": ("https://www.fashion-press.net/news/", ""),
     "Fashionsnap":   ("https://www.fashionsnap.com/article/2026-06-03/nakagawa-masashichi-shitsurindo/?ref=simple-news-click", ""),
-    "WWD Japan":     ("https://www.wwdjapan.com/articles/2133770", "subscription-gated from server IP"),
+    "WWD Japan":     ("https://www.wwdjapan.com/s/505009", "subscription-gated articles; /s/ redirect URL serves a preview page accessible to server"),
     "thetv.jp":      ("https://thetv.jp/news/detail/1401412/", ""),
-    "Mantan Web":    ("https://mantan-web.jp/article/20260610dog00m200060000a.html", "AUTH/SERVER IP: server fetch currently receives 403; browser/session path is used when available"),
-    "Crank In":      ("https://www.crank-in.net/news/186258", ""),
+    "Mantan Web":    ("https://mantan-web.jp/article/20260610dog00m200060000a.html", "photo gallery article; update article ID if 404"),
+    "Crank In":      ("https://www.crank-in.net/news", ""),
     "CinemaToday":   ("https://www.cinematoday.jp/news/N0153809", ""),
     "eiga.com":      ("https://eiga.com/news/20260611/2/", "signed HLS manifests expire within days — update to a fresh article when manifest 404s"),
     "Real Sound":    ("https://realsound.jp/movie/2026/05/post-2406453.html?utm_source=rs-pickup-pc&utm_medium=all&utm_campaign=block-1", ""),
@@ -160,7 +160,7 @@ URLS = {
     "Smart Flash":   ("https://smart-flash.jp/entertainment/", ""),
     "Nikkan Gendai": ("https://www.nikkan-gendai.com/articles/index/news", "BROWSER-ONLY: index page does not expose stable article media to server fetch"),
     "Asagei":        ("https://www.asagei.com/category/sports", ""),
-    "Entame Next":   ("https://entamenext.com/articles/detail/46066", "AUTH/HLS: category page embeds a promo video behind an auth-gated HLS URL; generic image scan fallback available"),
+    "Entame Next":   ("https://entamenext.com/articles/gallery/46181/1", "gallery URL; update article ID if 404"),
     "GirlsNews":     ("https://girlsnews.tv/category/news", ""),
     "Girlswalker":   ("https://girlswalker.com/archives/331232/", "photo gallery article"),
     "Tokyo Sports":  ("https://www.tokyo-sports.co.jp/list/sports", ""),
@@ -168,8 +168,8 @@ URLS = {
     "Sponichi":      ("https://www.sponichi.co.jp/soccer/tokusyu/wc2026/?from=glonavi", "BROWSER-ONLY: special/category page does not expose stable article media to server fetch"),
     "Nikkan Sports": ("https://www.nikkansports.com/baseball/samurai/wbc2026/", ""),
     "Sanspo":        ("https://www.sanspo.com/sports/baseball/mlb/", ""),
-    "Mainichi":      ("https://mainichi.jp/articles/20260604/k00/00m/040/327000c", "BROWSER-ONLY: sample article currently exposes no downloadable media to server fetch"),
-    "Asahi":         ("https://www.asahi.com/articles/ASV6414YJV64OXIE023M.html", "asahicom.jp img tags in desktop-UA HTML; extractCuratedArticle picks them up"),
+    "Mainichi":      ("https://mainichi.jp/ch150910144i/%E9%A6%96%E7%9B%B8%E6%97%A5%E3%80%85", "stable channel URL; update slug if removed"),
+    "Asahi":         ("https://www.asahi.com/articles/ASV6B3GFTV6BUEFT00VM.html?iref=comtop_list_01", "asahicom.jp img tags in desktop-UA HTML; extractCuratedArticle picks them up"),
     "Yomiuri":       ("https://www.yomiuri.co.jp/news/", "BROWSER-ONLY: news index page does not expose stable article media to server fetch"),
     "Sankei":        ("https://www.sankei.com/sports/", ""),
     "Tokyo Shimbun": ("https://www.tokyo-np.co.jp/special_contents/special_frontline/honne_column?ref=gnb_pc", "BROWSER-ONLY: special column page blocks/static-fetch media discovery in this environment"),
@@ -212,31 +212,36 @@ def test_server(url, backend, timeout=75, cookies=None):
     if cookies:
         payload["cookies"] = cookies
     body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        backend + "/extract", data=body,
-        headers={"Content-Type": "application/json; charset=utf-8"},
-    )
     t0 = time.time()
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.load(r)
-        dt = time.time() - t0
-        if data.get("items"):
-            return ("PASS", f"gallery: {len(data['items'])} items", dt)
-        kind = data.get("kind")
-        if kind:
-            return ("PASS", f"{kind} — {(data.get('title') or '')[:36]}", dt)
-        return ("FAIL", "no media", dt)
-    except urllib.error.HTTPError as e:
+    for attempt in range(2):
+        req = urllib.request.Request(
+            backend + "/extract", data=body,
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
         try:
-            d = json.load(e)
-            m = d.get("detail")
-            msg = (m.get("message") if isinstance(m, dict) else m) or f"HTTP {e.code}"
-        except Exception:
-            msg = f"HTTP {e.code}"
-        return ("FAIL", str(msg)[:70], time.time() - t0)
-    except Exception as e:
-        return ("FAIL", str(e)[:70], time.time() - t0)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = json.load(r)
+            dt = time.time() - t0
+            if data.get("items"):
+                return ("PASS", f"gallery: {len(data['items'])} items", dt)
+            kind = data.get("kind")
+            if kind:
+                return ("PASS", f"{kind} — {(data.get('title') or '')[:36]}", dt)
+            return ("FAIL", "no media", dt)
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt == 0:
+                print(f"  [rate-limited] waiting 65s before retry…", flush=True)
+                time.sleep(65)
+                continue
+            try:
+                d = json.load(e)
+                m = d.get("detail")
+                msg = (m.get("message") if isinstance(m, dict) else m) or f"HTTP {e.code}"
+            except Exception:
+                msg = f"HTTP {e.code}"
+            return ("FAIL", str(msg)[:70], time.time() - t0)
+        except Exception as e:
+            return ("FAIL", str(e)[:70], time.time() - t0)
 
 
 test_server.__test__ = False
