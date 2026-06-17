@@ -299,6 +299,13 @@ def _attach_source_audit(
 def _localize_ytdl_stream_urls(response: dict[str, Any], request: Request) -> dict[str, Any]:
     """Return same-server ytdl-stream URLs for the current request host."""
     base = str(request.base_url).rstrip("/")
+    # Fly.io terminates TLS at the edge and forwards to the app over plain HTTP,
+    # so request.base_url always carries scheme="http". Honour x-forwarded-proto
+    # (set by Fly's proxy) to rewrite the scheme to "https" when appropriate.
+    forwarded_scheme = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    if forwarded_scheme in ("https", "http"):
+        parsed_base = urllib.parse.urlparse(base)
+        base = urllib.parse.urlunparse((forwarded_scheme,) + parsed_base[1:])
 
     def localize(value: Any) -> Any:
         if not isinstance(value, str) or "/ytdl-stream?" not in value:
