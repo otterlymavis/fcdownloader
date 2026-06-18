@@ -302,6 +302,9 @@ async function _downloadYtdlStream(
   }
 
   if (file.size === 0) throw new Error('ytdl-stream produced an empty file');
+  if (contentLength > 0 && file.size < contentLength) {
+    throw new Error(`Truncated ytdl-stream download: ${file.size}/${contentLength} bytes`);
+  }
   // A real video file is always larger than 1 KB. A JSON error body that was
   // accidentally written to disk (e.g. due to a network-layer quirk) is tiny.
   if (file.size < 1024) {

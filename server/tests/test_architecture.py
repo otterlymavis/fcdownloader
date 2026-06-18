@@ -14,6 +14,8 @@ from __future__ import annotations
 import sys
 import os
 import json
+import importlib.util
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -431,6 +433,92 @@ class TestUtils:
         assert headers["Referer"] == "https://tv.naver.com/"
         assert _needs_headered_direct_stream(page_url, media_url, headers)
         assert "naver.net" in _DOH_CDN_SUFFIXES
+
+
+class TestPublicUrlGuards:
+    def test_rejects_private_ip_literals(self):
+        from fastapi import HTTPException
+        from main import _assert_public_http_url
+
+        with pytest.raises(HTTPException) as exc:
+            _assert_public_http_url("http://127.0.0.1:8765/health")
+
+        assert exc.value.status_code == 400
+        assert "private-network" in str(exc.value.detail)
+
+    def test_rejects_hosts_resolving_to_private_ips(self, monkeypatch):
+        from fastapi import HTTPException
+        from main import _assert_public_http_url
+
+        monkeypatch.setattr(
+            "main.socket.getaddrinfo",
+            lambda *args, **kwargs: [(None, None, None, None, ("10.0.0.8", 443))],
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            _assert_public_http_url("https://media.example.com/video.mp4")
+
+        assert exc.value.status_code == 400
+        assert "private-network" in str(exc.value.detail)
+
+    def test_accepts_hosts_resolving_to_public_ips(self, monkeypatch):
+        from main import _assert_public_http_url
+
+        monkeypatch.setattr(
+            "main.socket.getaddrinfo",
+            lambda *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 443))],
+        )
+
+        assert _assert_public_http_url("https://media.example.com/video.mp4") == "https://media.example.com/video.mp4"
+
+
+class TestLocalHelperSecurity:
+    @staticmethod
+    def _load_helper():
+        path = Path(__file__).resolve().parents[2] / "scripts" / "local-youtube-helper.py"
+        spec = importlib.util.spec_from_file_location("fcdl_local_helper_test", path)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_allows_extension_and_configured_web_origins(self, monkeypatch):
+        helper = self._load_helper()
+
+        class FakeHandler:
+            def __init__(self, origin: str):
+                self.headers = {"Origin": origin}
+
+        monkeypatch.setenv("FCDL_LOCAL_HELPER_ORIGINS", "https://fcdl.example")
+
+        assert helper._allowed_origin(FakeHandler("chrome-extension://abc_123")) == "chrome-extension://abc_123"
+        assert helper._allowed_origin(FakeHandler("moz-extension://abc-123")) == "moz-extension://abc-123"
+        assert helper._allowed_origin(FakeHandler("http://localhost:8080")) == "http://localhost:8080"
+        assert helper._allowed_origin(FakeHandler("https://fcdl.example")) == "https://fcdl.example"
+        assert helper._allowed_origin(FakeHandler("https://evil.example")) is None
+
+    def test_missing_ffmpeg_checksum_fails_closed(self, monkeypatch, tmp_path):
+        helper = self._load_helper()
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, _size=-1):
+                if getattr(self, "_done", False):
+                    return b""
+                self._done = True
+                return b"not a trusted binary"
+
+        monkeypatch.delenv("FCDL_ALLOW_UNVERIFIED_FFMPEG", raising=False)
+        monkeypatch.setattr(helper.urllib.request, "urlopen", lambda *args, **kwargs: FakeResponse())
+
+        target = tmp_path / "ffmpeg-macos-aarch64-v7.1"
+        with pytest.raises(RuntimeError, match="No trusted checksum"):
+            helper._download_ffmpeg(target)
 
 
 class TestSourceAudit:

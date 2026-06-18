@@ -38,6 +38,7 @@ FFMPEG_FILENAMES = {
 FFMPEG_SHA256 = {
     "ffmpeg-win-x86_64-v7.1.exe": "2ce797a0f88d7f067180338fb227f7b1928ea727bd9a4d7a1d022f7c52af71a3",
 }
+EXTENSION_ORIGIN_RE = re.compile(r"^(chrome|moz|safari-web|edge)-extension://[A-Za-z0-9_-]+$")
 
 
 def _ffmpeg_path() -> str:
@@ -203,6 +204,11 @@ def _download_ffmpeg(target: Path) -> Path:
             shutil.copyfileobj(response, fh, length=1024 * 1024)
 
         expected = FFMPEG_SHA256.get(filename)
+        if not expected and os.environ.get("FCDL_ALLOW_UNVERIFIED_FFMPEG") != "1":
+            raise RuntimeError(
+                f"No trusted checksum is configured for {filename}; install ffmpeg "
+                "manually or set FCDL_ALLOW_UNVERIFIED_FFMPEG=1 to opt in."
+            )
         if expected and _sha256(tmp).lower() != expected:
             raise RuntimeError("Downloaded ffmpeg checksum did not match the expected hash")
 
@@ -230,12 +236,39 @@ def _yt_dlp_command(args: list[str]) -> list[str]:
     return [_python_path(), "-m", "yt_dlp", *args]
 
 
+def _allowed_origin(handler: BaseHTTPRequestHandler) -> str | None:
+    origin = (handler.headers.get("Origin") or "").strip()
+    if not origin:
+        return None
+    if EXTENSION_ORIGIN_RE.match(origin):
+        return origin
+    try:
+        parsed = urllib.parse.urlparse(origin)
+    except Exception:
+        return None
+    if parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
+        return origin
+    configured = {
+        item.strip().rstrip("/")
+        for item in os.environ.get("FCDL_LOCAL_HELPER_ORIGINS", "").split(",")
+        if item.strip()
+    }
+    return origin if origin.rstrip("/") in configured else None
+
+
+def _send_cors_headers(handler: BaseHTTPRequestHandler) -> None:
+    origin = _allowed_origin(handler)
+    if origin:
+        handler.send_header("Access-Control-Allow-Origin", origin)
+        handler.send_header("Vary", "Origin")
+
+
 def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", "*")
+    _send_cors_headers(handler)
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -395,14 +428,25 @@ def _query(qs: dict[str, list[str]], key: str) -> str:
 class Handler(BaseHTTPRequestHandler):
     server_version = "FCDownloaderLocalHelper/2.0"
 
+    def _reject_bad_origin(self) -> bool:
+        origin = (self.headers.get("Origin") or "").strip()
+        if origin and not _allowed_origin(self):
+            _json(self, 403, {"error": "origin is not allowed"})
+            return True
+        return False
+
     def do_OPTIONS(self) -> None:
+        if self._reject_bad_origin():
+            return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        _send_cors_headers(self)
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
     def do_GET(self) -> None:
+        if self._reject_bad_origin():
+            return
         parsed = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(parsed.query)
 
@@ -473,7 +517,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(path.stat().st_size))
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-            self.send_header("Access-Control-Allow-Origin", "*")
+            _send_cors_headers(self)
             self.end_headers()
             with path.open("rb") as fh:
                 shutil.copyfileobj(fh, self.wfile, length=1024 * 1024)

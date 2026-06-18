@@ -30,6 +30,7 @@ from __future__ import annotations
 import http.client
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -302,7 +303,8 @@ def _localize_ytdl_stream_urls(response: dict[str, Any], request: Request) -> di
     # Fly.io terminates TLS at the edge and forwards to the app over plain HTTP,
     # so request.base_url always carries scheme="http". Honour x-forwarded-proto
     # (set by Fly's proxy) to rewrite the scheme to "https" when appropriate.
-    forwarded_scheme = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    request_headers = getattr(request, "headers", {}) or {}
+    forwarded_scheme = request_headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
     if forwarded_scheme in ("https", "http"):
         parsed_base = urllib.parse.urlparse(base)
         base = urllib.parse.urlunparse((forwarded_scheme,) + parsed_base[1:])
@@ -327,6 +329,71 @@ def _localize_ytdl_stream_urls(response: dict[str, Any], request: Request) -> di
         if key in localized:
             localized[key] = localize(localized[key])
     return localized
+
+
+def _is_public_ip(value: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _assert_public_http_url(url: str) -> str:
+    url = normalize_url(url)
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(400, "url must be absolute public http(s)")
+
+    host = parsed.hostname
+    try:
+        ip = ipaddress.ip_address(host)
+        if not _is_public_ip(str(ip)):
+            raise HTTPException(400, "private-network URLs are not allowed")
+        return url
+    except ValueError:
+        pass
+
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise HTTPException(400, f"could not resolve host: {safe_text(exc)[:120]}")
+
+    resolved = {info[4][0] for info in infos}
+    if not resolved or any(not _is_public_ip(ip) for ip in resolved):
+        raise HTTPException(400, "private-network URLs are not allowed")
+    return url
+
+
+class _PublicHTTPRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        _assert_public_http_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_PUBLIC_URL_OPENER = urllib.request.build_opener(_PublicHTTPRedirectHandler)
+
+
+def _urlopen_public(req_or_url: urllib.request.Request | str, timeout: float) -> Any:
+    target = req_or_url.full_url if isinstance(req_or_url, urllib.request.Request) else req_or_url
+    _assert_public_http_url(target)
+    return _PUBLIC_URL_OPENER.open(req_or_url, timeout=timeout)
 
 
 def _to_response(info: dict[str, Any]) -> dict[str, Any]:
@@ -687,6 +754,7 @@ def _fetch_page_content(req: ExtractRequest) -> tuple[str | None, str, str | Non
     response header value (used for feed auto-discovery on podcast hosts that
     don't include <link rel="alternate"> in their HTML).
     """
+    req.pageUrl = _assert_public_http_url(req.pageUrl)
     if not universal.should_fetch_page_html(req.pageUrl):
         return None, "", None
     headers = safe_headers({
@@ -701,7 +769,7 @@ def _fetch_page_content(req: ExtractRequest) -> tuple[str | None, str, str | Non
     for _attempt in range(2):
         try:
             request = urllib.request.Request(req.pageUrl, headers=headers, method="GET")
-            with urllib.request.urlopen(request, timeout=_UNIVERSAL_PAGE_FETCH_TIMEOUT) as resp:
+            with _urlopen_public(request, timeout=_UNIVERSAL_PAGE_FETCH_TIMEOUT) as resp:
                 status = int(getattr(resp, "status", 200) or 200)
                 if status >= 400:
                     return None, "", None
@@ -1224,11 +1292,11 @@ def _resolve_a_records(host: str) -> list[str]:
 
 
 def _open_direct_media(url: str, headers: dict[str, str]) -> Any:
-    url = normalize_url(url)
+    url = _assert_public_http_url(url)
     headers = safe_headers(headers)
     try:
         req = urllib.request.Request(url, headers=headers)
-        return urllib.request.urlopen(req, timeout=30)
+        return _urlopen_public(req, timeout=30)
     except urllib.error.URLError as exc:
         host = urllib.parse.urlparse(url).hostname or ""
         if host.endswith(_DOH_CDN_SUFFIXES):
@@ -1644,7 +1712,7 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
                                 "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*;q=0.8",
                             },
                         )
-                        with urllib.request.urlopen(_hfl_req, timeout=8) as _hfl_resp:
+                        with _urlopen_public(_hfl_req, timeout=8) as _hfl_resp:
                             _hfl_text = _hfl_resp.read(1_500_000).decode("utf-8", errors="replace")
                             _hfl_ct = safe_text(_hfl_resp.headers.get("Content-Type", ""))
                         if universal.is_feed_content_type(_hfl_ct) or universal.looks_like_feed_text(_hfl_text):
@@ -1667,7 +1735,7 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
                     if req.cookies:
                         _can_hdrs["Cookie"] = safe_header_value("Cookie", req.cookies)
                     _can_req = urllib.request.Request(_canonical_url, headers=safe_headers(_can_hdrs))
-                    with urllib.request.urlopen(_can_req, timeout=10) as _can_resp:
+                    with _urlopen_public(_can_req, timeout=10) as _can_resp:
                         _can_text = _can_resp.read(1_500_000).decode("utf-8", errors="replace")
                     _can_result = universal.extract_universal_from_html(_canonical_url, _can_text)
                     if _can_result and universal.has_video_or_audio(_can_result):
@@ -1688,7 +1756,7 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
                             "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*;q=0.8",
                         },
                     )
-                    with urllib.request.urlopen(_fl_req, timeout=8) as _fl_resp:
+                    with _urlopen_public(_fl_req, timeout=8) as _fl_resp:
                         _fl_text = _fl_resp.read(1_500_000).decode("utf-8", errors="replace")
                         _fl_ct = safe_text(_fl_resp.headers.get("Content-Type", ""))
                     if universal.is_feed_content_type(_fl_ct):
@@ -1733,7 +1801,7 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
                         _oembed_url,
                         headers={"Accept": "application/json", "User-Agent": MOBILE_UA},
                     )
-                    with urllib.request.urlopen(_oe_req, timeout=8) as _oe_resp:
+                    with _urlopen_public(_oe_req, timeout=8) as _oe_resp:
                         _oe_data = json.loads(_oe_resp.read(65_536))
                     if isinstance(_oe_data, dict):
                         _oe_html = safe_text(_oe_data.get("html", ""))
@@ -1771,7 +1839,7 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
                     if req.cookies:
                         _rf_hdrs["Cookie"] = safe_header_value("Cookie", req.cookies)
                     _rf_req = urllib.request.Request(_refresh_url, headers=safe_headers(_rf_hdrs))
-                    with urllib.request.urlopen(_rf_req, timeout=10) as _rf_resp:
+                    with _urlopen_public(_rf_req, timeout=10) as _rf_resp:
                         _rf_text = _rf_resp.read(1_500_000).decode("utf-8", errors="replace")
                     _rf_result = universal.extract_universal_from_html(_refresh_url, _rf_text)
                     if _rf_result and universal.has_video_or_audio(_rf_result):
@@ -2392,10 +2460,8 @@ def _proxy_stream(
     filename: str | None,
     replay_headers: dict[str, str] | None = None,
 ) -> StreamingResponse:
-    url = normalize_url(url)
+    url = _assert_public_http_url(url)
     referer = normalize_url(referer) if referer else None
-    if not url.startswith(("http://", "https://")):
-        raise HTTPException(400, "url must be absolute http(s)")
 
     headers = safe_headers({**_default_proxy_headers(url, referer), **safe_headers(replay_headers or {})})
     if cookies:
@@ -2403,7 +2469,7 @@ def _proxy_stream(
 
     try:
         req = urllib.request.Request(url, headers=headers)
-        upstream = urllib.request.urlopen(req, timeout=30)
+        upstream = _urlopen_public(req, timeout=30)
     except urllib.error.HTTPError as exc:  # type: ignore[attr-defined]
         body = ""
         try:

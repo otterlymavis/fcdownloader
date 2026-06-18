@@ -96,6 +96,11 @@ Comma-separate multiple origins:
    to the configured backend `POST /extract` and `GET /download?url=...`.
 5. The preview card shows the best available route, title, duration, and kind.
 
+For the local Companion helper, browser requests are accepted only from extension
+origins, localhost development pages, or origins listed in
+`FCDL_LOCAL_HELPER_ORIGINS` (comma-separated, for example
+`https://your-frontend.vercel.app`).
+
 ## Supported routes
 
 The configured backend supports major video/social sites such as YouTube,
