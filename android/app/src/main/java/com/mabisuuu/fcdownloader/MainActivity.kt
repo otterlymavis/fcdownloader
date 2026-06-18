@@ -28,17 +28,25 @@ class MainActivity : ReactActivity() {
   }
 
   /**
-   * When the app is opened from the system share sheet (ACTION_SEND, text/plain),
+   * When the app is opened from the system share sheet (ACTION_SEND, text/*),
    * Android delivers the shared text in EXTRA_TEXT — which React Native's Linking
    * does NOT surface. Rewrite the intent into the fcdownloader://share?url=... deep
-   * link the JS already handles, so sharing a link from any app drops it straight
-   * into the paste box. Shared text like "caption https://..." is reduced to the URL.
+   * link the JS already handles. Shared text like "caption https://..." is reduced
+   * to the URL.
    */
   private fun rewriteSendIntent(intent: Intent?) {
     if (intent?.action != Intent.ACTION_SEND) return
-    val shared = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim() ?: return
+    val shared = listOfNotNull(
+      intent.getStringExtra(Intent.EXTRA_TEXT),
+      intent.getStringExtra(Intent.EXTRA_HTML_TEXT),
+      intent.getStringExtra(Intent.EXTRA_SUBJECT)
+    ).joinToString(" ").trim()
     if (shared.isEmpty()) return
-    val url = Regex("https?://\\S+").find(shared)?.value ?: shared
+    val url = Regex("https?://[^\\s<>\"'`\\\\]+")
+      .find(shared)
+      ?.value
+      ?.trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}', '>', '\'', '"')
+      ?: return
     intent.action = Intent.ACTION_VIEW
     intent.data = Uri.parse("fcdownloader://share?url=" + Uri.encode(url))
   }

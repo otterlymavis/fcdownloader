@@ -160,9 +160,31 @@ export const INJECTED_SCRIPT = `
     return results;
   }
 
+  function enableInlinePlayback(el) {
+    try {
+      if (!el || String(el.tagName || '').toUpperCase() !== 'VIDEO') return;
+      el.setAttribute('playsinline', '');
+      el.setAttribute('webkit-playsinline', '');
+      el.playsInline = true;
+      el.webkitPlaysInline = true;
+    } catch (_) {}
+  }
+
+  try {
+    var _origCreateElement = Document.prototype.createElement;
+    Document.prototype.createElement = function (name, options) {
+      var el = arguments.length > 1
+        ? _origCreateElement.call(this, name, options)
+        : _origCreateElement.call(this, name);
+      if (String(name || '').toLowerCase() === 'video') enableInlinePlayback(el);
+      return el;
+    };
+  } catch (_) {}
+
   function emitElementMedia(el) {
     if (!el) return;
     var tag = String(el.tagName || '').toUpperCase();
+    enableInlinePlayback(el);
     if (tag === 'TRACK') {
       var trackKind = String((el.getAttribute && el.getAttribute('kind')) || el.kind || '').toLowerCase();
       if (/^(?:subtitles|captions|descriptions?)$/.test(trackKind)) {

@@ -1,5 +1,5 @@
 import React, { forwardRef } from 'react';
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import WebView, {
   WebViewMessageEvent,
   WebViewNavigation,
@@ -12,6 +12,10 @@ import { INJECTED_SCRIPT } from '../constants/injectedScript';
 const MOBILE_UA =
   'Mozilla/5.0 (Linux; Android 13; Pixel 7) ' +
   'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36';
+
+const IOS_UA =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) ' +
+  'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
 
 const DESKTOP_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ' +
@@ -56,7 +60,13 @@ const BrowserView = forwardRef<WebView, Props>(
     // schemes silently, so this is effectively an Android fix.
     const handleShouldStart = (request: ShouldStartLoadRequest): boolean =>
       /^(?:https?|about|data|blob):/i.test(request.url || '');
-    const ua = isXhsUrl(initialUrl) ? XHS_UA : desktopMode ? DESKTOP_UA : MOBILE_UA;
+    const ua = isXhsUrl(initialUrl)
+      ? XHS_UA
+      : desktopMode
+      ? DESKTOP_UA
+      : Platform.OS === 'ios'
+      ? IOS_UA
+      : MOBILE_UA;
     const reload = () => {
       if (typeof ref !== 'function') ref?.current?.reload();
     };

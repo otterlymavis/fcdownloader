@@ -2,8 +2,8 @@ import { DetectedMedia, FormatOption } from '../types';
 
 const SOURCE_NAMES: Array<[RegExp, string]> = [
   [/video\.twimg\.com|twimg\.com/i, 'Twitter'],
+  [/threads\.(?:net|com)|threadscdn\.com/i, 'Threads'],
   [/cdninstagram\.com|instagram\.com/i, 'Instagram'],
-  [/threads\.net/i, 'Threads'],
   [/vimeocdn\.com|vimeo\.com/i, 'Vimeo'],
   [/tiktokcdn\.com|tiktokcdn-us\.com|v\d+-webapp\.tiktok\.com|tiktok\.com/i, 'TikTok'],
   [/v\.redd\.it|reddit\.com/i, 'Reddit'],
@@ -82,7 +82,12 @@ const YT_ITAG_RANK: Record<number, number> = {
   17: 20,
 };
 
-export function getSourceName(url: string, mediaKind?: string): string {
+export function getSourceName(url: string, mediaKind?: string, pageUrl?: string): string {
+  if (pageUrl) {
+    for (const [pattern, name] of SOURCE_NAMES) {
+      if (pattern.test(pageUrl)) return name;
+    }
+  }
   for (const [pattern, name] of SOURCE_NAMES) {
     if (pattern.test(url)) return name;
   }
@@ -304,7 +309,7 @@ export function smartDedup(items: DetectedMedia[]): DetectedMedia[] {
     const urlScore = getQualityScore(item.url);
     if (urlScore < 0) continue;
     const score = urlScore * (1 + (item.confidence ?? 0.5) * 0.2);
-    const key = getVideoGroupKey(item.url);
+    const key = getMediaGroupKey(item);
     if (!key) {
       ungrouped.push(item);
       continue;
@@ -315,7 +320,8 @@ export function smartDedup(items: DetectedMedia[]): DetectedMedia[] {
   return [...Array.from(grouped.values()).map((entry) => entry.item), ...ungrouped];
 }
 
-function getVideoGroupKey(url: string): string | null {
+export function getMediaGroupKey(item: DetectedMedia): string | null {
+  const url = item.url;
   try {
     if (YT_CDN_RE.test(url)) {
       const id = new URL(url).searchParams.get('id');
@@ -325,10 +331,71 @@ function getVideoGroupKey(url: string): string | null {
     if (ytManifest) return `ytm_${ytManifest[1]}`;
     const twitterMatch = url.match(TW_VIDEO_RE);
     if (twitterMatch) return `tw_${twitterMatch[1]}`;
+    if (isManifestCandidate(item)) {
+      const pageKey = getPageGroupKey(item.sourcePageUrl || item.pageUrl);
+      const manifestKey = getManifestFamilyKey(item.url);
+      if (pageKey && manifestKey) return `manifest_${pageKey}_${manifestKey}_${getMediaKind(item)}`;
+    }
     return null;
   } catch {
     return null;
   }
+}
+
+function isManifestCandidate(item: DetectedMedia): boolean {
+  const url = item.url.toLowerCase();
+  const mimeType = String(item.mimeType || '').toLowerCase();
+  return item.mediaType === 'hls' ||
+    item.mediaType === 'dash' ||
+    /\.m3u8?(?:[?#]|$)/i.test(url) ||
+    /\.mpd(?:[?#]|$)/i.test(url) ||
+    /mpegurl|m3u8|dash|mpd/.test(mimeType);
+}
+
+function getPageGroupKey(url?: string): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (!/^https?:$/i.test(parsed.protocol)) return null;
+    parsed.hash = '';
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
+function getManifestFamilyKey(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname
+      .split('/')
+      .filter(Boolean)
+      .map((segment) => {
+        try { return decodeURIComponent(segment).toLowerCase(); } catch { return segment.toLowerCase(); }
+      });
+    if (segments.length === 0) return `${parsed.origin}/`;
+
+    const last = segments[segments.length - 1] || '';
+    const genericManifestFile = /^(?:master|index|playlist|manifest|chunklist|prog_index)(?:[-_.][\w-]+)?\.(?:m3u8?|mpd)$/i.test(last);
+    if (genericManifestFile) {
+      segments.pop();
+    } else if (/\.(?:m3u8?|mpd)$/i.test(last)) {
+      segments[segments.length - 1] = last.replace(/\.(?:m3u8?|mpd)$/i, '');
+    }
+
+    while (segments.length > 1 && isRenditionPathSegment(segments[segments.length - 1])) {
+      segments.pop();
+    }
+
+    return `${parsed.origin}/${segments.join('/')}`;
+  } catch {
+    return null;
+  }
+}
+
+function isRenditionPathSegment(segment?: string): boolean {
+  if (!segment) return false;
+  return /^(?:\d{3,4}p|[0-9]{2,5}x[0-9]{2,5}|[0-9]{2,6}k|[0-9]{3,8}|low|lo|med|medium|mid|high|hi|sd|hd|fhd|uhd|audio|video|avc1|hev1|h264|h265)$/i.test(segment);
 }
 
 function getQualityScore(url: string): number {

@@ -593,9 +593,17 @@ def _decode_replay_headers(encoded: str | None) -> dict[str, str]:
 def _direct_media_url_kind(url: str) -> str:
     parsed = urllib.parse.urlparse(url)
     path = parsed.path.lower()
+    host = (parsed.hostname or "").lower()
     if looks_like_hls(url, None) or path.endswith((".m3u", ".m3u8")):
         return "hls"
     if path.endswith((".mp4", ".m4v", ".webm", ".mov", ".mp3", ".m4a", ".aac", ".wav", ".ogg", ".opus", ".flac")):
+        return "direct"
+    if any(h in host for h in (
+        "cdninstagram.com", "fbcdn.net", "threadscdn.com",
+        "video.twimg.com", "tiktokcdn.com", "tiktokcdn-us.com",
+        "weibocdn.com", "xhscdn.com", "akamaized.net", "cloudfront.net",
+        "jwpcdn.com", "jwplatform.com", "kaltura.com", "mux.com", "mux.dev",
+    )):
         return "direct"
     return ""
 

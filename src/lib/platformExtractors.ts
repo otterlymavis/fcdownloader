@@ -572,8 +572,12 @@ async function extractTwitter(pageUrl: string): Promise<DetectedMedia[]> {
 // ── Instagram / Threads ───────────────────────────────────────────
 async function extractInstagram(pageUrl: string): Promise<DetectedMedia[]> {
   try {
-    const serverItems = await extractViaServer(pageUrl);
-    if (serverItems.length > 0) return serverItems;
+    try {
+      const serverItems = await extractViaServer(pageUrl);
+      if (serverItems.length > 0) return serverItems;
+    } catch (e) {
+      debugWarn('[extractInstagram] server extractor errored:', String(e).slice(0, 200));
+    }
 
     const html = await fetchHtml(pageUrl, MOBILE_UA);
     const results: DetectedMedia[] = [];

@@ -19,6 +19,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import * as Linking from 'expo-linking';
+import * as Clipboard from 'expo-clipboard';
 
 import BrowserView from './src/components/BrowserView';
 import Toast, { ToastMessage } from './src/components/Toast';
@@ -67,6 +68,7 @@ import {
 import { decideUniversalResultHandling } from './src/lib/universalResultPicker';
 import { inspectUniversalManifestCandidates } from './src/lib/universalManifestInspector';
 import { verifyUniversalDirectCandidates } from './src/lib/universalUrlVerifier';
+import { extractFirstUrl, extractSharedUrlFromDeepLink } from './src/lib/shareUrl';
 
 // ── Layout constants ──────────────────────────────────────────
 // ── Ripple ────────────────────────────────────────────────────
@@ -102,13 +104,38 @@ function getBookmarkInitials(domain: string): string {
   return domain.charAt(0).toUpperCase();
 }
 
-function getPlatformColor(url: string): string {
-  const lower = url.toLowerCase();
+function mediaPageUrl(item: DetectedMedia): string {
+  return item.sourcePageUrl || item.pageUrl || item.url;
+}
+
+function mediaSourceName(item: DetectedMedia): string {
+  return getSourceName(item.url, item.mediaKind, mediaPageUrl(item));
+}
+
+function isThreadsPageUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === 'threads.net' || host === 'www.threads.net'
+      || host === 'threads.com' || host === 'www.threads.com';
+  } catch {
+    return /threads\.(?:net|com)\//i.test(url);
+  }
+}
+
+function shouldPickThreadsCandidates(pageUrl: string, items: DetectedMedia[]): boolean {
+  return isThreadsPageUrl(pageUrl) && items.length > 1;
+}
+
+function getPlatformColor(item: DetectedMedia): string {
+  const lower = `${item.url} ${mediaPageUrl(item)}`.toLowerCase();
   if (lower.includes('youtube') || lower.includes('youtu.be')) {
     return '#A855F7'; // YouTube purple/violet
   }
   if (lower.includes('tiktok')) {
     return '#06B6D4'; // TikTok cyan/blue
+  }
+  if (lower.includes('threads.')) {
+    return '#111111';
   }
   if (lower.includes('instagram')) {
     return '#E1306C'; // Instagram pink/red
@@ -310,6 +337,16 @@ export default function App() {
       const items = await verifyUniversalDirectCandidates(result.strategy, inspected);
       const decision = decideUniversalResultHandling(result.strategy, items);
       if (decision.action === 'enqueue') {
+        if (shouldPickThreadsCandidates(targetUrl, decision.items)) {
+          addDetectedItems(decision.items);
+          setPasteUrl('');
+          setLoadedUrl(targetUrl);
+          setBrowserInput(targetUrl);
+          setUniversalPickerOpen(true);
+          setVideosOpen(true);
+          showToast(translate('mediaItemsFound', resolvedLangRef.current, { count: decision.items.length }), 'info');
+          return;
+        }
         for (const item of decision.items) await enqueue(item);
         setPasteUrl('');
         showToast(
@@ -376,12 +413,14 @@ export default function App() {
         return;
       }
       if (parsed.path === 'share' || parsed.hostname === 'share') {
-        const mediaUrl = parsed.queryParams?.url ? String(parsed.queryParams.url) : null;
+        const mediaUrl = extractSharedUrlFromDeepLink(raw, parsed.queryParams);
         if (mediaUrl) {
           setPasteUrl(mediaUrl);
           setTab('home');
           showToast(translate('linkReceived', resolvedLangRef.current), 'success');
           startDownloadAndExtraction(mediaUrl);
+        } else {
+          showToast(translate('failedError', resolvedLangRef.current, { error: 'No link found in shared content' }), 'error');
         }
       }
     } catch {}
@@ -526,6 +565,13 @@ export default function App() {
       const items = await verifyUniversalDirectCandidates(result.strategy, inspected);
       const decision = decideUniversalResultHandling(result.strategy, items);
       if (decision.action === 'enqueue') {
+        if (shouldPickThreadsCandidates(url, decision.items)) {
+          addDetectedItems(decision.items);
+          setUniversalPickerOpen(true);
+          setVideosOpen(true);
+          showToast(translate('mediaItemsFound', resolvedLangRef.current, { count: decision.items.length }), 'info');
+          return;
+        }
         for (const item of decision.items) await enqueue(item);
         showToast(
           decision.items.length === 1
@@ -567,6 +613,12 @@ export default function App() {
   }, [extractBrowserPage]);
 
   // ── Home: paste → download ────────────────────────────────
+  const handleHomePaste = useCallback(async () => {
+    const text = await Clipboard.getStringAsync();
+    if (!text.trim()) return;
+    setPasteUrl(extractFirstUrl(text));
+  }, []);
+
   const handleHomeDownload = useCallback(() => {
     startDownloadAndExtraction(pasteUrl);
   }, [pasteUrl, startDownloadAndExtraction]);
@@ -741,13 +793,7 @@ export default function App() {
         {tab === 'home' && (
           <View style={s.flex}>
             <View style={s.homeLogoContainer}>
-              <View style={[
-                s.logoGlowWrap,
-                {
-                  backgroundColor: t.dark ? 'rgba(124, 58, 237, 0.25)' : 'rgba(245, 158, 11, 0.25)',
-                  shadowColor: t.dark ? '#7C3AED' : '#F59E0B',
-                }
-              ]}>
+              <View style={s.logoGlowWrap}>
                 <Image source={require('./assets/logo.png')} style={s.homeLogoImage} />
               </View>
               <Text style={[s.homeLogoTitle, { color: t.ink }]}>FCDownloader</Text>
@@ -772,7 +818,7 @@ export default function App() {
                     if (delta >= 6) {
                       const m = text.match(/https?:\/\/[^\s<>"'`\\]+/i);
                       if (m) {
-                        const url = m[0].replace(/[.,;:!?)\]}>'"]+$/, '');
+                        const url = extractFirstUrl(m[0]);
                         if (url !== text.trim()) {
                           setPasteUrl(url);
                           return;
@@ -790,16 +836,26 @@ export default function App() {
                   onSubmitEditing={handleHomeDownload}
                   editable={!extracting}
                 />
-                <Pressable
-                  android_ripple={{ color: 'rgba(255,255,255,0.15)', borderless: false }}
-                  style={[s.primaryBtn, { backgroundColor: t.btn }, extracting && { opacity: 0.5 }]}
-                  onPress={handleHomeDownload}
-                  disabled={extracting}
-                >
-                  <Text style={[s.primaryBtnLabel, { color: t.btnTxt, fontSize: fs(16) }]}>
-                    {extracting ? translate('finding', resolvedLanguage) : translate('download', resolvedLanguage)}
-                  </Text>
-                </Pressable>
+                <View style={s.homeActionRow}>
+                  <Pressable
+                    android_ripple={RIPPLE}
+                    style={[s.pasteBtn, { borderColor: t.sep, backgroundColor: t.card2 }, extracting && { opacity: 0.5 }]}
+                    onPress={handleHomePaste}
+                    disabled={extracting}
+                  >
+                    <Text style={[s.pasteBtnLabel, { color: t.ink, fontSize: fs(15) }]}>Paste</Text>
+                  </Pressable>
+                  <Pressable
+                    android_ripple={{ color: 'rgba(255,255,255,0.15)', borderless: false }}
+                    style={[s.primaryBtn, s.homeDownloadBtn, { backgroundColor: t.btn }, extracting && { opacity: 0.5 }]}
+                    onPress={handleHomeDownload}
+                    disabled={extracting}
+                  >
+                    <Text style={[s.primaryBtnLabel, { color: t.btnTxt, fontSize: fs(16) }]}>
+                      {extracting ? translate('finding', resolvedLanguage) : translate('download', resolvedLanguage)}
+                    </Text>
+                  </Pressable>
+                </View>
                 <Pressable onPress={() => setTab('browser')} hitSlop={S.xs} style={s.browseLink}>
                   <Text style={[s.browseLinkLabel, { color: t.ink2, fontSize: fs(13), textAlign: 'center' }]}>
                     or browse the web →
@@ -821,14 +877,14 @@ export default function App() {
                       <View key={task.id} style={[s.homeActiveRow, { backgroundColor: t.card, borderColor: t.sep, borderWidth: 1 }, subtleShadow]}>
                         <View style={[s.homeActiveHeader, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
                           <Text style={[s.homeActiveTitle, { color: t.ink, fontSize: fs(14) }]} numberOfLines={1}>
-                            {getSourceName(task.media.url)} · {Math.round(task.progress * 100)}%
+                            {mediaSourceName(task.media)} · {Math.round(task.progress * 100)}%
                           </Text>
                           <Pressable onPress={() => cancel(task.id)} hitSlop={S.xs}>
                             <Icon name="close" size={18} color={t.ink2} />
                           </Pressable>
                         </View>
                         <View style={[s.progressTrack, { backgroundColor: t.card2, marginTop: S.xs }]}>
-                          <View style={[s.progressFill, { backgroundColor: getPlatformColor(task.media.url),
+                          <View style={[s.progressFill, { backgroundColor: getPlatformColor(task.media),
                             width: `${Math.round(task.progress * 100)}%` as `${number}%` }]} />
                         </View>
                       </View>
@@ -945,15 +1001,50 @@ export default function App() {
             )}
 
             {(videoCount > 0 || mseActive) && (
-              <Pressable android_ripple={RIPPLE} style={[s.floatingBadge, { backgroundColor: t.btn }]}
-                onPress={() => { setUniversalPickerOpen(false); setVideosOpen(true); }}>
-                <Text style={[s.floatingBadgeLabel, { color: t.btnTxt }]}>
-                  {mediaCount > 0
-                    ? (mediaCount === 1
-                      ? translate('mediaItemFound', resolvedLanguage)
-                      : translate('mediaItemsFound', resolvedLanguage, { count: mediaCount }))
-                    : translate('streamDetected', resolvedLanguage)}
-                </Text>
+              <Pressable
+                android_ripple={RIPPLE}
+                style={[
+                  s.floatingBadge,
+                  {
+                    backgroundColor: t.btn,
+                    borderColor: isDark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.9)',
+                  },
+                  resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' },
+                ]}
+                onPress={() => {
+                  if (mediaCount > 0) {
+                    setUniversalPickerOpen(false);
+                    setVideosOpen(true);
+                  } else {
+                    scanBrowserPage();
+                  }
+                }}
+              >
+                <View style={[s.floatingBadgeIcon, { backgroundColor: isDark ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.18)' }]}>
+                  <Icon name={mediaCount > 0 ? 'download' : 'scan-outline'} size={20} color={t.btnTxt} />
+                </View>
+                <View style={[s.floatingBadgeText, resolvedLanguage === 'ar' && { alignItems: 'flex-end' }]}>
+                  <Text
+                    style={[s.floatingBadgeLabel, { color: t.btnTxt, fontSize: fs(15), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.82}
+                  >
+                    {mediaCount > 0
+                      ? (mediaCount === 1
+                        ? translate('mediaItemFound', resolvedLanguage)
+                        : translate('mediaItemsFound', resolvedLanguage, { count: mediaCount }))
+                      : translate('streamDetected', resolvedLanguage)}
+                  </Text>
+                  <Text style={[s.floatingBadgeHint, { color: t.btnTxt, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
+                    {mediaCount > 0 ? translate('chooseMediaToDownload', resolvedLanguage) : translate('scanningPage', resolvedLanguage)}
+                  </Text>
+                </View>
+                <View style={[s.floatingBadgeAction, { backgroundColor: isDark ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.18)' }]}>
+                  <Text style={[s.floatingBadgeActionText, { color: t.btnTxt, fontSize: fs(13) }]}>
+                    {mediaCount > 0 ? translate('download', resolvedLanguage) : translate('scan', resolvedLanguage)}
+                  </Text>
+                </View>
               </Pressable>
             )}
 
@@ -963,6 +1054,7 @@ export default function App() {
                 android_ripple={{ color: 'rgba(255,255,255,0.2)', borderless: true }}
                 style={[s.bmFab, {
                   backgroundColor: isSaved(loadedUrl, bookmarks) ? t.btn : t.card,
+                  ...(videoCount > 0 || mseActive ? { bottom: 156 } : null),
                   ...(IS_IOS
                     ? { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } }
                     : { elevation: 5 }),
@@ -1104,7 +1196,7 @@ export default function App() {
                       : task.status === 'fetching_manifest' ? translate('readingStream', resolvedLanguage)
                       : translate('starting', resolvedLanguage);
                     const showThumbnail = getMediaKind(task.media) === 'video' || getMediaKind(task.media) === 'image';
-                    const source = getSourceName(task.media.url);
+                    const source = mediaSourceName(task.media);
                     return (
                       <View key={task.id} style={[s.libraryCard, { backgroundColor: t.card }, subtleShadow]}>
                         <View style={s.libraryCardLeft}>
@@ -1160,7 +1252,7 @@ export default function App() {
                 </Text>
               )}
               {filteredHistory.map((task) => {
-                const source      = getSourceName(task.media.url);
+                const source      = mediaSourceName(task.media);
                 const quality     = getQuality(task.media.url, task.media.label);
                 const resolution  = getMediaResolution(task.media);
                 const size        = fileSizes[task.id];
@@ -1531,11 +1623,11 @@ export default function App() {
                 <View style={s.previewAvatar}>
                   <View style={[s.previewAvatarCircle, { backgroundColor: t.card }]}>
                     <Text style={[s.previewAvatarText, { color: t.ink }]}>
-                      {getInitial(getSourceName(previewItem.url))}
+                      {getInitial(mediaSourceName(previewItem))}
                     </Text>
                   </View>
                   <Text style={[s.previewSource, { color: t.ink, fontSize: fs(18) }]}>
-                    {getSourceName(previewItem.url)}
+                    {mediaSourceName(previewItem)}
                   </Text>
                   {(() => {
                     let domain = '';
@@ -1666,7 +1758,7 @@ export default function App() {
                   </View>
                 )}
                 {allVideos.map((item) => {
-                  const source  = getSourceName(item.url);
+                  const source  = mediaSourceName(item);
                   const quality = getQuality(item.url, item.label) || getMediaFormat(item);
                   const resolution = getMediaResolution(item);
                   const candidateDetails = candidateSourceDetails(item);
@@ -1827,13 +1919,8 @@ const s = StyleSheet.create({
   logoGlowWrap: {
     width: 110,
     height: 110,
-    borderRadius: 55,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowRadius: 20,
-    shadowOpacity: 0.6,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 5,
   },
   homeLogoImage: {
     width: 80,
@@ -1865,6 +1952,23 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   primaryBtnLabel: { fontWeight: '600' },
+  homeActionRow: {
+    flexDirection: 'row',
+    gap: S.sm,
+  },
+  homeDownloadBtn: {
+    flex: 1,
+  },
+  pasteBtn: {
+    minWidth: 96,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: S.md,
+  },
+  pasteBtnLabel: { fontWeight: '600' },
   secondaryBtn: {
     height: 48,
     borderRadius: R.md,
@@ -1967,17 +2071,51 @@ const s = StyleSheet.create({
   },
   floatingBadge: {
     position: 'absolute',
-    bottom: 20,
-    alignSelf: 'center',
+    bottom: 84,
+    left: S.md,
+    right: S.md,
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: S.sm,
     paddingHorizontal: S.md,
-    paddingVertical: S.sm,
-    borderRadius: 100,
-    zIndex: 10,
+    paddingVertical: S.sm + 2,
+    borderRadius: R.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    zIndex: 20,
     ...(IS_IOS
-      ? { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } }
-      : { elevation: 4 }),
+      ? { shadowColor: '#000', shadowOpacity: 0.28, shadowRadius: 18, shadowOffset: { width: 0, height: 8 } }
+      : { elevation: 8 }),
   },
-  floatingBadgeLabel: { fontSize: 13, fontWeight: '600' },
+  floatingBadgeIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  floatingBadgeText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  floatingBadgeLabel: { fontWeight: '800' },
+  floatingBadgeHint: {
+    fontSize: 11,
+    fontWeight: '500',
+    opacity: 0.72,
+  },
+  floatingBadgeAction: {
+    minWidth: 82,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: S.sm + 2,
+    flexShrink: 0,
+  },
+  floatingBadgeActionText: { fontWeight: '800' },
 
   activeStrip:    { paddingHorizontal: S.md, paddingVertical: S.sm, borderTopWidth: StyleSheet.hairlineWidth, gap: S.xs },
   activeStripBar: { height: 2, borderRadius: 1, overflow: 'hidden' },

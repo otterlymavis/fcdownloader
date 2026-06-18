@@ -1,5 +1,5 @@
 import { DetectedMedia } from '../types';
-import { getMediaKind, smartDedup } from './mediaHelpers';
+import { getMediaGroupKey, getMediaKind, smartDedup } from './mediaHelpers';
 
 export type UniversalResultDecision =
   | { action: 'none'; items: [] }
@@ -41,9 +41,36 @@ export function sortUniversalCandidates(items: DetectedMedia[]): DetectedMedia[]
   });
 }
 
+function collapseEquivalentCandidates(items: DetectedMedia[]): DetectedMedia[] {
+  const grouped = new Map<string, DetectedMedia>();
+  const output: DetectedMedia[] = [];
+  for (const item of items) {
+    const key = getMediaGroupKey(item);
+    if (!key) {
+      output.push(item);
+      continue;
+    }
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, item);
+      output.push(item);
+      continue;
+    }
+    const currentBest = sortUniversalCandidates([existing, item])[0] ?? existing;
+    if (currentBest.id === existing.id) continue;
+    grouped.set(key, item);
+    const idx = output.findIndex((candidate) => candidate.id === existing.id);
+    if (idx >= 0) output[idx] = item;
+  }
+  return output;
+}
+
 export function decideUniversalResultHandling(strategy: string | undefined, items: DetectedMedia[]): UniversalResultDecision {
   if (items.length === 0) return { action: 'none', items: [] };
-  if (!isUniversalExtractionStrategy(strategy)) return { action: 'enqueue', items };
+  if (!isUniversalExtractionStrategy(strategy)) {
+    const collapsed = collapseEquivalentCandidates(items);
+    return collapsed.length > 0 ? { action: 'enqueue', items: collapsed } : { action: 'none', items: [] };
+  }
 
   const sorted = sortUniversalCandidates(items);
   if (sorted.length <= 1) return { action: 'enqueue', items: sorted };

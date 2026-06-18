@@ -28,7 +28,7 @@ const APP_GROUP      = `group.${BUNDLE_ID}`;
 const APP_SCHEME     = 'fcdownloader';
 const DEPLOYMENT_TARGET = '15.1';
 const VERSION = '1.5.20';
-const BUILD_NUMBER = '25';
+const BUILD_NUMBER = '26';
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
@@ -48,45 +48,74 @@ class ShareViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // Transparent background so iOS shows the sheet on top of Safari
         view.backgroundColor = UIColor.black.withAlphaComponent(0)
         extractURL { [weak self] url in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let url = url { self.showSheet(for: url) }
-                else             { self.done() }
+                else             { self.showNoLinkAlert() }
             }
         }
     }
 
     // ── URL extraction ────────────────────────────────────────────
 
+    private func firstURL(from text: String?) -> URL? {
+        guard var value = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+
+        let pattern = #"https?://[^\\s<>"'\`\\\\]+"#
+        if let range = value.range(of: pattern, options: .regularExpression) {
+            value = String(value[range])
+        }
+
+        value = value.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?)\\\\]}>'\\""))
+        return URL(string: value)
+    }
+
     private func extractURL(completion: @escaping (URL?) -> Void) {
         guard let item = extensionContext?.inputItems.first as? NSExtensionItem else {
             return completion(nil)
         }
 
+        if let url = firstURL(from: item.attributedContentText?.string)
+            ?? firstURL(from: item.attributedTitle?.string) {
+            return completion(url)
+        }
+
         // Try URL type first, then plain text (some pages share as text)
         let typeIds: [String]
         if #available(iOS 14.0, *) {
-            typeIds = [UTType.url.identifier, UTType.plainText.identifier]
+            typeIds = [UTType.url.identifier, UTType.plainText.identifier, UTType.text.identifier]
         } else {
-            typeIds = [kUTTypeURL as String, kUTTypePlainText as String]
+            typeIds = [kUTTypeURL as String, kUTTypePlainText as String, kUTTypeText as String]
         }
 
+        var candidates: [(NSItemProvider, String)] = []
         for attachment in item.attachments ?? [] {
             for typeId in typeIds {
                 guard attachment.hasItemConformingToTypeIdentifier(typeId) else { continue }
-                attachment.loadItem(forTypeIdentifier: typeId) { obj, _ in
-                    if      let url  = obj as? URL    { completion(url) }
-                    else if let text = obj as? String,
-                            let url  = URL(string: text) { completion(url) }
-                    else    { completion(nil) }
-                }
-                return
+                candidates.append((attachment, typeId))
             }
         }
-        completion(nil)
+
+        func loadCandidate(at index: Int) {
+            guard index < candidates.count else { return completion(nil) }
+            let (attachment, typeId) = candidates[index]
+            attachment.loadItem(forTypeIdentifier: typeId) { obj, _ in
+                let url: URL?
+                if      let obj = obj as? URL      { url = obj }
+                else if let obj = obj as? NSURL    { url = obj as URL }
+                else if let obj = obj as? String   { url = self.firstURL(from: obj) }
+                else if let obj = obj as? NSString { url = self.firstURL(from: obj as String) }
+                else                               { url = nil }
+
+                if let url { completion(url) }
+                else       { loadCandidate(at: index + 1) }
+            }
+        }
+
+        loadCandidate(at: 0)
     }
 
     // ── Action sheet ──────────────────────────────────────────────
@@ -121,6 +150,18 @@ class ShareViewController: UIViewController {
         present(sheet, animated: true)
     }
 
+    private func showNoLinkAlert() {
+        let alert = UIAlertController(
+            title: "FC Downloader",
+            message: "No link found in the shared content.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
+            self?.done()
+        })
+        present(alert, animated: true)
+    }
+
     // ── Dispatch to main app ──────────────────────────────────────
 
     private func dispatch(url: URL) {
@@ -131,9 +172,11 @@ class ShareViewController: UIViewController {
             defaults.synchronize()
         }
 
-        let encoded = url.absoluteString
-            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard let deepLink = URL(string: "\\(appScheme)://share?url=\\(encoded)") else {
+        var components = URLComponents()
+        components.scheme = appScheme
+        components.host = "share"
+        components.queryItems = [URLQueryItem(name: "url", value: url.absoluteString)]
+        guard let deepLink = components.url else {
             return done()
         }
 
@@ -179,6 +222,8 @@ const EXT_INFO_PLIST = `\
                 <integer>1</integer>
                 <key>NSExtensionActivationSupportsWebPageWithMaxCount</key>
                 <integer>1</integer>
+                <key>NSExtensionActivationSupportsText</key>
+                <true/>
             </dict>
         </dict>
         <key>NSExtensionPointIdentifier</key>
@@ -221,37 +266,40 @@ function addExtensionToXcodeProject(
   project: ReturnType<typeof withXcodeProject> extends ConfigPlugin<infer _> ? never : any,
   bundleId: string,
 ): void {
-  // Skip if already added
-  if (project.pbxTargetByName(EXT_NAME)) return;
+  let targetResult = project.pbxTargetByName(EXT_NAME);
 
-  // 1. Create the extension target
-  const targetResult = project.addTarget(
-    EXT_NAME,
-    'app_extension',
-    EXT_NAME,
-    EXT_BUNDLE_ID,
-  );
+  if (!targetResult) {
+    // 1. Create the extension target
+    targetResult = project.addTarget(
+      EXT_NAME,
+      'app_extension',
+      EXT_NAME,
+      EXT_BUNDLE_ID,
+    );
+
+    // 2. Create a PBX group for the extension files
+    const groupResult = project.addPbxGroup(
+      ['ShareViewController.swift', 'Info.plist', `${EXT_NAME}.entitlements`],
+      EXT_NAME,
+      EXT_NAME,
+    );
+
+    // 3. Attach the group to the project's main group
+    const mainGroupUuid: string =
+      project.getFirstProject().firstProject.mainGroup;
+    project.addToPbxGroup(groupResult.uuid, mainGroupUuid);
+
+    // 4. Add build phases
+    project.addBuildPhase(
+      ['ShareViewController.swift'],
+      'PBXSourcesBuildPhase',
+      'Sources',
+      targetResult.uuid,
+    );
+  }
+
   const targetUuid = targetResult.uuid;
-
-  // 2. Create a PBX group for the extension files
-  const groupResult = project.addPbxGroup(
-    ['ShareViewController.swift', 'Info.plist', `${EXT_NAME}.entitlements`],
-    EXT_NAME,
-    EXT_NAME,
-  );
-
-  // 3. Attach the group to the project's main group
-  const mainGroupUuid: string =
-    project.getFirstProject().firstProject.mainGroup;
-  project.addToPbxGroup(groupResult.uuid, mainGroupUuid);
-
-  // 4. Add build phases
-  project.addBuildPhase(
-    ['ShareViewController.swift'],
-    'PBXSourcesBuildPhase',
-    'Sources',
-    targetUuid,
-  );
+  ensureExtensionTargetDependency(project, targetUuid);
 
   // 5. Set build settings on the extension target's configurations
   const configurations: Record<string, any> = project.pbxXCBuildConfigurationSection();
@@ -289,6 +337,63 @@ function addExtensionToXcodeProject(
   }
 }
 
+function ensureExtensionTargetDependency(project: any, extensionTargetUuid: string): void {
+  const appTarget = project.pbxTargetByName('FCDownloader') ?? project.getFirstTarget();
+  if (!appTarget?.uuid || appTarget.uuid === extensionTargetUuid) return;
+
+  project.hash.project.objects.PBXContainerItemProxy ??= {};
+  project.hash.project.objects.PBXTargetDependency ??= {};
+
+  const nativeTargets = project.pbxNativeTargetSection();
+  const appDependencies = nativeTargets[appTarget.uuid]?.dependencies ?? [];
+  const targetDependencies = project.hash.project.objects.PBXTargetDependency;
+
+  const alreadyLinked = appDependencies.some((dependency: any) => {
+    const targetDependency = targetDependencies[dependency.value];
+    return targetDependency?.target === extensionTargetUuid;
+  });
+  if (!alreadyLinked) {
+    project.addTargetDependency(appTarget.uuid, [extensionTargetUuid]);
+  }
+}
+
+function ensureExtensionSchemeEntry(projectRoot: string, extensionTargetUuid: string): void {
+  const schemePath = path.join(
+    projectRoot,
+    'ios',
+    'FCDownloader.xcodeproj',
+    'xcshareddata',
+    'xcschemes',
+    'FCDownloader.xcscheme',
+  );
+  if (!fs.existsSync(schemePath)) return;
+
+  const scheme = fs.readFileSync(schemePath, 'utf8');
+  if (scheme.includes('BlueprintName = "ShareExtension"')) return;
+
+  const entry = `\
+         <BuildActionEntry
+            buildForTesting = "NO"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "${extensionTargetUuid}"
+               BuildableName = "ShareExtension.appex"
+               BlueprintName = "ShareExtension"
+               ReferencedContainer = "container:FCDownloader.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+`;
+
+  fs.writeFileSync(
+    schemePath,
+    scheme.replace('      </BuildActionEntries>', `${entry}      </BuildActionEntries>`),
+  );
+}
+
 // ── Plugin definition ─────────────────────────────────────────────────────────
 
 const withShareExtensionPlugin: ConfigPlugin = (config) => {
@@ -309,6 +414,10 @@ const withShareExtensionPlugin: ConfigPlugin = (config) => {
     writeExtensionFiles(c.modRequest.projectRoot);
     try {
       addExtensionToXcodeProject(c.modResults, BUNDLE_ID);
+      const extensionTarget = c.modResults.pbxTargetByName(EXT_NAME);
+      if (extensionTarget?.uuid) {
+        ensureExtensionSchemeEntry(c.modRequest.projectRoot, extensionTarget.uuid);
+      }
     } catch (e) {
       console.warn(
         '[withShareExtension] Could not automatically add Xcode target. ' +

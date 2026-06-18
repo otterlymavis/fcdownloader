@@ -5,6 +5,7 @@ import { deleteDownload } from '../lib/hlsDownloader';
 import { DRMProtectedError, pickStrategy, runDownload } from '../lib/downloadStrategies';
 import { ServerExtractionError } from '../lib/serverExtractor';
 import { extractionManager } from '../lib/extractionManager';
+import { getMediaGroupKey } from '../lib/mediaHelpers';
 
 const STORAGE_KEY = '@fcdownloader/tasks_v1';
 
@@ -36,6 +37,7 @@ interface DownloadManagerOptions {
 export function useDownloadManager(options: DownloadManagerOptions = {}) {
   const [tasks, dispatch] = useReducer(reducer, []);
   const controllers = useRef<Map<string, AbortController>>(new Map());
+  const activeDownloadKeys = useRef<Set<string>>(new Set());
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
@@ -140,6 +142,7 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
         }
       } finally {
         controllers.current.delete(id);
+        activeDownloadKeys.current.delete(getDownloadDedupeKey(task.media));
       }
     },
     [update],
@@ -149,6 +152,9 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
 
   const enqueue = useCallback(
     async (media: DetectedMedia, strategyOverride?: DownloadStrategy): Promise<void> => {
+      const dedupeKey = getDownloadDedupeKey(media);
+      if (activeDownloadKeys.current.has(dedupeKey)) return;
+      activeDownloadKeys.current.add(dedupeKey);
       const id = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const strategy = strategyOverride ?? pickStrategy(media);
       const task: DownloadTask = {
@@ -176,6 +182,9 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
     async (taskId: string, strategyOverride?: DownloadStrategy): Promise<void> => {
       const existing = tasks.find((t) => t.id === taskId);
       if (!existing) return;
+      const dedupeKey = getDownloadDedupeKey(existing.media);
+      if (activeDownloadKeys.current.has(dedupeKey)) return;
+      activeDownloadKeys.current.add(dedupeKey);
       // Reuse same id so it replaces in-place in the list
       const strategy = strategyOverride ?? existing.strategy;
       const task: DownloadTask = {
@@ -216,4 +225,8 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
   );
 
   return { tasks, active, history, enqueue, retry, cancel, remove };
+}
+
+function getDownloadDedupeKey(media: DetectedMedia): string {
+  return getMediaGroupKey(media) ?? `url_${media.url.split('#')[0]}`;
 }

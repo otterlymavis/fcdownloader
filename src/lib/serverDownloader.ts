@@ -26,6 +26,14 @@ function fileStem(media: DetectedMedia): string {
   return 'video';
 }
 
+function canStreamSelectedDirectUrl(media: DetectedMedia): boolean {
+  if (media.audioOnly || media.audioTrackUrl) return false;
+  if (!media.httpHeaders || Object.keys(media.httpHeaders).length === 0) return false;
+  if (media.mediaType !== 'direct') return false;
+  if (/\.(?:mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i.test(media.url)) return true;
+  return /(?:cdninstagram\.com|scontent[-\w]*\.cdninstagram\.com|fbcdn\.net|threadscdn\.com|video\.twimg\.com|tiktokcdn\.com|tiktokcdn-us\.com|v\d+-webapp[^/]*\.tiktok\.com|weibocdn\.com|xhscdn\.com|akamaized\.net|cloudfront\.net|jwpcdn\.com|jwplatform\.com|kaltura\.com|mux\.com|mux\.dev)/i.test(media.url);
+}
+
 export async function downloadViaServer(
   media: DetectedMedia,
   taskId: string,
@@ -50,15 +58,19 @@ export async function downloadViaServer(
   const headers: Record<string, string> = { 'Content-Type': 'application/json; charset=utf-8' };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const sourceUrl = media.sourcePageUrl || media.pageUrl || media.url;
+  const streamSelectedUrl = canStreamSelectedDirectUrl(media);
+  const sourceUrl = streamSelectedUrl ? media.url : (media.sourcePageUrl || media.pageUrl || media.url);
   const body = JSON.stringify({
     pageUrl: sourceUrl,
-    referer: media.pageUrl && media.pageUrl !== sourceUrl ? media.pageUrl : undefined,
+    referer: streamSelectedUrl
+      ? (media.sourcePageUrl || media.pageUrl || undefined)
+      : media.pageUrl && media.pageUrl !== sourceUrl ? media.pageUrl : undefined,
     cookies: cookies || undefined,
     formatId: media.formatId || undefined,
     audioOnly: media.audioOnly || undefined,
     subtitles: media.subtitles || undefined,
     subLangs: media.subLangs || undefined,
+    headers: streamSelectedUrl ? media.httpHeaders : undefined,
   });
 
   const dir = `${FileSystem.documentDirectory}downloads/${taskId}/`;
