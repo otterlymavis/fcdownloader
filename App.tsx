@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  AppState,
   DeviceEventEmitter,
   Image,
   Modal,
+  NativeModules,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -69,6 +71,12 @@ import { decideUniversalResultHandling } from './src/lib/universalResultPicker';
 import { inspectUniversalManifestCandidates } from './src/lib/universalManifestInspector';
 import { verifyUniversalDirectCandidates } from './src/lib/universalUrlVerifier';
 import { extractFirstUrl, extractSharedUrlFromDeepLink } from './src/lib/shareUrl';
+
+const { ShareIntentModule } = NativeModules as {
+  ShareIntentModule?: {
+    getPendingShareUrl: () => Promise<string | null>;
+  };
+};
 
 // ── Layout constants ──────────────────────────────────────────
 // ── Ripple ────────────────────────────────────────────────────
@@ -309,6 +317,7 @@ export default function App() {
   });
 
   const [extractionQueue, setExtractionQueue] = useState<string[]>([]);
+  const handledSharedUrlsRef = useRef<Map<string, number>>(new Map());
 
   const runExtractionAndDownload = useCallback(async (url: string) => {
     let targetUrl = url.trim();
@@ -400,6 +409,25 @@ export default function App() {
     setExtractionQueue((prev) => [...prev, targetUrl]);
   }, []);
 
+  const handleSharedMediaUrl = useCallback((url: string) => {
+    const mediaUrl = extractFirstUrl(url).trim();
+    if (!/^https?:\/\//i.test(mediaUrl)) {
+      showToast(translate('failedError', resolvedLangRef.current, { error: 'No link found in shared content' }), 'error');
+      return;
+    }
+    const now = Date.now();
+    const lastHandledAt = handledSharedUrlsRef.current.get(mediaUrl);
+    if (lastHandledAt && now - lastHandledAt < 60_000) return;
+    for (const [handledUrl, handledAt] of handledSharedUrlsRef.current) {
+      if (now - handledAt >= 60_000) handledSharedUrlsRef.current.delete(handledUrl);
+    }
+    handledSharedUrlsRef.current.set(mediaUrl, now);
+    setPasteUrl(mediaUrl);
+    setTab('home');
+    showToast(translate('linkReceived', resolvedLangRef.current), 'success');
+    startDownloadAndExtraction(mediaUrl);
+  }, [showToast, startDownloadAndExtraction, setPasteUrl, setTab]);
+
   const handleIncomingUrl = useCallback((raw: string) => {
     try {
       const parsed = Linking.parse(raw);
@@ -415,22 +443,37 @@ export default function App() {
       if (parsed.path === 'share' || parsed.hostname === 'share') {
         const mediaUrl = extractSharedUrlFromDeepLink(raw, parsed.queryParams);
         if (mediaUrl) {
-          setPasteUrl(mediaUrl);
-          setTab('home');
-          showToast(translate('linkReceived', resolvedLangRef.current), 'success');
-          startDownloadAndExtraction(mediaUrl);
+          handleSharedMediaUrl(mediaUrl);
         } else {
           showToast(translate('failedError', resolvedLangRef.current, { error: 'No link found in shared content' }), 'error');
         }
       }
     } catch {}
-  }, [showToast, startDownloadAndExtraction, setPasteUrl, setTab]);
+  }, [handleSharedMediaUrl, showToast]);
 
   useEffect(() => {
-    Linking.getInitialURL().then((url) => { if (url) handleIncomingUrl(url); });
+    let cancelled = false;
+    const consumePendingShareUrl = async () => {
+      if (!IS_IOS || !ShareIntentModule?.getPendingShareUrl) return;
+      try {
+        const pending = await ShareIntentModule.getPendingShareUrl();
+        if (!cancelled && pending) handleSharedMediaUrl(pending);
+      } catch {}
+    };
+
+    Linking.getInitialURL()
+      .then((url) => { if (url) handleIncomingUrl(url); })
+      .finally(() => { consumePendingShareUrl(); });
     const sub = Linking.addEventListener('url', ({ url }) => handleIncomingUrl(url));
-    return () => sub.remove();
-  }, [handleIncomingUrl]);
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') consumePendingShareUrl();
+    });
+    return () => {
+      cancelled = true;
+      sub.remove();
+      appStateSub.remove();
+    };
+  }, [handleIncomingUrl, handleSharedMediaUrl]);
 
   // ── Detected videos ───────────────────────────────────────
   const allVideos = useMemo<DetectedMedia[]>(() => {
