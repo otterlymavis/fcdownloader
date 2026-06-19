@@ -252,6 +252,7 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
   };
 
   if (r.kind === 'hls' && r.url) {
+    const redditHls = /(?:reddit\.com|redd\.it)\//i.test(pageUrl);
     return [{
       ...baseItem,
       url: r.url,
@@ -259,6 +260,9 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
       mediaType: 'hls',
       mediaKind: 'video',
       label: r.label ?? 'HLS',
+      // Reddit HLS uses a separate EXT-X-MEDIA audio rendition. Keep it on the
+      // server mux path so mobile downloads include audio.
+      forceServerDownload: redditHls,
     }];
   }
 

@@ -2,6 +2,7 @@ import { DetectedMedia, MediaKind, MediaType, SourceAuditEntry } from '../types'
 import { isUniversalExtractionStrategy } from './universalResultPicker';
 
 const DEFAULT_TIMEOUT_MS = 3500;
+const VIMEO_JSON_RE = /(?:vimeocdn\.com\/.*\/playlist\.json|player\.vimeo\.com\/video\/\d+\/config)(?:[?#]|$)/i;
 
 export interface UrlVerificationOptions {
   fetchImpl?: typeof fetch;
@@ -57,7 +58,12 @@ function mediaKindFromMime(mimeType: string | null): MediaKind | undefined {
   return undefined;
 }
 
-function looksLikeNonMedia(mimeType: string | null): boolean {
+function isVimeoPlaylistJson(url: string): boolean {
+  return VIMEO_JSON_RE.test(url);
+}
+
+function looksLikeNonMedia(mimeType: string | null, url = ''): boolean {
+  if (isVimeoPlaylistJson(url)) return false;
   const mime = (mimeType || '').toLowerCase();
   if (SUBTITLE_MIME_RE.test(mime)) return false;
   return /^text\/html\b/.test(mime) || /^application\/json\b/.test(mime) || /^text\/plain\b/.test(mime);
@@ -84,23 +90,25 @@ function applyVerificationResponse(item: DetectedMedia, res: Response, method: '
   const rangeTotal = Number(contentRange.match(/\/(\d+)$/)?.[1] || 0) || undefined;
   const filename = filenameFromDisposition(res.headers?.get?.('Content-Disposition') || null);
   const resolvedUrl = res.url || item.url;
+  const vimeoJson = isVimeoPlaylistJson(item.url) || isVimeoPlaylistJson(resolvedUrl);
   const maybeType = mediaTypeFromMime(mimeType || null);
   const maybeKind = mediaKindFromMime(mimeType || null);
-  const selected = res.ok && !looksLikeNonMedia(mimeType || null);
-  if (!selected && res.ok && looksLikeNonMedia(mimeType || null)) {
+  const selected = res.ok && !looksLikeNonMedia(mimeType || null, resolvedUrl);
+  if (!selected && res.ok && looksLikeNonMedia(mimeType || null, resolvedUrl)) {
     return null;
   }
   const note = selected
-    ? method === 'GET' ? 'GET range fallback verified media candidate' : 'HEAD verified media candidate'
+    ? vimeoJson ? `${method} verified Vimeo JSON source`
+      : method === 'GET' ? 'GET range fallback verified media candidate' : 'HEAD verified media candidate'
     : `${method} returned HTTP ${res.status}`;
   return {
     ...item,
     url: resolvedUrl,
     mimeType: mimeType ?? item.mimeType,
-    mediaType: maybeType ?? item.mediaType,
-    mediaKind: maybeKind ?? item.mediaKind,
+    mediaType: vimeoJson ? 'direct' : maybeType ?? item.mediaType,
+    mediaKind: vimeoJson ? 'video' : maybeKind ?? item.mediaKind,
     label: filename ?? item.label,
-    confidence: selected ? Math.max(item.confidence ?? 0, maybeType ? 0.82 : 0.76) : item.confidence,
+    confidence: selected ? Math.max(item.confidence ?? 0, vimeoJson ? 0.95 : maybeType ? 0.82 : 0.76) : item.confidence,
     sourceAudit: appendAudit(item, audit(resolvedUrl, selected, note, {
       status: res.status,
       mimeType,

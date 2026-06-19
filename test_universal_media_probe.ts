@@ -521,10 +521,16 @@ const ampYouTubeMedia = probeUniversalMedia({
 const ampEmbedUrls = ampYouTubeMedia.map((m) => m.url);
 assert(ampEmbedUrls.some((u) => u.includes('youtube.com/embed/dQw4w9WgXcQ')), '<amp-youtube> not converted to embed URL');
 assert(ampEmbedUrls.some((u) => u.includes('player.vimeo.com/video/76979871')), '<amp-vimeo> not converted to embed URL');
+assert(ampEmbedUrls.some((u) => u === 'https://player.vimeo.com/video/76979871/config'), '<amp-vimeo> should derive Vimeo config JSON URL');
 assert(ampEmbedUrls.some((u) => u.includes('dailymotion.com/embed/video/x7tgd28')), '<amp-dailymotion> not converted to embed URL');
 const ytAmpItem = ampYouTubeMedia.find((m) => m.url.includes('youtube.com/embed'));
 assert.equal(ytAmpItem?.forceServerDownload, true, '<amp-youtube> should have forceServerDownload=true');
 assert.equal(ytAmpItem?.mediaKind, 'video');
+assert.deepEqual(
+  autoDownloadableUniversalMedia(ampYouTubeMedia).map((m) => m.url),
+  ['https://player.vimeo.com/video/76979871/config'],
+  '<amp-vimeo> config JSON should be preferred over non-downloadable embed URL',
+);
 
 // ── JSON-LD ItemList / ListItem traversal ─────────────────────────────────────
 const itemListMedia = probeUniversalMedia({
@@ -610,9 +616,43 @@ const consentIframeMedia = probeUniversalMedia({
   pageUrl,
   pageHtml: `<iframe src="about:blank" data-consent-src="https://player.vimeo.com/video/987654321" width="640" height="360"></iframe>`,
 });
-const consentItem = consentIframeMedia.find((m) => m.url.includes('player.vimeo.com/video/987654321'));
+const consentItem = consentIframeMedia.find((m) => m.url === 'https://player.vimeo.com/video/987654321');
 assert.ok(consentItem, 'Consent-deferred iframe (data-consent-src) should be detected even when src="about:blank" comes first');
 assert.equal(consentItem?.forceServerDownload, true, 'Consent iframe embed should have forceServerDownload=true');
+assert.ok(
+  consentIframeMedia.some((m) => m.url === 'https://player.vimeo.com/video/987654321/config'),
+  'Consent-deferred Vimeo iframe should derive config JSON URL',
+);
+
+// Private/unlisted Vimeo embeds require the hash query on the derived config URL.
+const privateVimeoMedia = probeUniversalMedia({
+  pageUrl,
+  pageHtml: `<iframe src="https://player.vimeo.com/video/987654321?h=privatehash&amp;autoplay=1"></iframe>`,
+});
+assert.ok(
+  privateVimeoMedia.some(
+    (m) => m.url === 'https://player.vimeo.com/video/987654321/config?h=privatehash&autoplay=1',
+  ),
+  'Derived Vimeo config URL should preserve private hash and playback query parameters',
+);
+
+const canonicalVimeoMedia = probeUniversalMedia({
+  pageUrl: 'https://vimeo.com/76979871',
+});
+assert.ok(
+  canonicalVimeoMedia.some((m) => m.url === 'https://player.vimeo.com/video/76979871/config'),
+  'Canonical Vimeo page URL should derive player config JSON without fetching the page',
+);
+
+const unlistedVimeoMedia = probeUniversalMedia({
+  pageUrl: 'https://vimeo.com/987654321/privatehash',
+});
+assert.ok(
+  unlistedVimeoMedia.some(
+    (m) => m.url === 'https://player.vimeo.com/video/987654321/config?h=privatehash',
+  ),
+  'Unlisted Vimeo page URL should map its private path hash to the config h query',
+);
 
 // CMP-deferred iframe (OneTrust / data-cmp-src pattern)
 const cmpIframeMedia = probeUniversalMedia({
@@ -762,6 +802,7 @@ const dataVimeoIdMedia = probeUniversalMedia({
 });
 const dataVimeoIdItem = dataVimeoIdMedia.find((m) => m.url.includes('player.vimeo.com/video/987654321'));
 assert.ok(dataVimeoIdItem, 'data-vimeo-id attribute should reconstruct Vimeo embed URL');
+assert.ok(dataVimeoIdMedia.some((m) => m.url === 'https://player.vimeo.com/video/987654321/config'), 'data-vimeo-id should derive Vimeo config JSON URL');
 
 // scanDivEmbeds: data-youtube-id attribute on generic element
 const dataYtIdMedia = probeUniversalMedia({
@@ -1070,6 +1111,7 @@ const plyrVimeoMedia = probeUniversalMedia({
 });
 const plyrVimeoItem = plyrVimeoMedia.find((m) => m.url.includes('player.vimeo.com/video/123456789'));
 assert.ok(plyrVimeoItem, 'Plyr Vimeo: data-plyr-provider=vimeo should reconstruct Vimeo player URL');
+assert.ok(plyrVimeoMedia.some((m) => m.url === 'https://player.vimeo.com/video/123456789/config'), 'Plyr Vimeo should derive Vimeo config JSON URL');
 
 // data-plyr-src → direct HTML5 media URL
 const plyrSrcMedia = probeUniversalMedia({
@@ -1693,5 +1735,33 @@ const hugeJsonFeedMedia = probeUniversalMedia({
   }),
 });
 assert.ok(hugeJsonFeedMedia.some((m) => m.url.includes('r37/huge-feed-ep1.mp3')), 'a JSON Feed enclosure past the 1.5M mark (due to a large title field) should still be detected, since JSON Feed parsing is not truncated');
+
+// Vimeo browser-session captures can contain lots of CDN range fragments. Those
+// are not independently downloadable; keep the playlist JSON as the canonical
+// on-device candidate for the Vimeo JSON downloader.
+const vimeoPlaylistUrl = 'https://vod-adaptive-ak.vimeocdn.com/video/12345/sep/video/abcdef/playlist.json?pathsig=abc';
+const vimeoBrowserMedia = probeUniversalMedia({
+  pageUrl: 'https://amuseplus.jp/movies/example',
+  pageHtml: `<script>window.player={"url":"${vimeoPlaylistUrl}"}</script>`,
+  mediaHints: [
+    { url: 'https://vod-adaptive-ak.vimeocdn.com/video/12345/v2/range/0/1000/avf/video/seg-1', source: 'perf-observer', confidence: 0.9 },
+    { url: vimeoPlaylistUrl, mimeType: 'application/json', source: 'fetch-hook', confidence: 0.82 },
+  ],
+});
+assert.ok(vimeoBrowserMedia.some((m) => m.url === vimeoPlaylistUrl), 'Vimeo playlist.json should be detected as media');
+assert.ok(!vimeoBrowserMedia.some((m) => /\/v2\/range\/.*\/avf\//i.test(m.url)), 'Vimeo range fragments should not be emitted as downloadable media');
+const vimeoAuto = autoDownloadableUniversalMedia(vimeoBrowserMedia);
+assert.deepEqual(vimeoAuto.map((m) => m.url), [vimeoPlaylistUrl], 'Vimeo auto-download should prefer the playlist JSON only');
+
+const vimeoConfigUrl = 'https://player.vimeo.com/video/76979871/config';
+const vimeoConfigMedia = probeUniversalMedia({
+  pageUrl: 'https://publisher.example.com/with-vimeo',
+  mediaHints: [
+    { url: 'https://vod-adaptive-ak.vimeocdn.com/video/12345/v2/range/0/1000/avf/video/seg-1', source: 'perf-observer', confidence: 0.9 },
+    { url: vimeoConfigUrl, mimeType: 'application/json', source: 'xhr-hook', confidence: 0.82 },
+  ],
+});
+const vimeoConfigAuto = autoDownloadableUniversalMedia(vimeoConfigMedia);
+assert.deepEqual(vimeoConfigAuto.map((m) => m.url), [vimeoConfigUrl], 'Vimeo config JSON should be the fallback canonical candidate when playlist.json is not captured');
 
 console.log(`universal media probe ok (${media.length} candidates)`);

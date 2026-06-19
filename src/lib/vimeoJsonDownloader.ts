@@ -21,14 +21,29 @@ interface VimeoTrack {
 interface VimeoPlaylist { base_url?: string; video?: VimeoTrack[]; }
 
 const DOWNLOAD_BATCH = 4;
+const VIMEO_PLAYLIST_JSON_RE = /vimeocdn\.com\/.*\/playlist\.json(?:[?#]|$)/i;
 
 function taskDir(taskId: string): string {
   return `${FileSystem.documentDirectory}downloads/${taskId}/`;
 }
 
-function makeHeaders(cookies: string, userAgent: string, referer: string): Record<string, string> {
-  const h: Record<string, string> = { Accept: '*/*', Referer: referer, 'User-Agent': userAgent };
-  if (cookies) h.Cookie = cookies;
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  const target = name.toLowerCase();
+  return Object.keys(headers).some((key) => key.toLowerCase() === target);
+}
+
+function setHeader(headers: Record<string, string>, name: string, value: string): void {
+  const existing = Object.keys(headers).find((key) => key.toLowerCase() === name.toLowerCase());
+  if (existing) headers[existing] = value;
+  else headers[name] = value;
+}
+
+function makeHeaders(cookies: string, userAgent: string, referer: string, captured?: Record<string, string>): Record<string, string> {
+  const h: Record<string, string> = captured ? { ...captured } : {};
+  if (!hasHeader(h, 'Accept')) h.Accept = '*/*';
+  if (!hasHeader(h, 'Referer')) h.Referer = referer;
+  if (!hasHeader(h, 'User-Agent')) h['User-Agent'] = userAgent;
+  if (cookies && !hasHeader(h, 'Cookie')) h.Cookie = cookies;
   return h;
 }
 
@@ -45,6 +60,50 @@ function pickBestVideo(tracks: VimeoTrack[]): VimeoTrack {
   )[0];
 }
 
+function normalizeVimeoJsonUrl(value: string, baseUrl: string): string | undefined {
+  const clean = value
+    .replace(/\\u0026/g, '&')
+    .replace(/\\u003d/gi, '=')
+    .replace(/\\\//g, '/')
+    .replace(/&amp;/g, '&')
+    .trim();
+  if (!clean) return undefined;
+  try {
+    const url = new URL(clean.startsWith('//') ? `https:${clean}` : clean, baseUrl).toString();
+    return VIMEO_PLAYLIST_JSON_RE.test(url) ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function findVimeoPlaylistJsonUrl(value: unknown, baseUrl: string, depth = 0, seen = new Set<unknown>()): string | undefined {
+  if (depth > 10 || value == null) return undefined;
+  if (typeof value === 'string') return normalizeVimeoJsonUrl(value, baseUrl);
+  if (typeof value !== 'object') return undefined;
+  if (seen.has(value)) return undefined;
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findVimeoPlaylistJsonUrl(item, baseUrl, depth + 1, seen);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const preferredKeys = ['avc_url', 'url', 'json_url', 'playlist_url', 'playlistUrl', 'source_url', 'sourceUrl'];
+  for (const key of preferredKeys) {
+    const found = findVimeoPlaylistJsonUrl(record[key], baseUrl, depth + 1, seen);
+    if (found) return found;
+  }
+  for (const item of Object.values(record)) {
+    const found = findVimeoPlaylistJsonUrl(item, baseUrl, depth + 1, seen);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 async function writeInit(track: VimeoTrack, path: string): Promise<void> {
   if (!track.init_segment) return;
   await FileSystem.writeAsStringAsync(path, track.init_segment, {
@@ -53,9 +112,9 @@ async function writeInit(track: VimeoTrack, path: string): Promise<void> {
 }
 
 async function downloadFragment(
-  url: string, path: string, cookies: string, ua: string, referer: string, signal?: AbortSignal,
+  url: string, path: string, headers: Record<string, string>, signal?: AbortSignal,
 ): Promise<void> {
-  const res = await expoFetch(url, { signal, headers: makeHeaders(cookies, ua, referer) });
+  const res = await expoFetch(url, { signal, headers });
   if (signal?.aborted) throw new Error('Cancelled');
   if (!res.ok) throw new Error(`HTTP ${res.status} - ${url.split('?')[0].split('/').pop()}`);
   const bytes = await res.bytes();
@@ -85,11 +144,24 @@ export async function downloadVimeoJson(
 
   const cookies = await extractSessionCookies(media.pageUrl);
   const ua = media.userAgent || 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36';
-  const referer = media.pageUrl || 'https://player.vimeo.com/';
+  const referer = media.sourcePageUrl || media.pageUrl || 'https://player.vimeo.com/';
+  const headers = makeHeaders(cookies, ua, referer, media.httpHeaders);
+  const fragmentHeaders = { ...headers };
+  setHeader(fragmentHeaders, 'Accept', '*/*');
 
-  const res = await expoFetch(media.url, { signal, headers: makeHeaders(cookies, ua, referer) });
+  let playlistUrl = media.url;
+  let res = await expoFetch(playlistUrl, { signal, headers });
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching Vimeo playlist`);
-  const playlist = await res.json() as VimeoPlaylist;
+  let playlist = await res.json() as VimeoPlaylist;
+
+  if (!playlist.video?.length) {
+    const discoveredPlaylistUrl = findVimeoPlaylistJsonUrl(playlist, playlistUrl);
+    if (!discoveredPlaylistUrl) throw new Error('Vimeo config has no playlist JSON URL');
+    playlistUrl = discoveredPlaylistUrl;
+    res = await expoFetch(playlistUrl, { signal, headers });
+    if (!res.ok) throw new Error(`HTTP ${res.status} fetching Vimeo playlist`);
+    playlist = await res.json() as VimeoPlaylist;
+  }
 
   const video = playlist.video?.length ? pickBestVideo(playlist.video) : undefined;
   if (!video) throw new Error('Vimeo playlist has no video track');
@@ -109,7 +181,7 @@ export async function downloadVimeoJson(
     await Promise.all(video.segments.slice(i, i + DOWNLOAD_BATCH).map((seg, j) => {
       const idx = i + j;
       segPaths[idx] = `${dir}seg${String(idx).padStart(5, '0')}.m4s`;
-      return downloadFragment(resolveUrl(seg.url, media.url, playlist, video), segPaths[idx], cookies, ua, referer, signal);
+      return downloadFragment(resolveUrl(seg.url, playlistUrl, playlist, video), segPaths[idx], fragmentHeaders, signal);
     }));
     onProgress?.(Math.min(i + DOWNLOAD_BATCH, video.segments.length), video.segments.length);
   }

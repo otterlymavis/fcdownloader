@@ -41,6 +41,20 @@ const hints = mediaHintsFromNetworkLog([
     mimeType: 'application/json',
     provenance: 'fetch-hook',
   },
+  {
+    url: 'https://vod-adaptive-ak.vimeocdn.com/video/12345/sep/video/abcdef/playlist.json?pathsig=abc',
+    pageUrl,
+    status: 200,
+    mimeType: 'application/json',
+    provenance: 'fetch-hook',
+  },
+  {
+    url: 'https://player.vimeo.com/video/76979871/config',
+    pageUrl,
+    status: 200,
+    mimeType: 'application/json',
+    provenance: 'xhr-hook',
+  },
 ], pageUrl);
 
 const hlsHint = hints.find((hint) => hint.url === 'https://cdn.example.com/live/master.m3u8');
@@ -74,6 +88,14 @@ assert.equal(signedHlsHint?.mimeType, 'application/vnd.apple.mpegurl');
 
 assert(!hints.some((hint) => hint.url === 'https://api.example.net/config?id=def456'));
 
+const vimeoPlaylistHint = hints.find((hint) => hint.url === 'https://vod-adaptive-ak.vimeocdn.com/video/12345/sep/video/abcdef/playlist.json?pathsig=abc');
+assert.equal(vimeoPlaylistHint?.kind, 'video');
+assert.equal(vimeoPlaylistHint?.mimeType, 'application/json');
+
+const vimeoConfigHint = hints.find((hint) => hint.url === 'https://player.vimeo.com/video/76979871/config');
+assert.equal(vimeoConfigHint?.kind, 'video');
+assert.equal(vimeoConfigHint?.mimeType, 'application/json');
+
 const signedVideo = media.find((item) => item.url === 'https://signed.example.net/playback?id=abc123');
 assert.equal(signedVideo?.mediaType, 'direct');
 assert.equal(signedVideo?.mediaKind, 'video');
@@ -82,5 +104,13 @@ assert.equal(signedVideo?.provenance, 'xhr-hook');
 const signedHls = media.find((item) => item.url === 'https://signed.example.net/manifest?id=def456');
 assert.equal(signedHls?.mediaType, 'hls');
 assert.equal(signedHls?.mediaKind, 'video');
+
+const vimeoPlaylist = media.find((item) => item.url === 'https://vod-adaptive-ak.vimeocdn.com/video/12345/sep/video/abcdef/playlist.json?pathsig=abc');
+assert.equal(vimeoPlaylist?.mediaType, 'direct');
+assert.equal(vimeoPlaylist?.mediaKind, 'video');
+
+const vimeoConfig = media.find((item) => item.url === 'https://player.vimeo.com/video/76979871/config');
+assert.equal(vimeoConfig?.mediaType, 'direct');
+assert.equal(vimeoConfig?.mediaKind, 'video');
 
 console.log('browser session network hints ok');

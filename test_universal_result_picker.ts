@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { DetectedMedia } from './src/types';
-import { getSourceName } from './src/lib/mediaHelpers';
+import { getSourceName, smartDedup } from './src/lib/mediaHelpers';
 import { decideUniversalResultHandling, sortUniversalCandidates } from './src/lib/universalResultPicker';
 
 function item(
@@ -75,6 +75,36 @@ assert.deepEqual(
   serverDecision.items.map((candidate) => candidate.url),
   ['https://cdn.example.com/video/master.m3u8'],
   'Server extraction also auto-enqueues only one same-page HLS variant',
+);
+
+const muxPageUrl = 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
+const muxMaster = { ...item(muxPageUrl, 'video', 0.85, 'hls'), pageUrl: muxPageUrl };
+const muxVariants = [
+  'url_0/193039199_mp4_h264_aac_hd_7.m3u8',
+  'url_2/193039199_mp4_h264_aac_ld_7.m3u8',
+  'url_4/193039199_mp4_h264_aac_7.m3u8',
+  'url_6/193039199_mp4_h264_aac_hq_7.m3u8',
+  'url_8/193039199_mp4_h264_aac_fhd_7.m3u8',
+].map((path) => ({
+  ...item(`https://test-streams.mux.dev/x36xhzz/${path}`, 'video', 0.85, 'hls'),
+  pageUrl: muxPageUrl,
+}));
+const muxDirectPage = sortUniversalCandidates([...muxVariants, muxMaster]);
+assert.deepEqual(
+  muxDirectPage.map((candidate) => candidate.url),
+  [muxPageUrl],
+  'A direct HLS master page collapses bitrate child playlists and keeps the master URL',
+);
+
+const muxFrameScopedVariants = muxVariants.map((candidate) => ({
+  ...candidate,
+  pageUrl: candidate.url,
+  sourcePageUrl: candidate.url,
+}));
+assert.deepEqual(
+  smartDedup([muxMaster, ...muxFrameScopedVariants], muxPageUrl).map((candidate) => candidate.url),
+  [muxPageUrl],
+  'Browser dedup uses the top-level manifest URL when child frames report their own URLs',
 );
 
 const clipA = item('https://cdn.example.com/series/clip-a/master.m3u8', 'video', 0.8, 'hls');

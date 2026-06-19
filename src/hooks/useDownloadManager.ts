@@ -151,12 +151,12 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
   // ── Public API ────────────────────────────────────────────────
 
   const enqueue = useCallback(
-    async (media: DetectedMedia, strategyOverride?: DownloadStrategy): Promise<void> => {
+    (media: DetectedMedia, strategyOverride?: DownloadStrategy): boolean => {
       const dedupeKey = getDownloadDedupeKey(media);
-      if (activeDownloadKeys.current.has(dedupeKey)) return;
-      activeDownloadKeys.current.add(dedupeKey);
+      if (activeDownloadKeys.current.has(dedupeKey)) return false;
       const id = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const strategy = strategyOverride ?? pickStrategy(media);
+      activeDownloadKeys.current.add(dedupeKey);
       const task: DownloadTask = {
         id,
         media,
@@ -170,9 +170,9 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
       dispatch({ type: 'ADD', task });
       // Fire-and-forget: the download runs in the background and reports
       // progress via task status (shown in the In-Progress list). Awaiting it
-      // here would block the caller — keeping the Home "Finding…" button stuck
-      // for the whole download and serializing galleries. _run never throws.
-      void _run(task);
+      // must never block the caller or serialize galleries. _run never throws.
+      setTimeout(() => { void _run(task); }, 0);
+      return true;
     },
     [_run],
   );

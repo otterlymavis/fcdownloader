@@ -65,6 +65,7 @@ export const INJECTED_SCRIPT = `
   function detectType(url, mime) {
     if (!url) return null;
     var u = url.split('?')[0].toLowerCase();
+    if (/vimeocdn\\.com.*\\/playlist\\.json$/i.test(u) || /player\\.vimeo\\.com\\/video\\/\\d+\\/config$/i.test(u)) return 'direct';
     if (/\\.m3u8?(?:$|[?#])/.test(u)) return 'hls';
     if (u.indexOf('.mpd')  !== -1) return 'dash';
     if (/\\.(ts|m4s|aac|m4a)$/.test(u)) return null;
@@ -231,6 +232,7 @@ export const INJECTED_SCRIPT = `
   function isNonContentUrl(url, mime) {
     var u = String(url || '').toLowerCase();
     var m = String(mime || '').toLowerCase();
+    if (/(?:vimeocdn\.com.*\/playlist\.json|player\.vimeo\.com\/video\/\d+\/config)(?:[?#]|$)/i.test(u)) return false;
     if (/\\.(?:html?|php|aspx?)(?:[?#]|$)/i.test(u)) return true;
     if (m.indexOf('text/html') !== -1 || m.indexOf('application/xhtml') !== -1 || m.indexOf('application/json') !== -1) return true;
     if (/(?:doubleclick|googlesyndication|google-analytics|analytics|adservice|scorecardresearch|outbrain|taboola|treasuredata|bidswitch)/i.test(u)) return true;
@@ -251,7 +253,7 @@ export const INJECTED_SCRIPT = `
     if (/\\.m3u8?(?:\\?|$)/.test(u) || /mpegurl/i.test(mime || '')) return Math.max(base, 0.85);
     if (/\\.mpd(\\?|$)/.test(u) || /dash\\+xml/i.test(mime || '')) return Math.max(base, 0.85);
     if (/\\.mp4(\\?|$)/.test(u)) return Math.max(base, 0.75);
-    if (/vimeocdn\\.com.*playlist\\.json/.test(u)) return Math.max(base, 0.88);
+    if (/vimeocdn\\.com.*playlist\\.json/.test(u) || /player\\.vimeo\\.com\\/video\\/\\d+\\/config/.test(u)) return Math.max(base, 0.88);
     if (/googlevideo\\.com\\/videoplayback/.test(u)) return Math.max(base, 0.9);
     if (/bilivideo\\.com\\//.test(u)) return Math.max(base, 0.88);
     if (/manifest\\.googlevideo\\.com/.test(u)) return Math.max(base, 0.95);
@@ -635,6 +637,7 @@ export const INJECTED_SCRIPT = `
   function _isMediaEntry(e) {
     var n = e.name || '';
     if (_PERF_MEDIA_RE.test(n)) return true;
+    if (/(?:vimeocdn\\.com.*\\/playlist\\.json|player\\.vimeo\\.com\\/video\\/\\d+\\/config)(?:[?#]|$)/i.test(n)) return true;
     // PerformanceResourceTiming.initiatorType is 'video' or 'audio' for native elements
     if (e.initiatorType === 'video' || e.initiatorType === 'audio') return true;
     // Large responses from xmlhttprequest / fetch are worth checking (may be DASH segments or media files)
@@ -1346,6 +1349,18 @@ export const INJECTED_SCRIPT = `
   // ── 10l. Vimeo Player SDK ─────────────────────────────────────
   // Sites may call new Vimeo.Player(container, { id: 123 }) or { url: '...' }
   // without any pre-existing <iframe src="player.vimeo.com/..."> in the DOM.
+  function vimeoConfigUrl(id, sourceUrl) {
+    try {
+      var suffix = '';
+      if (sourceUrl) {
+        var parsed = new URL(sourceUrl, location.href);
+        suffix = parsed.search || '';
+      }
+      return 'https://player.vimeo.com/video/' + id + '/config' + suffix;
+    } catch (_) {
+      return 'https://player.vimeo.com/video/' + id + '/config';
+    }
+  }
   function patchVimeoSDK(Vimeo) {
     try {
       if (!Vimeo || !Vimeo.Player) return;
@@ -1354,10 +1369,10 @@ export const INJECTED_SCRIPT = `
         try {
           if (opts) {
             if (opts.id) {
-              emit('https://player.vimeo.com/video/' + opts.id, null, 'player-sdk-hook', 0.86);
+              emit(vimeoConfigUrl(opts.id), 'application/json', 'player-sdk-hook', 0.9);
             } else if (typeof opts.url === 'string' && opts.url) {
               var _vm = opts.url.match(new RegExp('vimeo.com/(?:video/)?([0-9]+)'));
-              if (_vm) emit('https://player.vimeo.com/video/' + _vm[1], null, 'player-sdk-hook', 0.86);
+              if (_vm) emit(vimeoConfigUrl(_vm[1], opts.url), 'application/json', 'player-sdk-hook', 0.9);
               else emit(opts.url, null, 'player-sdk-hook', 0.82);
             }
           }

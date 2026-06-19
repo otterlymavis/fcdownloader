@@ -90,6 +90,24 @@ const REGISTRY: SiteEntry[] = [
       notes: 'video.twimg.com signed URLs; HLS manifest or direct mp4 depending on quality',
     },
   },
+  // ── Reddit ────────────────────────────────────────────────────────────────
+  {
+    pattern: /(?:reddit\.com|redd\.it)\//i,
+    caps: {
+      preferredStrategies: ['hls-segments', 'direct', 'server-download'],
+      preferOnDevice: true,
+      notes: 'Anonymous JSON is often gated and server IPs are blocked; device RSS/page extraction should run first',
+    },
+  },
+  // ── Facebook ──────────────────────────────────────────────────────────────
+  {
+    pattern: /(?:facebook\.com|fb\.watch)\//i,
+    caps: {
+      preferredStrategies: ['direct', 'server-download'],
+      preferOnDevice: true,
+      notes: 'Public Relay payload requires a current desktop navigation UA; CDN downloads require facebookexternalhit UA',
+    },
+  },
   // ── Weibo ─────────────────────────────────────────────────────────────────
   {
     pattern: /(?:weibo\.com|weibo\.cn|video\.weibo\.com)/i,

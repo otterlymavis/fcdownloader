@@ -134,6 +134,42 @@ function shouldPickThreadsCandidates(pageUrl: string, items: DetectedMedia[]): b
   return isThreadsPageUrl(pageUrl) && items.length > 1;
 }
 
+function extractionDedupeKey(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl.trim());
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    if (host === 'vimeo.com' || host === 'player.vimeo.com') {
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      const videoIndex = segments.findIndex((segment) => /^\d+$/.test(segment));
+      if (videoIndex >= 0) {
+        const privateHash =
+          parsed.searchParams.get('h') ||
+          (host === 'vimeo.com' && videoIndex === 0 && /^[a-z0-9]+$/i.test(segments[1] ?? '')
+            ? segments[1]
+            : '');
+        return `vimeo:${segments[videoIndex]}:${privateHash}`;
+      }
+    }
+    parsed.hostname = host;
+    parsed.hash = '';
+    if (parsed.pathname.length > 1) parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+    parsed.searchParams.sort();
+    return parsed.toString();
+  } catch {
+    return rawUrl.trim().replace(/\/+$/, '');
+  }
+}
+
+function waitForUiCommit(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame !== 'function') {
+      setTimeout(resolve, 50);
+      return;
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
 function getPlatformColor(item: DetectedMedia): string {
   const lower = `${item.url} ${mediaPageUrl(item)}`.toLowerCase();
   if (lower.includes('youtube') || lower.includes('youtu.be')) {
@@ -318,18 +354,21 @@ export default function App() {
   });
 
   const [extractionQueue, setExtractionQueue] = useState<string[]>([]);
+  const [extractionRunnerTick, setExtractionRunnerTick] = useState(0);
   const handledSharedUrlsRef = useRef<Map<string, number>>(new Map());
+  const queuedExtractionUrlsRef = useRef(new Set<string>());
+  const extractionRunnerActiveRef = useRef(false);
 
   const runExtractionAndDownload = useCallback(async (url: string) => {
     let targetUrl = url.trim();
     if (!targetUrl) return;
     if (!targetUrl.startsWith('http')) targetUrl = `https://${targetUrl}`;
+
     // A pasted/shared URL starts a new detection session. Without this reset,
     // iOS could briefly reopen the picker with media left over from the
     // previously browsed page while the new extraction was still running.
     closeVideosSheet();
     onPageChange(targetUrl);
-
 
     if (isDirectMediaUrl(targetUrl)) {
       const item: DetectedMedia = {
@@ -339,10 +378,11 @@ export default function App() {
         mediaKind: getMediaKind({ url: targetUrl }),
         confidence: 0.75, provenance: 'manual',
       };
-      await enqueue(item);
       setPasteUrl('');
-      showToast(translate('downloadStarted', resolvedLangRef.current), 'success');
       setTab('library');
+      await waitForUiCommit();
+      const started = await enqueue(item);
+      if (started) showToast(translate('downloadStarted', resolvedLangRef.current), 'success');
       return;
     }
 
@@ -363,15 +403,24 @@ export default function App() {
           showToast(translate('mediaItemsFound', resolvedLangRef.current, { count: decision.items.length }), 'info');
           return;
         }
-        for (const item of decision.items) await enqueue(item);
         setPasteUrl('');
-        showToast(
-          decision.items.length === 1
-            ? translate('startedDownload', resolvedLangRef.current)
-            : translate('startedDownloads', resolvedLangRef.current, { count: decision.items.length }),
-          'success'
-        );
+        setExtracting(false);
         setTab('library');
+        // Let the Home → Library transition commit before the downloader starts
+        // issuing network callbacks and native file writes.
+        await waitForUiCommit();
+        let started = 0;
+        for (const item of decision.items) {
+          if (await enqueue(item)) started += 1;
+        }
+        if (started > 0) {
+          showToast(
+            started === 1
+              ? translate('startedDownload', resolvedLangRef.current)
+              : translate('startedDownloads', resolvedLangRef.current, { count: started }),
+            'success'
+          );
+        }
         return;
       }
       if (decision.action === 'pick') {
@@ -413,16 +462,28 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (extracting || extractionQueue.length === 0) return;
+    if (extracting || extractionRunnerActiveRef.current || extractionQueue.length === 0) return;
     const nextUrl = extractionQueue[0];
+    extractionRunnerActiveRef.current = true;
     setExtractionQueue((prev) => prev.slice(1));
-    runExtractionAndDownload(nextUrl);
-  }, [extracting, extractionQueue, runExtractionAndDownload]);
+    void runExtractionAndDownload(nextUrl).finally(() => {
+      queuedExtractionUrlsRef.current.delete(extractionDedupeKey(nextUrl));
+      extractionRunnerActiveRef.current = false;
+      // The queue owns the Home extraction lifecycle. Clear the visible busy
+      // state here as a final guard against stale batched updates from an early
+      // return after a candidate has already been enqueued.
+      setExtracting(false);
+      setExtractionRunnerTick((tick) => tick + 1);
+    });
+  }, [extracting, extractionQueue, extractionRunnerTick, runExtractionAndDownload]);
 
   // ── Start download and extraction ───────────────────────
   const startDownloadAndExtraction = useCallback((url: string) => {
     const targetUrl = url.trim();
     if (!targetUrl) return;
+    const dedupeKey = extractionDedupeKey(targetUrl);
+    if (queuedExtractionUrlsRef.current.has(dedupeKey)) return;
+    queuedExtractionUrlsRef.current.add(dedupeKey);
     setExtractionQueue((prev) => [...prev, targetUrl]);
   }, []);
 
@@ -433,12 +494,17 @@ export default function App() {
       return;
     }
     const now = Date.now();
-    const lastHandledAt = handledSharedUrlsRef.current.get(mediaUrl);
+    const dedupeKey = extractionDedupeKey(mediaUrl);
+    const lastHandledAt = handledSharedUrlsRef.current.get(dedupeKey);
+    // iOS can deliver the same share once through the deep link and once
+    // through App Group storage, sometimes again when the app becomes active
+    // after extraction. Keep that transport-level duplicate out of the queue;
+    // the Home Download button remains available for an immediate manual retry.
     if (lastHandledAt && now - lastHandledAt < 60_000) return;
     for (const [handledUrl, handledAt] of handledSharedUrlsRef.current) {
       if (now - handledAt >= 60_000) handledSharedUrlsRef.current.delete(handledUrl);
     }
-    handledSharedUrlsRef.current.set(mediaUrl, now);
+    handledSharedUrlsRef.current.set(dedupeKey, now);
     setPasteUrl(mediaUrl);
     setTab('home');
     showToast(translate('linkReceived', resolvedLangRef.current), 'success');
@@ -520,7 +586,7 @@ export default function App() {
           status: entry.status,
         }],
       }));
-    return smartDedup([...detected, ...fromNet]);
+    return smartDedup([...detected, ...fromNet], loadedUrl);
   }, [detected, networkLog, loadedUrl]);
 
   const allTasks    = useMemo(() => [...active, ...history], [active, history]);
@@ -632,13 +698,18 @@ export default function App() {
           showToast(translate('mediaItemsFound', resolvedLangRef.current, { count: decision.items.length }), 'info');
           return;
         }
-        for (const item of decision.items) await enqueue(item);
-        showToast(
-          decision.items.length === 1
-            ? translate('startedDownload', resolvedLangRef.current)
-            : translate('startedDownloads', resolvedLangRef.current, { count: decision.items.length }),
-          'success'
-        );
+        let started = 0;
+        for (const item of decision.items) {
+          if (await enqueue(item)) started += 1;
+        }
+        if (started > 0) {
+          showToast(
+            started === 1
+              ? translate('startedDownload', resolvedLangRef.current)
+              : translate('startedDownloads', resolvedLangRef.current, { count: started }),
+            'success'
+          );
+        }
         setTab('library');
         return;
       }
@@ -690,7 +761,7 @@ export default function App() {
     const selected = selectedFormatId && formats.some((f) => f.id === selectedFormatId)
       ? formats.find((f) => f.id === selectedFormatId)
       : null;
-    await enqueue(selected
+    const started = await enqueue(selected
       ? {
           ...item,
           url: item.mediaType === 'dash' ? item.url : selected.url ?? item.url,
@@ -701,13 +772,13 @@ export default function App() {
         }
       : item);
     setSelectedFormatId(null);
-    showToast(translate('downloadStarted', resolvedLangRef.current), 'success');
+    if (started) showToast(translate('downloadStarted', resolvedLangRef.current), 'success');
     setTab('library');
   }, [closeVideosSheet, enqueue, selectedFormatId, showToast]);
 
   const handleDetectedAudioDownload = useCallback(async (item: DetectedMedia) => {
     closeVideosSheet();
-    await enqueue({
+    const started = await enqueue({
       ...item,
       id: `${item.id}_audio_${Date.now()}`,
       url: item.sourcePageUrl || item.pageUrl || item.url,
@@ -721,20 +792,25 @@ export default function App() {
       formatId: undefined,
     });
     setSelectedFormatId(null);
-    showToast(translate('audioDownloadStarted', resolvedLangRef.current), 'success');
+    if (started) showToast(translate('audioDownloadStarted', resolvedLangRef.current), 'success');
     setTab('library');
   }, [closeVideosSheet, enqueue, showToast]);
 
   const handleDownloadAllDetected = useCallback(async () => {
     if (!allVideos.length) return;
     closeVideosSheet();
-    for (const item of allVideos) await enqueue(item);
-    showToast(
-      allVideos.length === 1
-        ? translate('startedDownload', resolvedLangRef.current)
-        : translate('startedDownloads', resolvedLangRef.current, { count: allVideos.length }),
-      'success'
-    );
+    let started = 0;
+    for (const item of allVideos) {
+      if (await enqueue(item)) started += 1;
+    }
+    if (started > 0) {
+      showToast(
+        started === 1
+          ? translate('startedDownload', resolvedLangRef.current)
+          : translate('startedDownloads', resolvedLangRef.current, { count: started }),
+        'success'
+      );
+    }
     setTab('library');
   }, [allVideos, closeVideosSheet, enqueue, showToast]);
 
@@ -742,8 +818,9 @@ export default function App() {
     const audioItems = allVideos.filter((item) => getMediaKind(item) !== 'image');
     if (!audioItems.length) return;
     closeVideosSheet();
+    let started = 0;
     for (const item of audioItems) {
-      await enqueue({
+      if (await enqueue({
         ...item,
         id: `${item.id}_audio_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         url: item.sourcePageUrl || item.pageUrl || item.url,
@@ -755,14 +832,16 @@ export default function App() {
         forceServerDownload: true,
         sourcePageUrl: item.sourcePageUrl || item.pageUrl || item.url,
         formatId: undefined,
-      });
+      })) started += 1;
     }
-    showToast(
-      audioItems.length === 1
-        ? translate('startedAudioDownload', resolvedLangRef.current)
-        : translate('startedAudioDownloads', resolvedLangRef.current, { count: audioItems.length }),
-      'success'
-    );
+    if (started > 0) {
+      showToast(
+        started === 1
+          ? translate('startedAudioDownload', resolvedLangRef.current)
+          : translate('startedAudioDownloads', resolvedLangRef.current, { count: started }),
+        'success'
+      );
+    }
     setTab('library');
   }, [allVideos, closeVideosSheet, enqueue, showToast]);
 
@@ -834,7 +913,6 @@ export default function App() {
     );
   }, [libSelected, remove]);
 
-  const videoCount  = allVideos.length;
   const mediaCount  = allVideos.length;
   const activeCount = active.length;
 
@@ -997,24 +1075,7 @@ export default function App() {
                 {translate('browse', resolvedLanguage).toUpperCase()}
               </Text>
               
-              <Pressable
-                android_ripple={RIPPLE_BL}
-                onPress={scanBrowserPage}
-                hitSlop={S.sm}
-                style={[
-                  s.navRowBtn,
-                  (videoCount > 0 || mseActive) && {
-                    backgroundColor: 'rgba(168, 85, 247, 0.15)',
-                    borderRadius: 18,
-                  }
-                ]}
-              >
-                <Icon
-                  name="scan-outline"
-                  size={22}
-                  color={(videoCount > 0 || mseActive) ? '#A855F7' : t.ink}
-                />
-              </Pressable>
+              <View style={s.navRowBtn} />
             </View>
             
             {/* Row 2 */}
@@ -1060,53 +1121,73 @@ export default function App() {
                 style={StyleSheet.absoluteFill} />
             )}
 
-            {(videoCount > 0 || mseActive) && (
+            {loadedUrl !== 'about:blank' && (
               <Pressable
                 android_ripple={RIPPLE}
-                style={[
-                  s.floatingBadge,
+                accessibilityRole="button"
+                accessibilityLabel={`${translate('scan', resolvedLanguage)} ${translate('media', resolvedLanguage)}`}
+                onPress={scanBrowserPage}
+                hitSlop={S.sm}
+                style={({ pressed }) => [
+                  s.scanFab,
                   {
                     backgroundColor: t.btn,
                     borderColor: isDark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.9)',
                   },
                   resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' },
+                  pressed && s.scanFabPressed,
                 ]}
-                onPress={() => {
-                  if (mediaCount > 0) {
-                    setUniversalPickerOpen(false);
-                    setVideosOpen(true);
-                  } else {
-                    scanBrowserPage();
-                  }
-                }}
               >
-                <View style={[s.floatingBadgeIcon, { backgroundColor: isDark ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.18)' }]}>
-                  <Icon name={mediaCount > 0 ? 'download' : 'scan-outline'} size={20} color={t.btnTxt} />
-                </View>
-                <View style={[s.floatingBadgeText, resolvedLanguage === 'ar' && { alignItems: 'flex-end' }]}>
-                  <Text
-                    style={[s.floatingBadgeLabel, { color: t.btnTxt, fontSize: fs(15), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.82}
-                  >
-                    {mediaCount > 0
-                      ? (mediaCount === 1
-                        ? translate('mediaItemFound', resolvedLanguage)
-                        : translate('mediaItemsFound', resolvedLanguage, { count: mediaCount }))
-                      : translate('streamDetected', resolvedLanguage)}
-                  </Text>
-                  <Text style={[s.floatingBadgeHint, { color: t.btnTxt, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
-                    {mediaCount > 0 ? translate('chooseMediaToDownload', resolvedLanguage) : translate('scanningPage', resolvedLanguage)}
-                  </Text>
-                </View>
-                <View style={[s.floatingBadgeAction, { backgroundColor: isDark ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.18)' }]}>
-                  <Text style={[s.floatingBadgeActionText, { color: t.btnTxt, fontSize: fs(13) }]}>
-                    {mediaCount > 0 ? translate('download', resolvedLanguage) : translate('scan', resolvedLanguage)}
-                  </Text>
-                </View>
+                <Icon name="scan-outline" size={20} color={t.btnTxt} />
+                <Text style={[s.scanFabLabel, { color: t.btnTxt, fontSize: fs(14) }]} numberOfLines={1}>
+                  {translate('scan', resolvedLanguage)}
+                </Text>
               </Pressable>
             )}
+
+            <Pressable
+              android_ripple={RIPPLE}
+              accessibilityRole="button"
+              accessibilityLabel={
+                mediaCount === 1
+                  ? translate('mediaItemFound', resolvedLanguage)
+                  : translate('mediaItemsFound', resolvedLanguage, { count: mediaCount })
+              }
+              style={({ pressed }) => [
+                s.mediaFab,
+                {
+                  backgroundColor: mediaCount > 0 ? t.btn : t.card,
+                  borderColor: mediaCount > 0
+                    ? (isDark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.9)')
+                    : t.sep,
+                },
+                pressed && s.mediaFabPressed,
+              ]}
+              onPress={() => {
+                setUniversalPickerOpen(false);
+                setVideosOpen(true);
+              }}
+            >
+              <Icon
+                name={mediaCount > 0 ? 'download' : 'download-outline'}
+                size={18}
+                color={mediaCount > 0 ? t.btnTxt : t.ink2}
+              />
+              <Text
+                style={[
+                  s.mediaFabCount,
+                  {
+                    color: mediaCount > 0 ? t.btnTxt : t.ink,
+                    fontSize: fs(15),
+                  },
+                ]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+              >
+                {mediaCount}
+              </Text>
+            </Pressable>
 
             {/* Floating bookmark FAB */}
             {loadedUrl !== 'about:blank' && (
@@ -1114,7 +1195,7 @@ export default function App() {
                 android_ripple={{ color: 'rgba(255,255,255,0.2)', borderless: true }}
                 style={[s.bmFab, {
                   backgroundColor: isSaved(loadedUrl, bookmarks) ? t.btn : t.card,
-                  ...(videoCount > 0 || mseActive ? { bottom: 156 } : null),
+                  bottom: 156,
                   ...(IS_IOS
                     ? { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } }
                     : { elevation: 5 }),
@@ -2102,9 +2183,9 @@ const s = StyleSheet.create({
     marginBottom: S.xs,
   },
   navRowBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: IS_IOS ? 44 : 36,
+    height: IS_IOS ? 44 : 36,
+    borderRadius: IS_IOS ? 22 : 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2129,53 +2210,52 @@ const s = StyleSheet.create({
   nestedReloadBtn: {
     padding: S.xs,
   },
-  floatingBadge: {
+  scanFab: {
     position: 'absolute',
     bottom: 84,
-    left: S.md,
-    right: S.md,
-    minHeight: 64,
+    left: S.lg,
+    minWidth: 104,
+    height: 52,
+    borderRadius: 26,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: S.sm,
+    justifyContent: 'center',
+    gap: S.xs,
     paddingHorizontal: S.md,
-    paddingVertical: S.sm + 2,
-    borderRadius: R.xl,
     borderWidth: StyleSheet.hairlineWidth,
-    zIndex: 20,
+    zIndex: 30,
+    ...(IS_IOS
+      ? { shadowColor: '#000', shadowOpacity: 0.24, shadowRadius: 14, shadowOffset: { width: 0, height: 6 } }
+      : { elevation: 8 }),
+  },
+  scanFabLabel: {
+    fontWeight: '800',
+  },
+  scanFabPressed: {
+    opacity: 0.86,
+    transform: [{ scale: 0.97 }],
+  },
+  mediaFab: {
+    position: 'absolute',
+    bottom: 84,
+    right: S.lg,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 1,
+    borderWidth: StyleSheet.hairlineWidth,
+    zIndex: 30,
     ...(IS_IOS
       ? { shadowColor: '#000', shadowOpacity: 0.28, shadowRadius: 18, shadowOffset: { width: 0, height: 8 } }
       : { elevation: 8 }),
   },
-  floatingBadgeIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
+  mediaFabPressed: {
+    opacity: 0.86,
+    transform: [{ scale: 0.96 }],
   },
-  floatingBadgeText: {
-    flex: 1,
-    minWidth: 0,
-    gap: 2,
-  },
-  floatingBadgeLabel: { fontWeight: '800' },
-  floatingBadgeHint: {
-    fontSize: 11,
-    fontWeight: '500',
-    opacity: 0.72,
-  },
-  floatingBadgeAction: {
-    minWidth: 82,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: S.sm + 2,
-    flexShrink: 0,
-  },
-  floatingBadgeActionText: { fontWeight: '800' },
+  mediaFabCount: { fontWeight: '900', lineHeight: 17 },
 
   activeStrip:    { paddingHorizontal: S.md, paddingVertical: S.sm, borderTopWidth: StyleSheet.hairlineWidth, gap: S.xs },
   activeStripBar: { height: 2, borderRadius: 1, overflow: 'hidden' },

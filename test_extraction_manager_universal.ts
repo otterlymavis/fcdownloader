@@ -89,7 +89,7 @@ async function testLowConfidenceUniversalDoesNotAutoDownload() {
   assert.match(result.diagnostics?.['universal-browser-probe'] ?? '', /no media/i);
 }
 
-async function testBrowserIframeFallsBackToEmbedServerExtraction() {
+async function testBrowserVimeoIframeUsesDerivedConfigJson() {
   const serverCalls: string[] = [];
   const manager = new ExtractionManager(deps({
     extractViaServer: async (url) => {
@@ -106,11 +106,29 @@ async function testBrowserIframeFallsBackToEmbedServerExtraction() {
   });
 
   assert.equal(result.success, true);
-  assert.equal(result.strategy, 'browser-embed-server');
-  assert.equal(result.media?.[0]?.url, 'https://cdn.example.com/vimeo-embed.mp4');
-  assert.deepEqual(serverCalls, ['https://example.com/post', 'https://player.vimeo.com/video/123']);
+  assert.equal(result.strategy, 'universal-browser-probe');
+  assert.equal(result.media?.[0]?.url, 'https://player.vimeo.com/video/123/config');
+  assert.equal(result.media?.[0]?.mimeType, 'application/json');
+  assert.deepEqual(serverCalls, []);
   const audit = result.media?.[0]?.sourceAudit ?? [];
-  assert.equal(audit[audit.length - 1]?.strategy, 'browser-embedded-player');
+  assert.equal(audit[audit.length - 1]?.strategy, 'vimeo-json');
+}
+
+async function testCanonicalVimeoPageUsesConfigWithoutServer() {
+  const serverCalls: string[] = [];
+  const manager = new ExtractionManager(deps({
+    extractViaServer: async (url) => {
+      serverCalls.push(url);
+      return [];
+    },
+  }));
+
+  const result = await manager.extract('https://vimeo.com/76979871');
+
+  assert.equal(result.success, true);
+  assert.equal(result.strategy, 'universal-browser-probe');
+  assert.equal(result.media?.[0]?.url, 'https://player.vimeo.com/video/76979871/config');
+  assert.deepEqual(serverCalls, []);
 }
 
 async function testBrowserIframeUsesPlatformFallbackWhenServerMisses() {
@@ -163,21 +181,21 @@ async function testBrowserSrcdocIframeFallsBackToEmbedServerExtraction() {
   const manager = new ExtractionManager(deps({
     extractViaServer: async (url) => {
       serverCalls.push(url);
-      return url.includes('player.vimeo.com/video/456')
-        ? [media('https://cdn.example.com/srcdoc-vimeo.mp4')]
+      return url.includes('fast.wistia.com/embed/iframe/456')
+        ? [media('https://cdn.example.com/srcdoc-wistia.mp4')]
         : [];
     },
     probeUniversalMediaFromUrl: async () => [],
   }));
 
   const result = await manager.extract('https://example.com/post', {
-    pageHtml: '<iframe srcdoc="&lt;iframe src=&quot;https://player.vimeo.com/video/456&quot;&gt;&lt;/iframe&gt;"></iframe>',
+    pageHtml: '<iframe srcdoc="&lt;iframe src=&quot;https://fast.wistia.com/embed/iframe/456&quot;&gt;&lt;/iframe&gt;"></iframe>',
   });
 
   assert.equal(result.success, true);
   assert.equal(result.strategy, 'browser-embed-server');
-  assert.equal(result.media?.[0]?.url, 'https://cdn.example.com/srcdoc-vimeo.mp4');
-  assert.deepEqual(serverCalls, ['https://example.com/post', 'https://player.vimeo.com/video/456']);
+  assert.equal(result.media?.[0]?.url, 'https://cdn.example.com/srcdoc-wistia.mp4');
+  assert.deepEqual(serverCalls, ['https://example.com/post', 'https://fast.wistia.com/embed/iframe/456']);
   const audit = result.media?.[0]?.sourceAudit ?? [];
   assert.equal(audit[audit.length - 1]?.source, 'embed-srcdoc');
 }
@@ -247,7 +265,8 @@ async function main() {
   await testKnownSiteServerWins();
   await testUnknownUsesBrowserFedUniversal();
   await testLowConfidenceUniversalDoesNotAutoDownload();
-  await testBrowserIframeFallsBackToEmbedServerExtraction();
+  await testBrowserVimeoIframeUsesDerivedConfigJson();
+  await testCanonicalVimeoPageUsesConfigWithoutServer();
   await testBrowserIframeUsesPlatformFallbackWhenServerMisses();
   testEmbedProbeFindsBaseSrcdocAndObjectParamUrls();
   await testBrowserSrcdocIframeFallsBackToEmbedServerExtraction();

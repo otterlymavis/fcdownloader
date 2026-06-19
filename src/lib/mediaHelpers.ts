@@ -54,7 +54,7 @@ const MIME_BY_EXT: Record<string, string> = {
 const SEGMENT_RE = /\.(ts|m4s|cmfv|cmfa)(\?|#|$)/i;
 const VIMEO_RANGE_RE = /vimeocdn\.com\/.*\/v2\/range\/.*\/avf\//i;
 const USEFUL_EXT_RE = /\.(m3u8|m3u|mpd|mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac)(\?|#|$)/i;
-const VIMEO_JSON_RE = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i;
+const VIMEO_JSON_RE = /(?:vimeocdn\.com\/.*\/playlist\.json|player\.vimeo\.com\/video\/\d+\/config)(?:[?#]|$)/i;
 const VIDEO_CDN_RE = /(?:googlevideo\.com\/videoplayback|video\.twimg\.com\/|cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|threadscdn\.com\/|tiktokcdn\.com\/|tiktokcdn-us\.com\/|v\d+-webapp\.tiktok\.com\/|v\.redd\.it\/|fbcdn\.net\/videos|pinimg\.com\/videos\/|dmcdn\.net\/|usher\.twitch\.tv\/|bilivideo\.com\/|weibocdn\.com\/|xhscdn\.com\/|akamaized\.net\/|cloudfront\.net\/|jwpcdn\.com\/|jwplatform\.com\/|kaltura\.com\/|mux\.com\/|mux\.dev\/|streamable\.com\/)/i;
 const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(\?|#|$)/i;
 const VIDEO_EXT_RE = /\.(m3u8|m3u|mpd|mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp)(\?|#|$)/i;
@@ -287,6 +287,7 @@ export function isLikelyThumbnailUrl(url: string): boolean {
 export function isNonContentMediaUrl(url: string, mimeType?: string | null): boolean {
   const u = url.toLowerCase();
   const mt = String(mimeType || '').toLowerCase();
+  if (VIMEO_JSON_RE.test(url)) return false;
   if (/\.(?:html?|php|aspx?)(?:[?#]|$)/i.test(u)) return true;
   if (mt.includes('text/html') || mt.includes('application/xhtml') || mt.includes('application/json')) return true;
   if (/(?:doubleclick|googlesyndication|google-analytics|analytics|adservice|scorecardresearch|outbrain|taboola|treasuredata|bidswitch)/i.test(u)) return true;
@@ -302,14 +303,16 @@ export function guessMediaType(url: string): DetectedMedia['mediaType'] {
   return 'direct';
 }
 
-export function smartDedup(items: DetectedMedia[]): DetectedMedia[] {
+export function smartDedup(items: DetectedMedia[], contextPageUrl?: string): DetectedMedia[] {
   const grouped = new Map<string, { item: DetectedMedia; score: number }>();
   const ungrouped: DetectedMedia[] = [];
   for (const item of items) {
     const urlScore = getQualityScore(item.url);
     if (urlScore < 0) continue;
-    const score = urlScore * (1 + (item.confidence ?? 0.5) * 0.2);
-    const key = getMediaGroupKey(item);
+    const score = (
+      isTopLevelManifestCandidate(item) ? 1_000_000_000 : urlScore
+    ) * (1 + (item.confidence ?? 0.5) * 0.2);
+    const key = getMediaGroupKey(item, contextPageUrl);
     if (!key) {
       ungrouped.push(item);
       continue;
@@ -320,7 +323,7 @@ export function smartDedup(items: DetectedMedia[]): DetectedMedia[] {
   return [...Array.from(grouped.values()).map((entry) => entry.item), ...ungrouped];
 }
 
-export function getMediaGroupKey(item: DetectedMedia): string | null {
+export function getMediaGroupKey(item: DetectedMedia, contextPageUrl?: string): string | null {
   const url = item.url;
   try {
     if (YT_CDN_RE.test(url)) {
@@ -332,7 +335,9 @@ export function getMediaGroupKey(item: DetectedMedia): string | null {
     const twitterMatch = url.match(TW_VIDEO_RE);
     if (twitterMatch) return `tw_${twitterMatch[1]}`;
     if (isManifestCandidate(item)) {
-      const pageKey = getPageGroupKey(item.sourcePageUrl || item.pageUrl);
+      const pageUrl = contextPageUrl || item.sourcePageUrl || item.pageUrl;
+      const pageKey = getPageGroupKey(pageUrl);
+      if (pageKey && isManifestUrl(pageUrl)) return `manifest_page_${pageKey}`;
       const manifestKey = getManifestFamilyKey(item.url);
       if (pageKey && manifestKey) return `manifest_${pageKey}_${manifestKey}_${getMediaKind(item)}`;
     }
@@ -350,6 +355,24 @@ function isManifestCandidate(item: DetectedMedia): boolean {
     /\.m3u8?(?:[?#]|$)/i.test(url) ||
     /\.mpd(?:[?#]|$)/i.test(url) ||
     /mpegurl|m3u8|dash|mpd/.test(mimeType);
+}
+
+function isManifestUrl(url?: string): boolean {
+  return Boolean(url && /\.(?:m3u8?|mpd)(?:[?#]|$)/i.test(url));
+}
+
+function isTopLevelManifestCandidate(item: DetectedMedia): boolean {
+  const pageUrl = item.sourcePageUrl || item.pageUrl;
+  if (!isManifestUrl(pageUrl) || !isManifestCandidate(item)) return false;
+  try {
+    const itemUrl = new URL(item.url);
+    const topLevelUrl = new URL(pageUrl!);
+    itemUrl.hash = '';
+    topLevelUrl.hash = '';
+    return itemUrl.href === topLevelUrl.href;
+  } catch {
+    return item.url.split('#')[0] === pageUrl?.split('#')[0];
+  }
 }
 
 function getPageGroupKey(url?: string): string | null {

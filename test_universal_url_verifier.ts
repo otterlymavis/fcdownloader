@@ -1,6 +1,7 @@
 import './test_setup.js';
 import assert from 'node:assert/strict';
 import { DetectedMedia } from './src/types';
+import { pickStrategy } from './src/lib/downloadStrategies';
 import { verifyUniversalDirectCandidates } from './src/lib/universalUrlVerifier';
 
 function item(url: string, mediaType: DetectedMedia['mediaType'] = 'direct'): DetectedMedia {
@@ -149,6 +150,44 @@ async function testSubtitleMimeClassification() {
   assert.equal(srtItems[0].mediaKind, 'subtitle');
 }
 
+async function testVimeoJsonPlaylistIsMedia() {
+  const playlistUrl = 'https://vod-adaptive-ak.vimeocdn.com/video/12345/sep/video/abcdef/playlist.json?pathsig=abc';
+  const configUrl = 'https://player.vimeo.com/video/76979871/config';
+  const verifiedPlaylist = await verifyUniversalDirectCandidates('universal-browser-probe', [
+    { ...item(playlistUrl), mimeType: 'application/json', label: 'Vimeo JSON playlist' },
+  ], {
+    fetchImpl: headFetch({
+      url: playlistUrl,
+      contentType: 'application/json; charset=utf-8',
+      contentLength: '120000',
+    }),
+  });
+
+  assert.equal(verifiedPlaylist.length, 1, 'Vimeo playlist JSON should not be dropped as generic JSON');
+  assert.equal(verifiedPlaylist[0].url, playlistUrl);
+  assert.equal(verifiedPlaylist[0].mediaType, 'direct');
+  assert.equal(verifiedPlaylist[0].mediaKind, 'video');
+  assert(verifiedPlaylist[0].confidence && verifiedPlaylist[0].confidence >= 0.95);
+  assert.match(verifiedPlaylist[0].sourceAudit?.at(-1)?.notes ?? '', /Vimeo JSON source/);
+
+  const verifiedConfig = await verifyUniversalDirectCandidates('universal-browser-probe', [
+    { ...item(configUrl), mimeType: 'application/json', label: 'Vimeo player config' },
+  ], {
+    fetchImpl: headFetch({
+      url: configUrl,
+      contentType: 'application/json; charset=utf-8',
+      contentLength: '90000',
+    }),
+  });
+
+  assert.equal(verifiedConfig.length, 1, 'Vimeo player config JSON should not be dropped as generic JSON');
+  assert.equal(verifiedConfig[0].url, configUrl);
+  assert.equal(verifiedConfig[0].mediaType, 'direct');
+  assert.equal(verifiedConfig[0].mediaKind, 'video');
+  assert.equal(pickStrategy(verifiedConfig[0]), 'vimeo-json');
+  assert.equal(pickStrategy(verifiedPlaylist[0]), 'vimeo-json');
+}
+
 async function main() {
   await testVerifiedMediaCandidate();
   await testConfirmedNonMediaDropsCandidate();
@@ -156,6 +195,7 @@ async function main() {
   await testFailureKeepsCandidateWithAudit();
   await testScopeAndManifestSkip();
   await testSubtitleMimeClassification();
+  await testVimeoJsonPlaylistIsMedia();
   console.log('universal URL verifier ok');
 }
 

@@ -19,16 +19,18 @@ class MainActivity : ReactActivity() {
     // This is required for expo-splash-screen.
     setTheme(R.style.AppTheme);
     rewriteSendIntent(intent)
+    setIntent(intent)
     super.onCreate(null)
   }
 
   override fun onNewIntent(intent: Intent) {
     rewriteSendIntent(intent)
+    setIntent(intent)
     super.onNewIntent(intent)
   }
 
   /**
-   * When the app is opened from the system share sheet (ACTION_SEND, text/*),
+   * When the app is opened from the system share sheet (ACTION_SEND with a text MIME type),
    * Android delivers the shared text in EXTRA_TEXT — which React Native's Linking
    * does NOT surface. Rewrite the intent into the fcdownloader://share?url=... deep
    * link the JS already handles. Shared text like "caption https://..." is reduced

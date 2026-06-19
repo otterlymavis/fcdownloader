@@ -5,6 +5,7 @@ Imported into extractors.py so strategies.py can call extractors.extract_*.
 from __future__ import annotations
 
 import gzip
+import html as html_mod
 import json
 import re
 import urllib.parse
@@ -860,6 +861,184 @@ def extract_watermark_free_source(page_url: str, cookies: str | None) -> dict[st
     return None
 
 
+def _reddit_rss_info(
+    body: bytes,
+    page_url: str,
+    post_id: str | None,
+) -> dict[str, Any] | None:
+    rss = body.decode("utf-8", errors="replace")
+    entries = re.findall(r"<entry\b[\s\S]*?</entry>", rss, re.IGNORECASE)
+    post_entry = next((
+        entry for entry in entries
+        if re.search(
+            rf"<id>\s*t3_{re.escape(post_id)}\s*</id>" if post_id else r"<id>\s*t3_[A-Za-z0-9]+\s*</id>",
+            entry,
+            re.IGNORECASE,
+        )
+    ), None)
+    if not post_entry:
+        return None
+
+    decoded = post_entry
+    for _ in range(3):
+        next_value = html_mod.unescape(decoded)
+        if next_value == decoded:
+            break
+        decoded = next_value
+
+    title_match = re.search(r"<title[^>]*>(.*?)</title>", post_entry, re.IGNORECASE | re.DOTALL)
+    title = html_mod.unescape(title_match.group(1)).strip() if title_match else "Reddit"
+    urls: list[str] = []
+    for match in re.finditer(
+        r"https?://(?:v\.redd\.it|i\.redd\.it|preview\.redd\.it)/[^\"'<>\s]+",
+        decoded,
+        re.IGNORECASE,
+    ):
+        url = match.group(0).rstrip(");,")
+        if url not in urls:
+            urls.append(url)
+
+    video_url = next((url for url in urls if "://v.redd.it/" in url.lower()), None)
+    if video_url:
+        parsed = urllib.parse.urlsplit(video_url)
+        path_parts = [part for part in parsed.path.split("/") if part]
+        if len(path_parts) == 1:
+            video_url = f"https://v.redd.it/{path_parts[0]}/HLSPlaylist.m3u8"
+        headers = {"Referer": "https://www.reddit.com/"}
+        return source_audit.add_audit({
+            "id": post_id or cache_key(page_url),
+            "title": title or "Reddit Video",
+            "url": video_url,
+            "ext": "m3u8" if ".m3u8" in video_url.lower() else (guess_ext_from_url(video_url) or "mp4"),
+            "protocol": "m3u8_native" if ".m3u8" in video_url.lower() else "https",
+            "http_headers": headers,
+        }, [source_audit.audit_entry(
+            strategy="reddit RSS extractor",
+            source="post Atom t3 entry",
+            url=video_url,
+            selected=True,
+            headers=headers,
+        )])
+
+    image_urls = [
+        url for url in urls
+        if any(host in urllib.parse.urlsplit(url).netloc.lower() for host in ("i.redd.it", "preview.redd.it"))
+    ]
+    if not image_urls:
+        return None
+
+    entries_out = [{
+        "id": f"{post_id or cache_key(page_url)}-{idx + 1}",
+        "title": title or f"Reddit Image {idx + 1}",
+        "url": url,
+        "ext": guess_ext_from_url(url) or "jpg",
+        "protocol": "https",
+        "http_headers": {"Referer": "https://www.reddit.com/"},
+    } for idx, url in enumerate(image_urls)]
+    audit = [
+        source_audit.audit_entry(
+            strategy="reddit RSS extractor",
+            source="post Atom t3 entry",
+            url=entry["url"],
+            selected=True,
+            headers=entry["http_headers"],
+        )
+        for entry in entries_out
+    ]
+    if len(entries_out) == 1:
+        return source_audit.add_audit(entries_out[0], audit)
+    return source_audit.add_audit({
+        "_type": "playlist",
+        "id": post_id or cache_key(page_url),
+        "title": title or "Reddit Gallery",
+        "entries": entries_out,
+    }, audit)
+
+
+def _reddit_json_info(
+    post: dict[str, Any],
+    page_url: str,
+) -> dict[str, Any] | None:
+    download_headers = {"Referer": "https://www.reddit.com/"}
+    reddit_video = (post.get("secure_media") or {}).get("reddit_video") or {}
+    if not reddit_video:
+        reddit_video = (post.get("media") or {}).get("reddit_video") or {}
+
+    vid_id = post.get("id") or cache_key(page_url)
+    title = post.get("title") or "Reddit"
+    thumb = post.get("thumbnail")
+    if thumb in ("default", "self", "nsfw", ""):
+        thumb = None
+
+    if reddit_video:
+        candidates: list[dict[str, Any]] = []
+        for key, ext, proto in (
+            ("hls_url",      "m3u8", "m3u8_native"),
+            ("dash_url",     "mpd",  "http_dash_segments"),
+            ("fallback_url", "mp4",  "https"),
+        ):
+            url = reddit_video.get(key)
+            if url:
+                candidates.append({
+                    "url": url,
+                    "fieldPath": f"reddit_video.{key}",
+                    "ext": ext,
+                    "protocol": proto,
+                    "height": reddit_video.get("height"),
+                    "width": reddit_video.get("width"),
+                    "bitrate": reddit_video.get("bitrate_kbps"),
+                    "hasVideo": True,
+                    "hasAudio": key != "fallback_url",
+                })
+
+        selected, audit = _select_candidate(
+            candidates,
+            strategy="reddit extractor",
+            source="post JSON reddit_video",
+        )
+        if selected and selected.get("url"):
+            return source_audit.add_audit({
+                "id": vid_id, "title": title,
+                "url": selected["url"], "ext": selected.get("ext") or "mp4",
+                "protocol": selected.get("protocol") or "https", "http_headers": download_headers,
+                "thumbnail": thumb,
+                "width": selected.get("width"),
+                "height": selected.get("height"),
+            }, audit)
+
+    image_urls: list[str] = []
+    if post.get("is_gallery") and isinstance(post.get("media_metadata"), dict):
+        metadata = post["media_metadata"]
+        gallery_items = ((post.get("gallery_data") or {}).get("items") or [])
+        ids = [item.get("media_id") for item in gallery_items if isinstance(item, dict)]
+        ids = [media_id for media_id in ids if media_id] or list(metadata)
+        for media_id in ids:
+            meta = metadata.get(media_id) or {}
+            if meta.get("status") != "valid":
+                continue
+            url = ((meta.get("s") or {}).get("u") or (meta.get("s") or {}).get("gif") or "")
+            if url:
+                image_urls.append(html_mod.unescape(url))
+    else:
+        direct_url = post.get("url")
+        if isinstance(direct_url, str) and re.search(r"\.(?:jpe?g|png|gif|webp|avif)(?:[?#]|$)", direct_url, re.I):
+            image_urls.append(direct_url)
+
+    if not image_urls:
+        return None
+    entries = [{
+        "id": f"{vid_id}-{idx + 1}",
+        "title": title,
+        "url": url,
+        "ext": guess_ext_from_url(url) or "jpg",
+        "protocol": "https",
+        "http_headers": download_headers,
+    } for idx, url in enumerate(image_urls)]
+    if len(entries) == 1:
+        return entries[0]
+    return {"_type": "playlist", "id": vid_id, "title": title, "entries": entries}
+
+
 def extract_reddit(page_url: str, cookies: str | None) -> dict[str, Any] | None:
     _reddit_ua = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -882,16 +1061,32 @@ def extract_reddit(page_url: str, cookies: str | None) -> dict[str, Any] | None:
         except Exception:
             pass
 
-    # Strip query string and trailing slash before appending /.json
-    json_url = re.sub(r"[?#].*$", "", page_url).rstrip("/") + "/.json?limit=1"
-    headers = safe_headers({
-        # A real browser UA is required; Reddit blocks obvious bots
+    canonical_url = re.sub(r"[?#].*$", "", page_url).rstrip("/")
+    post_id_match = re.search(r"/comments/([A-Za-z0-9]+)", canonical_url)
+    post_id = post_id_match.group(1) if post_id_match else None
+
+    # Try Atom first. Reddit increasingly gates anonymous JSON, and a failed
+    # JSON request can consume the small anonymous rate-limit budget.
+    rss_headers = safe_headers({
+        "User-Agent": _reddit_ua,
+        "Accept": "application/atom+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        **({"Cookie": cookies} if cookies else {}),
+    })
+    rss_body = _fetch(f"{canonical_url}/.rss", rss_headers)
+    if rss_body:
+        rss_info = _reddit_rss_info(rss_body, page_url, post_id)
+        if rss_info:
+            return rss_info
+
+    json_url = f"{canonical_url}/.json?limit=1&raw_json=1"
+    json_headers = safe_headers({
         "User-Agent": _reddit_ua,
         "Accept": "application/json",
         "Accept-Language": "en-US,en;q=0.9",
         **({"Cookie": cookies} if cookies else {}),
     })
-    body = _fetch(json_url, headers)
+    body = _fetch(json_url, json_headers)
     if not body:
         return None
 
@@ -900,57 +1095,7 @@ def extract_reddit(page_url: str, cookies: str | None) -> dict[str, Any] | None:
         post = data[0]["data"]["children"][0]["data"]
     except Exception:
         return None
-
-    reddit_video = (post.get("secure_media") or {}).get("reddit_video") or {}
-    if not reddit_video:
-        reddit_video = (post.get("media") or {}).get("reddit_video") or {}
-
-    if not reddit_video:
-        return None
-
-    vid_id = post.get("id") or cache_key(page_url)
-    title = post.get("title") or "Reddit Video"
-    thumb = post.get("thumbnail")
-    if thumb in ("default", "self", "nsfw", ""):
-        thumb = None
-
-    # Prefer HLS (audio+video in one stream) > DASH > fallback_url (video only)
-    candidates: list[dict[str, Any]] = []
-    for key, ext, proto in (
-        ("hls_url",      "m3u8", "m3u8_native"),
-        ("dash_url",     "mpd",  "http_dash_segments"),
-        ("fallback_url", "mp4",  "https"),
-    ):
-        url = reddit_video.get(key)
-        if url:
-            candidates.append({
-                "url": url,
-                "fieldPath": f"reddit_video.{key}",
-                "ext": ext,
-                "protocol": proto,
-                "height": reddit_video.get("height"),
-                "width": reddit_video.get("width"),
-                "bitrate": reddit_video.get("bitrate_kbps"),
-                "hasVideo": True,
-                "hasAudio": key != "fallback_url",
-            })
-
-    selected, audit = _select_candidate(
-        candidates,
-        strategy="reddit extractor",
-        source="post JSON reddit_video",
-    )
-    if selected and selected.get("url"):
-        return source_audit.add_audit({
-            "id": vid_id, "title": title,
-            "url": selected["url"], "ext": selected.get("ext") or "mp4",
-            "protocol": selected.get("protocol") or "https", "http_headers": {},
-            "thumbnail": thumb,
-            "width": selected.get("width"),
-            "height": selected.get("height"),
-        }, audit)
-
-    return None
+    return _reddit_json_info(post, page_url)
 
 
 # ── Watermark-removal proxy (snapwc.com) ──────────────────────────────────────

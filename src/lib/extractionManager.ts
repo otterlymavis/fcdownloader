@@ -19,6 +19,8 @@ import { debugLog, debugWarn } from './releaseLogger';
 import { autoDownloadableUniversalMedia, probeUniversalMediaFromSession, probeUniversalMediaFromUrl } from './universalMediaProbe';
 import { extractUniversalEmbedUrls, extractUniversalOEmbedUrls } from './universalEmbedProbe';
 
+const VIMEO_JSON_URL_RE = /(?:vimeocdn\.com\/.*\/playlist\.json|player\.vimeo\.com\/video\/\d+\/config)(?:[?#]|$)/i;
+
 // ── Result types ─────────────────────────────────────────────────────────────
 
 export interface ExtractionResult {
@@ -141,6 +143,37 @@ export class ExtractionManager {
     const caps = getSiteCapabilities(pageUrl);
     const diagnostics: Record<string, string> = {};
     let serverErrorCode: string | undefined;
+    let browserProbeMedia: DetectedMedia[] | undefined;
+
+    const hasVimeoSignal =
+      /(?:^|\/\/)(?:www\.)?vimeo\.com\/|player\.vimeo\.com\/video\/|vimeocdn\.com\/.*\/playlist\.json/i.test(pageUrl) ||
+      /player\.vimeo\.com\/video\/|vimeocdn\.com\/.*\/playlist\.json/i.test(session?.pageHtml ?? '') ||
+      (session?.mediaHints ?? []).some((hint) => {
+        const url = String(hint.url ?? hint.src ?? '');
+        return /player\.vimeo\.com\/video\/|vimeocdn\.com\/.*\/playlist\.json/i.test(url);
+      });
+
+    // Vimeo player config is already a complete, downloadable source descriptor.
+    // Prefer it before the server tier so embedded players do not wait for a
+    // remote extractor or surface their individual AV fragments.
+    if (hasVimeoSignal) {
+      browserProbeMedia = this.deps.probeUniversalMediaFromSession({
+        pageUrl,
+        pageHtml: session?.pageHtml ?? undefined,
+        mediaHints: session?.mediaHints ?? undefined,
+      });
+      const vimeoJson = browserProbeMedia.filter((item) => VIMEO_JSON_URL_RE.test(item.url));
+      if (vimeoJson.length > 0) {
+        const best = pickBestMedia(vimeoJson);
+        return {
+          success: true,
+          fatal: false,
+          strategy: 'universal-browser-probe',
+          confidence: best?.confidence ?? 0.95,
+          media: vimeoJson,
+        };
+      }
+    }
 
     // ── Fast path: on-device first for sites the server can't extract without a
     // session (Xiaohongshu). The gated server round-trip is slow and usually
@@ -207,11 +240,11 @@ export class ExtractionManager {
     // Prefer already-captured browser session data over fetching the page again.
     // Results are filtered to high-confidence auto-download candidates.
     if (session?.pageHtml || session?.mediaHints?.length) {
-      const attempt = await runAttempt('universal-browser-probe', async () => this.deps.probeUniversalMediaFromSession({
-        pageUrl,
-        pageHtml: session?.pageHtml ?? undefined,
-        mediaHints: session?.mediaHints ?? undefined,
-      }));
+      const attempt = await runAttempt('universal-browser-probe', async () => browserProbeMedia ?? this.deps.probeUniversalMediaFromSession({
+          pageUrl,
+          pageHtml: session?.pageHtml ?? undefined,
+          mediaHints: session?.mediaHints ?? undefined,
+        }));
       if (attempt.success && attempt.media) {
         const best = pickBestMedia(attempt.media);
         debugLog('[ExtractionManager] success via universal-browser-probe, best:', best?.mediaType, best?.label);

@@ -328,9 +328,9 @@ def _strategy_platform_extractors(
                 return _result(name, True, media=info)
             # Don't hard-stop — fall through to yt-dlp if API returns nothing
 
-        if any(h in page_url for h in ("twitter.com", "x.com", "t.co")):
+        if _host_matches(page_url, ("twitter.com", "x.com", "t.co")):
             tw_url = page_url
-            if "t.co" in page_url:
+            if _host_matches(page_url, ("t.co",)):
                 # t.co is Twitter's own link shortener — follow the redirect to the
                 # real tweet URL before passing to the extractor.
                 try:
@@ -346,7 +346,7 @@ def _strategy_platform_extractors(
                 return _result(name, True, media=info)
             return _result(name, False, reason="Twitter extractor found no media")
 
-        if any(h in page_url for h in ("reddit.com", "redd.it")):
+        if _host_matches(page_url, ("reddit.com", "redd.it")):
             info = extractors.extract_reddit(page_url, cookies)
             if info:
                 return _result(name, True, media=info)

@@ -718,6 +718,92 @@ class TestXiaohongshuExtractor:
         ) is None
 
 
+class TestRedditExtractor:
+    def test_platform_strategy_does_not_misclassify_reddit_as_t_co(self, monkeypatch):
+        import strategies
+
+        expected = {
+            "id": "1tsveql",
+            "title": "Reddit",
+            "url": "https://v.redd.it/example/HLSPlaylist.m3u8",
+            "ext": "m3u8",
+            "protocol": "m3u8_native",
+            "http_headers": {},
+        }
+        monkeypatch.setattr(
+            "extractors.extract_twitter",
+            lambda *args, **kwargs: pytest.fail("Reddit URL reached Twitter extractor"),
+        )
+        monkeypatch.setattr("extractors.extract_reddit", lambda *args, **kwargs: expected)
+
+        result = strategies._strategy_platform_extractors(
+            "https://www.reddit.com/r/shiba/comments/1tsveql/sample/",
+            None,
+        )
+
+        assert result["success"]
+        assert result["media"] == expected
+
+    def test_prefers_rss_and_derives_hls_url(self, monkeypatch):
+        rss = b"""<?xml version="1.0"?><feed><entry>
+        <content type="html">&lt;a href=&quot;https://v.redd.it/0vt9aiv36h4h1&quot;&gt;video&lt;/a&gt;</content>
+        <id>t3_1tsveql</id><title>Shibas in the mountains</title>
+        </entry></feed>"""
+        calls = []
+
+        def fake_fetch(url, headers, timeout=15):
+            calls.append(url)
+            return rss
+
+        monkeypatch.setattr("new_extractors._fetch", fake_fetch)
+
+        info = extractors.extract_reddit(
+            "https://www.reddit.com/r/shiba/comments/1tsveql/shibas_in_the_mountains/",
+            None,
+        )
+
+        assert info is not None
+        assert info["url"] == "https://v.redd.it/0vt9aiv36h4h1/HLSPlaylist.m3u8"
+        assert info["protocol"] == "m3u8_native"
+        assert info["http_headers"]["Referer"] == "https://www.reddit.com/"
+        assert calls == [
+            "https://www.reddit.com/r/shiba/comments/1tsveql/shibas_in_the_mountains/.rss"
+        ]
+
+    def test_json_fallback_returns_gallery_playlist(self, monkeypatch):
+        post = {
+            "id": "gallery1",
+            "title": "Gallery",
+            "is_gallery": True,
+            "gallery_data": {"items": [{"media_id": "one"}, {"media_id": "two"}]},
+            "media_metadata": {
+                "one": {"status": "valid", "s": {"u": "https://i.redd.it/one.jpg?x=1&amp;y=2"}},
+                "two": {"status": "valid", "s": {"u": "https://i.redd.it/two.png"}},
+            },
+        }
+        responses = [
+            None,
+            json.dumps([{"data": {"children": [{"data": post}]}}]).encode(),
+        ]
+        monkeypatch.setattr("new_extractors._fetch", lambda *args, **kwargs: responses.pop(0))
+
+        info = extractors.extract_reddit(
+            "https://www.reddit.com/r/pics/comments/gallery1/sample/",
+            None,
+        )
+
+        assert info is not None
+        assert info["_type"] == "playlist"
+        assert [entry["url"] for entry in info["entries"]] == [
+            "https://i.redd.it/one.jpg?x=1&y=2",
+            "https://i.redd.it/two.png",
+        ]
+        assert all(
+            entry["http_headers"]["Referer"] == "https://www.reddit.com/"
+            for entry in info["entries"]
+        )
+
+
 class TestWatermarkFreeSourceExtractor:
     def test_xhs_live_note_data_shape(self, monkeypatch):
         html = """

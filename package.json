@@ -9,7 +9,7 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "doctor": "npx expo-doctor",
-    "test:universal-probe": "tsx -r ./test_setup.js test_universal_media_probe.ts && tsx -r ./test_setup.js test_browser_session_hints.ts && tsx -r ./test_setup.js test_universal_manifest_inspector.ts && tsx -r ./test_setup.js test_dash_selection.ts && tsx -r ./test_setup.js test_universal_url_verifier.ts && tsx -r ./test_setup.js test_extraction_manager_universal.ts && tsx -r ./test_setup.js test_universal_result_picker.ts && tsx -r ./test_setup.js test_share_url.ts",
+    "test:universal-probe": "tsx -r ./test_setup.js test_universal_media_probe.ts && tsx -r ./test_setup.js test_browser_session_hints.ts && tsx -r ./test_setup.js test_universal_manifest_inspector.ts && tsx -r ./test_setup.js test_dash_selection.ts && tsx -r ./test_setup.js test_universal_url_verifier.ts && tsx -r ./test_setup.js test_extraction_manager_universal.ts && tsx -r ./test_setup.js test_universal_result_picker.ts && tsx -r ./test_setup.js test_share_url.ts && tsx -r ./test_setup.js test_reddit_extractor.ts && tsx -r ./test_setup.js test_facebook_extractor.ts",
     "check": "npm run typecheck && npm run test:universal-probe && npm run validate:safari-extension && npm run doctor",
     "test:server": "PYTHON=\"${FCDL_PYTHON:-.venv/bin/python}\"; if [ ! -x \"$PYTHON\" ]; then PYTHON=python3; fi; \"$PYTHON\" -c \"import sys; sys.exit('Python 3.10+ required for server tests; create the venv from server/README.md') if sys.version_info < (3, 10) else None\" && \"$PYTHON\" -m pytest server/tests",
     "postinstall": "patch-package",

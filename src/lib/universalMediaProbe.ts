@@ -34,6 +34,10 @@ const HLS_RE = /\.m3u8?(?:[?#]|$)|application\/(?:vnd\.apple\.mpegurl|x-mpegurl)
 const DASH_RE = /\.mpd(?:[?#]|$)|application\/(?:dash|x-mpegdash)\+xml/i;
 // Smooth Streaming (.ism/manifest) — treated as DASH-like adaptive bitrate
 const SMOOTH_RE = /\.ism[l]?(?:\/manifest)?(?:[?#]|$)|application\/vnd\.ms-sstr\+xml/i;
+const VIMEO_PLAYLIST_JSON_RE = /vimeocdn\.com\/.*\/playlist\.json(?:[?#]|$)/i;
+const VIMEO_CONFIG_JSON_RE = /player\.vimeo\.com\/video\/\d+\/config(?:[?#]|$)/i;
+const VIMEO_RANGE_FRAGMENT_RE = /vimeocdn\.com\/.*\/v2\/range\/.*\/avf\//i;
+const MEDIA_SEGMENT_RE = /\.(?:ts|m4s|cmfv|cmfa)(?:[?#]|$)/i;
 
 function decodeHtml(value: string): string {
   return value
@@ -141,6 +145,7 @@ function isLikelyJunk(url: string, kind: MediaKind): boolean {
 }
 
 function confidenceFor(source: string, mediaType: MediaType, kind: MediaKind): number {
+  if (source === 'vimeo-json') return 0.95;
   if (source === 'hint') return 0.9;
   if (source === 'media-element') return mediaType === 'direct' ? 0.88 : 0.92;
   if (source === 'resource-link') return mediaType === 'hls' || mediaType === 'dash' ? 0.82 : kind === 'image' ? 0.8 : 0.78;
@@ -216,10 +221,93 @@ function pushCandidate(
   if (!rawUrl) return;
   const url = cleanCandidateUrl(rawUrl, resolveUrl);
   if (!url || seen.has(url)) return;
-  const mediaKind = opts.mediaKind ?? mediaKindFromUrl(url, opts.mimeType);
+  const isVimeoPlaylist = VIMEO_PLAYLIST_JSON_RE.test(url);
+  const isVimeoConfig = VIMEO_CONFIG_JSON_RE.test(url);
+  const isVimeoJson = isVimeoPlaylist || isVimeoConfig;
+  if (!isVimeoJson && (VIMEO_RANGE_FRAGMENT_RE.test(url) || MEDIA_SEGMENT_RE.test(url))) return;
+  const mediaKind = isVimeoJson ? 'video' : opts.mediaKind ?? mediaKindFromUrl(url, opts.mimeType);
   if (isLikelyJunk(url, mediaKind)) return;
   seen.add(url);
-  out.push(makeItem(url, pageUrl, source, { ...opts, mediaKind }));
+  out.push(makeItem(url, pageUrl, isVimeoJson ? 'vimeo-json' : source, {
+    ...opts,
+    mediaKind,
+    mediaType: isVimeoJson ? 'direct' : opts.mediaType,
+    mimeType: isVimeoJson ? opts.mimeType ?? 'application/json' : opts.mimeType,
+    label: isVimeoJson ? opts.label ?? (isVimeoPlaylist ? 'Vimeo JSON playlist' : 'Vimeo player config') : opts.label,
+    confidence: isVimeoJson ? Math.max(opts.confidence ?? 0, 0.95) : opts.confidence,
+    sourceAudit: isVimeoJson ? opts.sourceAudit ?? [{
+      strategy: 'vimeo-json',
+      source,
+      url,
+      selected: true,
+      fieldPath: isVimeoPlaylist ? 'playlist.json' : 'player-config',
+      mimeType: opts.mimeType ?? 'application/json',
+    }] : opts.sourceAudit,
+  }));
+}
+
+function vimeoConfigUrlFromVimeoUrl(rawUrl: string): string | undefined {
+  try {
+    const parsed = new URL(rawUrl);
+    if (!/^https?:$/i.test(parsed.protocol)) return undefined;
+    if (/^player\.vimeo\.com$/i.test(parsed.hostname)) {
+      const match = parsed.pathname.match(/^\/video\/(\d+)(?:\/|$)/i);
+      if (!match) return undefined;
+      parsed.pathname = `/video/${match[1]}/config`;
+      parsed.hash = '';
+      return parsed.toString();
+    }
+    if (!/^(?:www\.)?vimeo\.com$/i.test(parsed.hostname)) return undefined;
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    let idIndex = -1;
+    for (let i = segments.length - 1; i >= 0; i -= 1) {
+      if (/^\d+$/.test(segments[i])) {
+        idIndex = i;
+        break;
+      }
+    }
+    if (idIndex < 0) return undefined;
+    const config = new URL(`https://player.vimeo.com/video/${segments[idIndex]}/config`);
+    parsed.searchParams.forEach((value, key) => config.searchParams.append(key, value));
+    // Vimeo unlisted links commonly use /{videoId}/{privateHash}; the player
+    // config endpoint expects the same value as the h query parameter.
+    if (
+      idIndex === 0 &&
+      segments.length === 2 &&
+      /^[a-z0-9]+$/i.test(segments[1]) &&
+      !config.searchParams.has('h')
+    ) {
+      config.searchParams.set('h', segments[1]);
+    }
+    return config.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function addDerivedVimeoConfigCandidates(out: DetectedMedia[], seen: Set<string>, pageUrl: string): void {
+  const existing = [...out];
+  for (const item of existing) {
+    if (out.length >= 180) break;
+    const configUrl = vimeoConfigUrlFromVimeoUrl(item.url);
+    if (!configUrl || seen.has(configUrl)) continue;
+    pushCandidate(out, seen, configUrl, pageUrl, 'vimeo-embed-config', {
+      mediaKind: 'video',
+      mediaType: 'direct',
+      mimeType: 'application/json',
+      label: 'Vimeo player config',
+      confidence: Math.max(item.confidence ?? 0, 0.9),
+      provenance: item.provenance,
+      sourceAudit: [{
+        strategy: 'vimeo-json',
+        source: 'derived-player-config',
+        url: configUrl,
+        selected: true,
+        fieldPath: item.url,
+        mimeType: 'application/json',
+      }],
+    });
+  }
 }
 
 function attr(tag: string, name: string): string | undefined {
@@ -1500,6 +1588,14 @@ function scanGenericUrls(html: string, pageUrl: string, out: DetectedMedia[], se
   while ((match = re.exec(html)) !== null && out.length < 120) {
     pushCandidate(out, seen, match[0], pageUrl, 'generic-url');
   }
+  const vimeoJsonRe = /https?:\\?\/\\?\/[^"'<>\s)]*vimeocdn\.com[^"'<>\s)]*\/playlist\.json(?:[?#][^"'<>\s)]*)?/gi;
+  while ((match = vimeoJsonRe.exec(html)) !== null && out.length < 120) {
+    pushCandidate(out, seen, match[0], pageUrl, 'generic-url');
+  }
+  const vimeoConfigRe = /https?:\\?\/\\?\/player\.vimeo\.com\/video\/\d+\/config(?:[?#][^"'<>\s)]*)?/gi;
+  while ((match = vimeoConfigRe.exec(html)) !== null && out.length < 120) {
+    pushCandidate(out, seen, match[0], pageUrl, 'generic-url');
+  }
 }
 
 function playerMimeFor(key: string, url: string, nearby = ''): string | undefined {
@@ -1743,6 +1839,25 @@ export function probeUniversalMedia(input: UniversalProbeInput): DetectedMedia[]
   const out: DetectedMedia[] = [];
   const seen = new Set<string>();
   const pageUrl = input.pageUrl;
+  const pageConfigUrl = vimeoConfigUrlFromVimeoUrl(pageUrl);
+  if (pageConfigUrl) {
+    pushCandidate(out, seen, pageConfigUrl, pageUrl, 'vimeo-page-config', {
+      mediaKind: 'video',
+      mediaType: 'direct',
+      mimeType: 'application/json',
+      label: 'Vimeo player config',
+      confidence: 0.95,
+      provenance: 'manual',
+      sourceAudit: [{
+        strategy: 'vimeo-json',
+        source: 'derived-page-config',
+        url: pageConfigUrl,
+        selected: true,
+        fieldPath: pageUrl,
+        mimeType: 'application/json',
+      }],
+    });
+  }
 
   for (const hint of input.mediaHints ?? []) {
     const rawUrl = hintString(hint, 'url') ?? hintString(hint, 'src');
@@ -1841,11 +1956,17 @@ export function probeUniversalMedia(input: UniversalProbeInput): DetectedMedia[]
     }
   }
 
+  addDerivedVimeoConfigCandidates(out, seen, pageUrl);
+
   return out.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
 }
 
 export function autoDownloadableUniversalMedia(items: DetectedMedia[]): DetectedMedia[] {
   const directItems = items.filter((item) => !item.forceServerDownload);
+  const vimeoPlaylistItems = directItems.filter((item) => VIMEO_PLAYLIST_JSON_RE.test(item.url));
+  if (vimeoPlaylistItems.length > 0) return vimeoPlaylistItems;
+  const vimeoConfigItems = directItems.filter((item) => VIMEO_CONFIG_JSON_RE.test(item.url));
+  if (vimeoConfigItems.length > 0) return vimeoConfigItems;
   const strongVideoOrAudio = directItems.filter((item) => {
     const kind = item.mediaKind ?? mediaKindFromUrl(item.url, item.mimeType);
     return (kind === 'video' || kind === 'audio') && (item.confidence ?? 0) >= 0.75;

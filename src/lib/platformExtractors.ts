@@ -19,6 +19,10 @@ const MAX_GENERIC_SCAN_RESULTS = 80;
 const DESKTOP_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
   'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+const FACEBOOK_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
+  'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
+const REDDIT_DOWNLOAD_HEADERS = { Referer: 'https://www.reddit.com/' };
 const MOBILE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) ' +
   'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
@@ -483,27 +487,132 @@ async function extractTikTok(pageUrl: string): Promise<DetectedMedia[]> {
 }
 
 // ── Reddit ────────────────────────────────────────────────────────
-async function extractReddit(pageUrl: string): Promise<DetectedMedia[]> {
+function decodeRedditEntities(value: string): string {
+  let decoded = value;
+  for (let i = 0; i < 3; i++) {
+    const next = decoded
+      .replace(/&amp;/gi, '&')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;|&apos;/gi, "'")
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>');
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return decoded;
+}
+
+export function extractRedditRssMedia(rss: string, pageUrl: string, postId?: string): DetectedMedia[] {
+  const entries = rss.match(/<entry\b[\s\S]*?<\/entry>/gi) ?? [];
+  const postEntry = entries.find((entry) =>
+    postId
+      ? new RegExp(`<id>\\s*t3_${postId}\\s*<\\/id>`, 'i').test(entry)
+      : /<id>\s*t3_[A-Za-z0-9]+\s*<\/id>/i.test(entry),
+  );
+  if (!postEntry) return [];
+
+  const decoded = decodeRedditEntities(postEntry);
+  const urls = extractUrls(decoded, /(https?:\/\/(?:v\.redd\.it|i\.redd\.it|preview\.redd\.it)\/[^"'<>\s]+)/gi);
+  const results: DetectedMedia[] = [];
+
+  for (const rawUrl of urls) {
+    const clean = cleanExtractedUrl(rawUrl);
+    try {
+      const parsed = new URL(clean);
+      if (parsed.hostname === 'v.redd.it') {
+        const pathParts = parsed.pathname.split('/').filter(Boolean);
+        if (pathParts.length === 1) {
+          const hlsUrl = `https://v.redd.it/${pathParts[0]}/HLSPlaylist.m3u8`;
+          const item = makeItem(hlsUrl, pageUrl, 'Reddit Video', 'social-extractor', 0.88);
+          item.httpHeaders = REDDIT_DOWNLOAD_HEADERS;
+          // Reddit's master HLS keeps audio in a separate rendition group.
+          // The backend remuxes both tracks; the on-device HLS assembler only
+          // consumes the selected video variant and would produce a silent file.
+          item.forceServerDownload = true;
+          pushUnique(results, item);
+        } else {
+          const item = makeItem(clean, pageUrl, 'Reddit Video', 'social-extractor', 0.86);
+          item.httpHeaders = REDDIT_DOWNLOAD_HEADERS;
+          item.forceServerDownload = /\.m3u8?(?:[?#]|$)/i.test(clean);
+          pushUnique(results, item);
+        }
+        continue;
+      }
+
+      // RSS may contain both a small external-preview thumbnail and the original
+      // post image. Prefer real i.redd.it/preview.redd.it media and drop thumbnails.
+      if (/\/(?:external-preview|b\.thumbs)\./i.test(parsed.hostname)) continue;
+      const item = makeItem(clean, pageUrl, 'Reddit Image', 'social-extractor', 0.82, 'image');
+      item.httpHeaders = REDDIT_DOWNLOAD_HEADERS;
+      pushUnique(results, item);
+    } catch {}
+  }
+
+  return results;
+}
+
+async function fetchReddit(url: string, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function extractReddit(pageUrl: string): Promise<DetectedMedia[]> {
   try {
     let targetUrl = pageUrl;
     if (targetUrl.includes('/s/')) {
-      const res = await fetch(targetUrl, { redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
+      const res = await fetchReddit(targetUrl, { redirect: 'follow', headers: { 'User-Agent': MOBILE_UA } });
       targetUrl = res.url;
     }
 
-    const jsonUrl = targetUrl.split('?')[0].replace(/\/$/, '') + '/.json';
-    const res = await fetch(jsonUrl, { headers: { 'User-Agent': DESKTOP_UA } });
-    if (!res.ok) return [];
+    const canonicalUrl = targetUrl.split(/[?#]/)[0].replace(/\/$/, '');
+    const postId = canonicalUrl.match(/\/comments\/([A-Za-z0-9]+)/)?.[1];
 
-    const data = await res.json();
-    const post = data[0]?.data?.children?.[0]?.data;
+    // Reddit's anonymous JSON endpoints increasingly return an HTML gate and
+    // consume the very small anonymous request budget. Try the working Atom
+    // feed first; it exposes the source v.redd.it/i.redd.it URL.
+    const rssRes = await fetchReddit(`${canonicalUrl}/.rss`, {
+      headers: {
+        'User-Agent': DESKTOP_UA,
+        Accept: 'application/atom+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+    if (rssRes.ok) {
+      const rssResults = extractRedditRssMedia(await rssRes.text(), pageUrl, postId);
+      if (rssResults.length > 0) return rssResults;
+    }
+
+    // Legacy fallback for sessions/IPs where Reddit still serves public JSON.
+    const jsonUrl = `${canonicalUrl}/.json?limit=1&raw_json=1`;
+    const res = await fetchReddit(jsonUrl, {
+      headers: {
+        'User-Agent': DESKTOP_UA,
+        Accept: 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+    let post: any;
+    if (res.ok && (res.headers.get('content-type') || '').toLowerCase().includes('json')) {
+      const data = await res.json();
+      post = data[0]?.data?.children?.[0]?.data;
+    }
     const results: DetectedMedia[] = [];
 
     const rv = post?.secure_media?.reddit_video || post?.media?.reddit_video;
     if (rv) {
-      // HLS (hls_url) carries both audio and video in one stream; fallback_url is video-only.
+      // Prefer HLS because it exposes both video and audio renditions; fallback_url is video-only.
       const videoUrl = rv.hls_url || rv.fallback_url;
-      if (videoUrl) results.push(makeItem(videoUrl, pageUrl, 'Reddit Video', 'social-extractor', 0.9));
+      if (videoUrl) {
+        const item = makeItem(videoUrl, pageUrl, 'Reddit Video', 'social-extractor', 0.9);
+        item.httpHeaders = REDDIT_DOWNLOAD_HEADERS;
+        item.forceServerDownload = !!rv.hls_url;
+        results.push(item);
+      }
     } else if (post?.is_gallery && post?.media_metadata) {
       // Gallery post: ordered by gallery_data.items when available
       const items: Array<{ media_id: string }> =
@@ -514,10 +623,16 @@ async function extractReddit(pageUrl: string): Promise<DetectedMedia[]> {
         const meta = post.media_metadata[media_id];
         if (!meta || meta.status !== 'valid') continue;
         const srcUrl: string = (meta.s?.u || meta.s?.gif || '').replace(/&amp;/g, '&');
-        if (srcUrl) pushUnique(results, makeItem(srcUrl, pageUrl, 'Reddit Image', 'social-extractor', 0.9));
+        if (srcUrl) {
+          const item = makeItem(srcUrl, pageUrl, 'Reddit Image', 'social-extractor', 0.9);
+          item.httpHeaders = REDDIT_DOWNLOAD_HEADERS;
+          pushUnique(results, item);
+        }
       }
     } else if (post?.url && /\.(jpe?g|png|gif|webp|avif)(?:[?#]|$)/i.test(post.url)) {
-      results.push(makeItem(post.url, pageUrl, 'Reddit Image', 'social-extractor', 0.9));
+      const item = makeItem(post.url, pageUrl, 'Reddit Image', 'social-extractor', 0.9);
+      item.httpHeaders = REDDIT_DOWNLOAD_HEADERS;
+      results.push(item);
     }
 
     return results;
@@ -773,23 +888,58 @@ async function extractTVer(pageUrl: string): Promise<DetectedMedia[]> {
 }
 
 // ── Facebook ──────────────────────────────────────────────────────
-async function extractFacebook(pageUrl: string): Promise<DetectedMedia[]> {
+export function extractFacebookMedia(html: string, pageUrl: string): DetectedMedia[] {
+  const results: DetectedMedia[] = [];
+  const add = (url: string, label: string, confidence: number) => {
+    const item = makeItem(url, pageUrl, label, 'social-extractor', confidence);
+    // Facebook rate-limits/403s CDN downloads made with a normal browser UA.
+    // yt-dlp uses the crawler UA for the same reason.
+    item.httpHeaders = {
+      'User-Agent': 'facebookexternalhit/1.1',
+      Referer: 'https://www.facebook.com/',
+    };
+    pushUnique(results, item);
+  };
+
+  const patterns: Array<{ re: RegExp; label: string; confidence: number }> = [
+    { re: /"playable_url_quality_hd"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, label: 'Facebook HD', confidence: 0.94 },
+    { re: /"browser_native_hd_url"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, label: 'Facebook HD', confidence: 0.94 },
+    { re: /"playable_url"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, label: 'Facebook Video', confidence: 0.9 },
+    { re: /"browser_native_sd_url"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, label: 'Facebook Video', confidence: 0.9 },
+    { re: /"hd_src"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, label: 'Facebook HD', confidence: 0.88 },
+    { re: /"sd_src"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, label: 'Facebook Video', confidence: 0.86 },
+    { re: /"progressive_url"\s*:\s*"(https?:\\?\/\\?\/[^"]+)"/g, label: 'Facebook Video', confidence: 0.88 },
+  ];
+  for (const { re, label, confidence } of patterns) {
+    extractUrls(html, re).forEach((url) => add(url, label, confidence));
+  }
+
+  const preferred = results.find((item) => item.label === 'Facebook HD') ?? results[0];
+  return preferred ? [preferred] : [];
+}
+
+export async function extractFacebook(pageUrl: string): Promise<DetectedMedia[]> {
   try {
-    const html = await fetchHtml(pageUrl, MOBILE_UA);
-    const results: DetectedMedia[] = [];
-
-    for (const re of [
-      /"playable_url_quality_hd"\s*:\s*"(https?:\/\/[^"]+)"/g,
-      /"playable_url"\s*:\s*"(https?:\/\/[^"]+)"/g,
-      /"hd_src"\s*:\s*"(https?:\/\/[^"]+)"/g,
-      /"sd_src"\s*:\s*"(https?:\/\/[^"]+)"/g,
-      /"browser_native_hd_url"\s*:\s*"(https?:\/\/[^"]+)"/g,
-      /"browser_native_sd_url"\s*:\s*"(https?:\/\/[^"]+)"/g,
-    ]) {
-      extractUrls(html, re).forEach(u => pushUnique(results, makeItem(u, pageUrl)));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12_000);
+    let res: Response;
+    try {
+      res = await fetch(pageUrl, {
+        redirect: 'follow',
+        signal: controller.signal,
+        headers: {
+          'User-Agent': FACEBOOK_UA,
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-us,en;q=0.5',
+          'Sec-Fetch-Mode': 'navigate',
+        },
+      });
+    } finally {
+      clearTimeout(timer);
     }
-
-    return capGenericResults(results);
+    if (!res.ok) return [];
+    const html = await res.text();
+    return extractFacebookMedia(html, pageUrl);
   } catch { return []; }
 }
 
@@ -1684,7 +1834,7 @@ const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[
   { re: /threads\.(?:net|com)\/@[^/]+\/post\/[A-Za-z0-9_-]+/,                      fn: extractInstagram   },
   { re: /dailymotion\.com\/video\/[A-Za-z0-9]+/,                                    fn: extractDailymotion },
   { re: /(?:youtube\.com\/(?:watch|shorts)|youtu\.be\/)[?/]?[A-Za-z0-9_-]{11}/,   fn: extractYouTube     },
-  { re: /facebook\.com\/(?:watch|reel|video)|fb\.watch/,                            fn: extractFacebook    },
+  { re: /(?:facebook\.com\/(?:watch|reel|video|[^/?#]+\/videos|share\/[rv])|fb\.watch)/, fn: extractFacebook },
   { re: /pinterest\.(?:com|[a-z]{2,3})\/pin\/\d+/,                                 fn: extractPinterest   },
   { re: /reddit\.com\/(?:r\/[^/]+\/s\/[A-Za-z0-9]+|r\/[^/]+\/comments\/[A-Za-z0-9]+)/, fn: extractReddit  },
   { re: /tver\.jp\/episodes\/ep[A-Za-z0-9]+/,                                       fn: extractTVer        },
