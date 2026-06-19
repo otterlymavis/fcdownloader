@@ -278,6 +278,7 @@ export default function App() {
     onMessage,
     addDetected,
     addDetectedItems,
+    replaceDetectedItems,
     captureSessionSnapshot,
   } = useMediaDetection();
   const { bookmarks, toggle: toggleBM, remove: removeBM, isSaved } = useBookmarks();
@@ -323,6 +324,12 @@ export default function App() {
     let targetUrl = url.trim();
     if (!targetUrl) return;
     if (!targetUrl.startsWith('http')) targetUrl = `https://${targetUrl}`;
+    // A pasted/shared URL starts a new detection session. Without this reset,
+    // iOS could briefly reopen the picker with media left over from the
+    // previously browsed page while the new extraction was still running.
+    closeVideosSheet();
+    onPageChange(targetUrl);
+
 
     if (isDirectMediaUrl(targetUrl)) {
       const item: DetectedMedia = {
@@ -347,7 +354,7 @@ export default function App() {
       const decision = decideUniversalResultHandling(result.strategy, items);
       if (decision.action === 'enqueue') {
         if (shouldPickThreadsCandidates(targetUrl, decision.items)) {
-          addDetectedItems(decision.items);
+          replaceDetectedItems(decision.items, targetUrl);
           setPasteUrl('');
           setLoadedUrl(targetUrl);
           setBrowserInput(targetUrl);
@@ -368,7 +375,7 @@ export default function App() {
         return;
       }
       if (decision.action === 'pick') {
-        addDetectedItems(decision.items);
+        replaceDetectedItems(decision.items, targetUrl);
         setPasteUrl('');
         setLoadedUrl(targetUrl);
         setBrowserInput(targetUrl);
@@ -393,7 +400,17 @@ export default function App() {
       setExtracting(false);
     }
     setLoadedUrl(targetUrl); setBrowserInput(targetUrl); setTab('browser');
-  }, [addDetectedItems, enqueue, showToast, setPasteUrl, setTab, setLoadedUrl, setBrowserInput]);
+  }, [
+    closeVideosSheet,
+    enqueue,
+    onPageChange,
+    replaceDetectedItems,
+    showToast,
+    setPasteUrl,
+    setTab,
+    setLoadedUrl,
+    setBrowserInput,
+  ]);
 
   useEffect(() => {
     if (extracting || extractionQueue.length === 0) return;

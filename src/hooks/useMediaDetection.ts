@@ -424,6 +424,32 @@ export function useMediaDetection() {
     return added;
   }, []);
 
+  const replaceDetectedItems = useCallback((items: DetectedMedia[], pageUrl?: string) => {
+    const nextPageUrl = pageUrl?.trim();
+    if (nextPageUrl) currentPageUrl.current = nextPageUrl;
+
+    const seen = new Set<string>();
+    const replacements: DetectedMedia[] = [];
+    for (const item of items) {
+      const url = item.url?.trim();
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      replacements.push({
+        ...item,
+        url,
+        id: item.id || genId(),
+        pageUrl: item.pageUrl || nextPageUrl || currentPageUrl.current,
+        timestamp: item.timestamp || Date.now(),
+      });
+    }
+
+    setDetected(replacements);
+    setNetworkLog([]);
+    setMseActive(false);
+    setScanDone(false);
+    return replacements.length;
+  }, []);
+
   const dismiss = useCallback((id: string) => {
     setDetected((prev) => prev.filter((m) => m.id !== id));
   }, []);
@@ -437,6 +463,7 @@ export function useMediaDetection() {
 
   return {
     detected, networkLog, mseActive, scanDone, bridgeOk,
-    onPageChange, onMessage, addDetected, addDetectedItems, dismiss, clear, captureSessionSnapshot,
+    onPageChange, onMessage, addDetected, addDetectedItems, replaceDetectedItems,
+    dismiss, clear, captureSessionSnapshot,
   };
 }
