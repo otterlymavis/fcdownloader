@@ -475,19 +475,27 @@ class TestYtdlDownload:
 class TestKillProcessTree:
     """supervisor._kill_process_tree helper."""
 
-    def test_handles_already_gone_process(self):
+    def test_handles_already_gone_process(self, monkeypatch):
         """Should not raise even if the process no longer exists."""
+        def missing_group(_pid):
+            raise ProcessLookupError
+
         mock_proc = MagicMock()
-        mock_proc.pid = 1  # init — we can't kill it, but shouldn't raise
+        mock_proc.pid = 77779
         mock_proc.send_signal.side_effect = ProcessLookupError
+        monkeypatch.setattr(os, "getpgid", missing_group)
         # Should not raise
         supervisor._kill_process_tree(mock_proc, signal.SIGTERM)
 
-    def test_handles_permission_error(self):
+    def test_handles_permission_error(self, monkeypatch):
         """Should not raise on PermissionError."""
+        def inaccessible_group(_pid):
+            raise PermissionError
+
         mock_proc = MagicMock()
-        mock_proc.pid = 1
+        mock_proc.pid = 77780
         mock_proc.send_signal.side_effect = PermissionError
+        monkeypatch.setattr(os, "getpgid", inaccessible_group)
         supervisor._kill_process_tree(mock_proc, signal.SIGTERM)
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX killpg only")
