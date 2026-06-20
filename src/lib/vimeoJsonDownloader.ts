@@ -4,10 +4,11 @@ import { fetch as expoFetch } from 'expo/fetch';
 import { extractSessionCookies } from './cookieManager';
 import { DetectedMedia } from '../types';
 import { DownloadOptions } from './hlsDownloader';
+import { muxVideoAudio } from './ffmpegMux';
 
 interface VimeoSegment { start?: number; end?: number; url: string; size?: number; }
 
-interface VimeoTrack {
+export interface VimeoTrack {
   id: string;
   base_url?: string;
   bitrate?: number;
@@ -18,10 +19,25 @@ interface VimeoTrack {
   segments: VimeoSegment[];
 }
 
-interface VimeoPlaylist { base_url?: string; video?: VimeoTrack[]; }
+export interface VimeoPlaylist {
+  base_url?: string;
+  video?: VimeoTrack[];
+  audio?: VimeoTrack[];
+}
 
 const DOWNLOAD_BATCH = 4;
 const VIMEO_PLAYLIST_JSON_RE = /vimeocdn\.com\/.*\/playlist\.json(?:[?#]|$)/i;
+
+class VimeoHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly url: string,
+    context: string,
+  ) {
+    super(`HTTP ${status} ${context}`);
+    this.name = 'VimeoHttpError';
+  }
+}
 
 function taskDir(taskId: string): string {
   return `${FileSystem.documentDirectory}downloads/${taskId}/`;
@@ -47,6 +63,31 @@ function makeHeaders(cookies: string, userAgent: string, referer: string, captur
   return h;
 }
 
+async function fetchVimeo(
+  url: string,
+  headers: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<Awaited<ReturnType<typeof expoFetch>>> {
+  try {
+    return await expoFetch(url, { signal, headers });
+  } catch (error) {
+    if (signal?.aborted) throw new Error('Cancelled');
+    throw error;
+  }
+}
+
+async function readVimeoJson(
+  response: Awaited<ReturnType<typeof expoFetch>>,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch (error) {
+    if (signal?.aborted) throw new Error('Cancelled');
+    throw error;
+  }
+}
+
 function resolveUrl(part: string, playlistUrl: string, playlist: VimeoPlaylist, track: VimeoTrack): string {
   const playlistDir = playlistUrl.slice(0, playlistUrl.lastIndexOf('/') + 1);
   const base = new URL(`${playlist.base_url ?? ''}${track.base_url ?? ''}`, playlistDir).toString();
@@ -58,6 +99,27 @@ function pickBestVideo(tracks: VimeoTrack[]): VimeoTrack {
     (b.height ?? 0) - (a.height ?? 0) ||
     (b.avg_bitrate ?? b.bitrate ?? 0) - (a.avg_bitrate ?? a.bitrate ?? 0)
   )[0];
+}
+
+function pickBestAudio(tracks: VimeoTrack[], video: VimeoTrack): VimeoTrack | undefined {
+  const matching = tracks.filter((track) => track.id === video.id);
+  const candidates = matching.length > 0 ? matching : tracks;
+  return [...candidates].sort((a, b) =>
+    (b.avg_bitrate ?? b.bitrate ?? 0) - (a.avg_bitrate ?? a.bitrate ?? 0)
+  )[0];
+}
+
+export function selectVimeoTracks(playlist: VimeoPlaylist): {
+  video?: VimeoTrack;
+  audio?: VimeoTrack;
+} {
+  const video = playlist.video?.length ? pickBestVideo(playlist.video) : undefined;
+  return {
+    video,
+    audio: video && playlist.audio?.length
+      ? pickBestAudio(playlist.audio, video)
+      : undefined,
+  };
 }
 
 function normalizeVimeoJsonUrl(value: string, baseUrl: string): string | undefined {
@@ -76,7 +138,12 @@ function normalizeVimeoJsonUrl(value: string, baseUrl: string): string | undefin
   }
 }
 
-function findVimeoPlaylistJsonUrl(value: unknown, baseUrl: string, depth = 0, seen = new Set<unknown>()): string | undefined {
+export function findVimeoPlaylistJsonUrl(
+  value: unknown,
+  baseUrl: string,
+  depth = 0,
+  seen = new Set<unknown>(),
+): string | undefined {
   if (depth > 10 || value == null) return undefined;
   if (typeof value === 'string') return normalizeVimeoJsonUrl(value, baseUrl);
   if (typeof value !== 'object') return undefined;
@@ -104,6 +171,57 @@ function findVimeoPlaylistJsonUrl(value: unknown, baseUrl: string, depth = 0, se
   return undefined;
 }
 
+type VimeoFetcher = typeof fetchVimeo;
+
+export async function loadVimeoPlaylist(
+  initialUrl: string,
+  headers: Record<string, string>,
+  opts: DownloadOptions,
+  fetcher: VimeoFetcher = fetchVimeo,
+): Promise<{ playlistUrl: string; playlist: VimeoPlaylist }> {
+  const { signal, onTokenExpired } = opts;
+  let currentUrl = initialUrl;
+  let refreshed = false;
+  const visited = new Set<string>();
+
+  // A config URL normally resolves in two requests: player config, then signed
+  // playlist.json. One extra iteration is reserved for refreshing an expired
+  // signed URL through the extraction manager.
+  for (let step = 0; step < 4; step += 1) {
+    if (signal?.aborted) throw new Error('Cancelled');
+    if (visited.has(currentUrl)) throw new Error('Vimeo JSON resolution loop');
+    visited.add(currentUrl);
+
+    const response = await fetcher(currentUrl, headers, signal);
+    if (response.status === 403 && !refreshed && onTokenExpired) {
+      const freshUrl = await onTokenExpired(currentUrl);
+      if (signal?.aborted) throw new Error('Cancelled');
+      if (freshUrl && freshUrl !== currentUrl) {
+        currentUrl = freshUrl;
+        refreshed = true;
+        // A stable player config URL may have already been visited before it
+        // produced the expired signed playlist. Refreshing must be allowed to
+        // revisit that config once so it can issue a replacement playlist URL.
+        visited.clear();
+        continue;
+      }
+    }
+    if (!response.ok) {
+      throw new VimeoHttpError(response.status, currentUrl, 'fetching Vimeo playlist');
+    }
+
+    const value = await readVimeoJson(response, signal);
+    const playlist = value as VimeoPlaylist;
+    if (playlist.video?.length) return { playlistUrl: currentUrl, playlist };
+
+    const discoveredUrl = findVimeoPlaylistJsonUrl(value, currentUrl);
+    if (!discoveredUrl) throw new Error('Vimeo config has no playlist JSON URL');
+    currentUrl = discoveredUrl;
+  }
+
+  throw new Error('Vimeo JSON resolution exceeded safe request limit');
+}
+
 async function writeInit(track: VimeoTrack, path: string): Promise<void> {
   if (!track.init_segment) return;
   await FileSystem.writeAsStringAsync(path, track.init_segment, {
@@ -114,9 +232,15 @@ async function writeInit(track: VimeoTrack, path: string): Promise<void> {
 async function downloadFragment(
   url: string, path: string, headers: Record<string, string>, signal?: AbortSignal,
 ): Promise<void> {
-  const res = await expoFetch(url, { signal, headers });
+  const res = await fetchVimeo(url, headers, signal);
   if (signal?.aborted) throw new Error('Cancelled');
-  if (!res.ok) throw new Error(`HTTP ${res.status} - ${url.split('?')[0].split('/').pop()}`);
+  if (!res.ok) {
+    throw new VimeoHttpError(
+      res.status,
+      url,
+      `fetching ${url.split('?')[0].split('/').pop()}`,
+    );
+  }
   const bytes = await res.bytes();
   if (bytes.length === 0) throw new Error('Empty fragment');
   const file = new File(path);
@@ -134,6 +258,73 @@ function appendFile(handle: ReturnType<File['open']>, path: string): void {
   } finally { input.close(); }
 }
 
+async function downloadTrack(
+  track: VimeoTrack,
+  kind: 'video' | 'audio',
+  dir: string,
+  playlistUrl: string,
+  playlist: VimeoPlaylist,
+  headers: Record<string, string>,
+  signal: AbortSignal | undefined,
+  onFragment: () => void,
+): Promise<string> {
+  const trackDir = `${dir}${kind}/`;
+  await FileSystem.makeDirectoryAsync(trackDir, { intermediates: true });
+
+  const initPath = `${trackDir}init.mp4`;
+  await writeInit(track, initPath);
+
+  const segPaths: string[] = new Array(track.segments.length);
+  for (let i = 0; i < track.segments.length; i += DOWNLOAD_BATCH) {
+    if (signal?.aborted) throw new Error('Cancelled');
+    const batch = await Promise.allSettled(
+      track.segments.slice(i, i + DOWNLOAD_BATCH).map(async (seg, j) => {
+        const idx = i + j;
+        segPaths[idx] = `${trackDir}seg${String(idx).padStart(5, '0')}.m4s`;
+        await downloadFragment(
+          resolveUrl(seg.url, playlistUrl, playlist, track),
+          segPaths[idx],
+          headers,
+          signal,
+        );
+        onFragment();
+      }),
+    );
+    const failed = batch.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failed) throw failed.reason;
+  }
+
+  const trackPath = `${dir}${kind}.track.${kind === 'video' ? 'mp4' : 'm4a'}`;
+  const output = new File(trackPath);
+  output.create({ intermediates: true, overwrite: true });
+  const handle = output.open();
+  try {
+    appendFile(handle, initPath);
+    segPaths.forEach((path) => appendFile(handle, path));
+  } finally {
+    handle.close();
+  }
+  if (output.size === 0) throw new Error(`Vimeo ${kind} track is empty`);
+  return output.uri;
+}
+
+async function cleanupVimeoFiles(dir: string, includeOutput = false): Promise<void> {
+  const paths = [
+    `${dir}video/`,
+    `${dir}audio/`,
+    `${dir}video.track.mp4`,
+    `${dir}audio.track.m4a`,
+  ];
+  if (includeOutput) paths.push(`${dir}video.mp4`);
+  await Promise.all(paths.map(async (path) => {
+    try {
+      await FileSystem.deleteAsync(path, { idempotent: true });
+    } catch {}
+  }));
+}
+
 export async function downloadVimeoJson(
   media: DetectedMedia,
   taskId: string,
@@ -149,52 +340,89 @@ export async function downloadVimeoJson(
   const fragmentHeaders = { ...headers };
   setHeader(fragmentHeaders, 'Accept', '*/*');
 
-  let playlistUrl = media.url;
-  let res = await expoFetch(playlistUrl, { signal, headers });
-  if (!res.ok) throw new Error(`HTTP ${res.status} fetching Vimeo playlist`);
-  let playlist = await res.json() as VimeoPlaylist;
-
-  if (!playlist.video?.length) {
-    const discoveredPlaylistUrl = findVimeoPlaylistJsonUrl(playlist, playlistUrl);
-    if (!discoveredPlaylistUrl) throw new Error('Vimeo config has no playlist JSON URL');
-    playlistUrl = discoveredPlaylistUrl;
-    res = await expoFetch(playlistUrl, { signal, headers });
-    if (!res.ok) throw new Error(`HTTP ${res.status} fetching Vimeo playlist`);
-    playlist = await res.json() as VimeoPlaylist;
-  }
-
-  const video = playlist.video?.length ? pickBestVideo(playlist.video) : undefined;
-  if (!video) throw new Error('Vimeo playlist has no video track');
-
   const dir = taskDir(taskId);
   await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-
-  const initPath = `${dir}init.mp4`;
-  await writeInit(video, initPath);
-
-  onStatus?.('downloading');
-  onProgress?.(0, video.segments.length);
-
-  const segPaths: string[] = new Array(video.segments.length);
-  for (let i = 0; i < video.segments.length; i += DOWNLOAD_BATCH) {
+  let sourceUrl = media.url;
+  let refreshUsed = false;
+  const refreshOnce = async (expiredUrl: string): Promise<string | null> => {
+    if (refreshUsed || !opts.onTokenExpired) return null;
+    refreshUsed = true;
+    const freshUrl = await opts.onTokenExpired(expiredUrl);
     if (signal?.aborted) throw new Error('Cancelled');
-    await Promise.all(video.segments.slice(i, i + DOWNLOAD_BATCH).map((seg, j) => {
-      const idx = i + j;
-      segPaths[idx] = `${dir}seg${String(idx).padStart(5, '0')}.m4s`;
-      return downloadFragment(resolveUrl(seg.url, playlistUrl, playlist, video), segPaths[idx], fragmentHeaders, signal);
-    }));
-    onProgress?.(Math.min(i + DOWNLOAD_BATCH, video.segments.length), video.segments.length);
+    return freshUrl && freshUrl !== expiredUrl ? freshUrl : null;
+  };
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let completed = false;
+    let resolvedPlaylistUrl = sourceUrl;
+    try {
+      const loaded = await loadVimeoPlaylist(
+        sourceUrl,
+        headers,
+        { ...opts, onTokenExpired: refreshOnce },
+      );
+      const { playlistUrl, playlist } = loaded;
+      resolvedPlaylistUrl = playlistUrl;
+      const { video, audio } = selectVimeoTracks(playlist);
+      if (!video) throw new Error('Vimeo playlist has no video track');
+
+      onStatus?.('downloading');
+      const totalFragments = video.segments.length + (audio?.segments.length ?? 0);
+      let downloadedFragments = 0;
+      const onFragment = () => {
+        downloadedFragments += 1;
+        onProgress?.(downloadedFragments, totalFragments);
+      };
+      onProgress?.(0, totalFragments);
+
+      const videoPath = await downloadTrack(
+        video, 'video', dir, playlistUrl, playlist, fragmentHeaders, signal, onFragment,
+      );
+
+      const output = new File(Paths.document, 'downloads', taskId, 'video.mp4');
+      if (audio) {
+        const audioPath = await downloadTrack(
+          audio, 'audio', dir, playlistUrl, playlist, fragmentHeaders, signal, onFragment,
+        );
+        if (signal?.aborted) throw new Error('Cancelled');
+        onStatus?.('assembling');
+        const stripFileScheme = (path: string) => path.replace(/^file:\/\//, '');
+        await muxVideoAudio(
+          stripFileScheme(videoPath),
+          stripFileScheme(audioPath),
+          stripFileScheme(output.uri),
+        );
+      } else {
+        if (signal?.aborted) throw new Error('Cancelled');
+        onStatus?.('assembling');
+        await FileSystem.deleteAsync(output.uri, { idempotent: true });
+        const input = new File(videoPath);
+        input.copy(output);
+      }
+
+      if (signal?.aborted) throw new Error('Cancelled');
+      if (output.size === 0) throw new Error('Output file is empty');
+      completed = true;
+      onProgress?.(1, 1);
+      return output.uri;
+    } catch (error) {
+      await cleanupVimeoFiles(dir, true);
+      if (error instanceof VimeoHttpError && error.status === 403) {
+        // Re-extract against the canonical JSON candidate, not the individual
+        // fragment URL. Excluding only a failed fragment can allow the picker
+        // to return the same stale playlist.json again.
+        const freshUrl = await refreshOnce(resolvedPlaylistUrl);
+        if (freshUrl && attempt === 0) {
+          sourceUrl = freshUrl;
+          onStatus?.('fetching_manifest');
+          continue;
+        }
+      }
+      throw error;
+    } finally {
+      if (completed) await cleanupVimeoFiles(dir);
+    }
   }
 
-  onStatus?.('assembling');
-  const output = new File(Paths.document, 'downloads', taskId, 'video.mp4');
-  output.create({ intermediates: true, overwrite: true });
-  const handle = output.open();
-  try {
-    appendFile(handle, initPath);
-    segPaths.forEach((p) => appendFile(handle, p));
-  } finally { handle.close(); }
-
-  if (output.size === 0) throw new Error('Output file is empty');
-  return output.uri;
+  throw new Error('Vimeo download retry limit exceeded');
 }
