@@ -538,9 +538,15 @@ class TestSigtermHandler:
         finally:
             supervisor._unregister_pid(fake_pid)
 
-    def test_handles_missing_pid_gracefully(self):
+    def test_handles_missing_pid_gracefully(self, monkeypatch):
         """_graceful_shutdown does not raise when a PID is already gone."""
-        fake_pid = 1  # PID 1 exists but we can't kill it; PermissionError expected
+        fake_pid = 77778
+
+        def missing_process(*_args):
+            raise ProcessLookupError
+
+        monkeypatch.setattr(os, "getpgid", missing_process)
+        monkeypatch.setattr(os, "kill", missing_process)
         supervisor._register_pid(fake_pid)
         try:
             # Should not raise
