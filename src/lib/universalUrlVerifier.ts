@@ -2,7 +2,7 @@ import { DetectedMedia, MediaKind, MediaType, SourceAuditEntry } from '../types'
 import { isUniversalExtractionStrategy } from './universalResultPicker';
 
 const DEFAULT_TIMEOUT_MS = 3500;
-const VIMEO_JSON_RE = /(?:vimeocdn\.com\/.*\/playlist\.json|player\.vimeo\.com\/video\/\d+\/config)(?:[?#]|$)/i;
+const VIMEO_JSON_RE = /(?:vimeocdn\.com\/.*\/playlist\.json|player\.vimeo\.com\/video\/\d+\/config\/?)(?:[?#]|$)/i;
 
 export interface UrlVerificationOptions {
   fetchImpl?: typeof fetch;

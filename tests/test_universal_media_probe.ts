@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { autoDownloadableUniversalMedia, probeUniversalMedia } from './src/lib/universalMediaProbe';
+import { autoDownloadableUniversalMedia, probeUniversalMedia } from '../src/lib/universalMediaProbe';
 
 const pageUrl = 'https://example.com/articles/post';
 const html = `
@@ -804,6 +804,16 @@ const dataVimeoIdItem = dataVimeoIdMedia.find((m) => m.url.includes('player.vime
 assert.ok(dataVimeoIdItem, 'data-vimeo-id attribute should reconstruct Vimeo embed URL');
 assert.ok(dataVimeoIdMedia.some((m) => m.url === 'https://player.vimeo.com/video/987654321/config'), 'data-vimeo-id should derive Vimeo config JSON URL');
 
+// Vimeo player.js auto-embed: data-vimeo-url may be the only static signal.
+const dataVimeoUrlMedia = probeUniversalMedia({
+  pageUrl,
+  pageHtml: `<div class="vimeo-player" data-vimeo-url="https://vimeo.com/123456789/privatehash" data-vimeo-responsive="1"></div>`,
+});
+assert.ok(
+  dataVimeoUrlMedia.some((m) => m.url === 'https://player.vimeo.com/video/123456789/config?h=privatehash'),
+  'data-vimeo-url should derive Vimeo config JSON and preserve unlisted hash',
+);
+
 // scanDivEmbeds: data-youtube-id attribute on generic element
 const dataYtIdMedia = probeUniversalMedia({
   pageUrl,
@@ -1112,6 +1122,25 @@ const plyrVimeoMedia = probeUniversalMedia({
 const plyrVimeoItem = plyrVimeoMedia.find((m) => m.url.includes('player.vimeo.com/video/123456789'));
 assert.ok(plyrVimeoItem, 'Plyr Vimeo: data-plyr-provider=vimeo should reconstruct Vimeo player URL');
 assert.ok(plyrVimeoMedia.some((m) => m.url === 'https://player.vimeo.com/video/123456789/config'), 'Plyr Vimeo should derive Vimeo config JSON URL');
+
+// Vimeo player.js programmatic embed: no iframe exists until the SDK runs.
+const vimeoSdkMedia = probeUniversalMedia({
+  pageUrl,
+  pageHtml: `
+    <div id="made-in-ny"></div>
+    <script src="https://player.vimeo.com/api/player.js"></script>
+    <script>
+      const player = new Vimeo.Player('made-in-ny', {
+        url: 'https://player.vimeo.com/video/246813579?h=abc123def4',
+        responsive: true
+      });
+    </script>
+  `,
+});
+assert.ok(
+  vimeoSdkMedia.some((m) => m.url === 'https://player.vimeo.com/video/246813579/config?h=abc123def4'),
+  'Vimeo.Player url option should derive Vimeo config JSON',
+);
 
 // data-plyr-src → direct HTML5 media URL
 const plyrSrcMedia = probeUniversalMedia({

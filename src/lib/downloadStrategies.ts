@@ -12,7 +12,7 @@ import { getSiteCapabilities } from './siteRegistry';
 export { DRMProtectedError };
 
 const VIMEO_PLAYLIST_JSON = /vimeocdn\.com\/.*\/playlist\.json(\?|$)/i;
-const VIMEO_PLAYER_CONFIG_JSON = /player\.vimeo\.com\/video\/\d+\/config(?:[?#]|$)/i;
+const VIMEO_PLAYER_CONFIG_JSON = /player\.vimeo\.com\/video\/\d+\/config\/?(?:[?#]|$)/i;
 const DASH_MIME = /application\/(dash|x-mpegdash)\+xml/i;
 const DIRECT_MEDIA_RE = /\.(?:mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)|googlevideo\.com\/videoplayback/i;
 

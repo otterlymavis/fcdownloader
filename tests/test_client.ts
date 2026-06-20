@@ -37,7 +37,7 @@ const URLS = {
 async function runClientTests() {
   // Disable backend so it falls back immediately
   process.env.EXPO_PUBLIC_EXTRACTOR_URL = "http://localhost:9999/down";
-  const { extractFromSocialUrl } = await import('./src/lib/platformExtractors');
+  const { extractFromSocialUrl } = await import('../src/lib/platformExtractors');
   console.log("Testing Client-Side Fallback (Simulating Android/iOS/Extension)...");
 
   const expectedNoFallback = new Set([

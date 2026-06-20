@@ -1,10 +1,10 @@
 import './test_setup.js';
 import assert from 'node:assert/strict';
-import { DetectedMedia } from './src/types';
+import { DetectedMedia } from '../src/types';
 import {
   inspectManifestCandidate,
   inspectUniversalManifestCandidates,
-} from './src/lib/universalManifestInspector';
+} from '../src/lib/universalManifestInspector';
 
 function item(url: string, mediaType: DetectedMedia['mediaType']): DetectedMedia {
   return {

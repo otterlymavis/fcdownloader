@@ -35,7 +35,7 @@ const DASH_RE = /\.mpd(?:[?#]|$)|application\/(?:dash|x-mpegdash)\+xml/i;
 // Smooth Streaming (.ism/manifest) — treated as DASH-like adaptive bitrate
 const SMOOTH_RE = /\.ism[l]?(?:\/manifest)?(?:[?#]|$)|application\/vnd\.ms-sstr\+xml/i;
 const VIMEO_PLAYLIST_JSON_RE = /vimeocdn\.com\/.*\/playlist\.json(?:[?#]|$)/i;
-const VIMEO_CONFIG_JSON_RE = /player\.vimeo\.com\/video\/\d+\/config(?:[?#]|$)/i;
+const VIMEO_CONFIG_JSON_RE = /player\.vimeo\.com\/video\/\d+\/config\/?(?:[?#]|$)/i;
 const VIMEO_RANGE_FRAGMENT_RE = /vimeocdn\.com\/.*\/v2\/range\/.*\/avf\//i;
 const MEDIA_SEGMENT_RE = /\.(?:ts|m4s|cmfv|cmfa)(?:[?#]|$)/i;
 
@@ -1312,6 +1312,76 @@ function scanDivEmbeds(html: string, pageUrl: string, out: DetectedMedia[], seen
   }
 }
 
+// ── Vimeo SDK / attribute embed scanner ─────────────────────────────────────
+// Vimeo's player.js can create iframes from an empty element with
+// data-vimeo-id/data-vimeo-url, or from new Vimeo.Player(el, { id/url }).
+// Those pages may not contain a literal iframe in the HTML snapshot yet.
+
+function addVimeoPlayerConfig(
+  rawUrlOrId: string | undefined,
+  pageUrl: string,
+  out: DetectedMedia[],
+  seen: Set<string>,
+  source: string,
+  fieldPath?: string,
+): void {
+  if (!rawUrlOrId || out.length >= 80) return;
+  const cleanValue = decodeHtml(rawUrlOrId).trim();
+  if (!cleanValue) return;
+  const candidate = /^\d+$/.test(cleanValue)
+    ? `https://player.vimeo.com/video/${cleanValue}`
+    : cleanCandidateUrl(cleanValue, pageUrl);
+  if (!candidate) return;
+  const configUrl = vimeoConfigUrlFromVimeoUrl(candidate);
+  if (!configUrl || seen.has(configUrl)) return;
+  pushCandidate(out, seen, configUrl, pageUrl, 'vimeo-sdk-config', {
+    mediaKind: 'video',
+    mediaType: 'direct',
+    mimeType: 'application/json',
+    label: 'Vimeo player config',
+    confidence: 0.93,
+    provenance: 'page-global',
+    sourceAudit: [{
+      strategy: 'vimeo-json',
+      source,
+      url: configUrl,
+      selected: true,
+      fieldPath: fieldPath ?? cleanValue,
+      mimeType: 'application/json',
+    }],
+  });
+}
+
+function scanVimeoSdkEmbeds(html: string, pageUrl: string, out: DetectedMedia[], seen: Set<string>): void {
+  const attrTagRe = /<[a-zA-Z][^>]*\bdata-vimeo-(?:id|url)\b[^>]*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = attrTagRe.exec(html)) !== null && out.length < 80) {
+    const tag = match[0];
+    const vimeoUrl = attr(tag, 'data-vimeo-url');
+    const vimeoId = attr(tag, 'data-vimeo-id');
+    addVimeoPlayerConfig(vimeoUrl ?? vimeoId, pageUrl, out, seen, 'vimeo-data-attribute', vimeoUrl ? 'data-vimeo-url' : 'data-vimeo-id');
+  }
+
+  const scriptRe = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
+  while ((match = scriptRe.exec(html)) !== null && out.length < 80) {
+    const text = decodeHtml(match[1])
+      .replace(/\\u002F/gi, '/')
+      .replace(/\\u0026/g, '&')
+      .replace(/\\u003d/gi, '=')
+      .replace(/\\\//g, '/');
+    if (!/Vimeo\.Player|player\.vimeo\.com|vimeo\.com\//i.test(text)) continue;
+    const optionRe = /["']?(id|url)["']?\s*:\s*(?:"([^"]+)"|'([^']+)'|(\d{4,}))/gi;
+    let optionMatch: RegExpExecArray | null;
+    while ((optionMatch = optionRe.exec(text)) !== null && out.length < 80) {
+      const key = optionMatch[1];
+      const value = optionMatch[2] ?? optionMatch[3] ?? optionMatch[4];
+      if (!value) continue;
+      if (key.toLowerCase() === 'url' && !/vimeo\.com\//i.test(value)) continue;
+      addVimeoPlayerConfig(value, pageUrl, out, seen, 'vimeo-player-sdk', key);
+    }
+  }
+}
+
 // ── Mux <mux-video> / <mux-audio> / <mux-player> custom elements ─────────────
 // Mux uses playback-id attribute on its custom HTML elements.
 // Reconstruct the Mux CDN HLS URL from the playback ID.
@@ -1941,6 +2011,7 @@ export function probeUniversalMedia(input: UniversalProbeInput): DetectedMedia[]
     scanBrightcoveDivEmbeds(htmlWithNoscript, pageUrl, out, seen);
     scanVidyardEmbeds(cappedHtml, pageUrl, out, seen);
     scanDivEmbeds(cappedHtml, pageUrl, out, seen);
+    scanVimeoSdkEmbeds(cappedHtml, pageUrl, out, seen);
     scanMuxEmbeds(cappedHtml, pageUrl, out, seen);
     scanCloudflareStreamElements(cappedHtml, pageUrl, out, seen);
     scanPlyrEmbeds(cappedHtml, pageUrl, out, seen);

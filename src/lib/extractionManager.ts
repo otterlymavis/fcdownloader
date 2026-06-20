@@ -19,7 +19,7 @@ import { debugLog, debugWarn } from './releaseLogger';
 import { autoDownloadableUniversalMedia, probeUniversalMediaFromSession, probeUniversalMediaFromUrl } from './universalMediaProbe';
 import { extractUniversalEmbedUrls, extractUniversalOEmbedUrls } from './universalEmbedProbe';
 
-const VIMEO_JSON_URL_RE = /(?:vimeocdn\.com\/.*\/playlist\.json|player\.vimeo\.com\/video\/\d+\/config)(?:[?#]|$)/i;
+const VIMEO_JSON_URL_RE = /(?:vimeocdn\.com\/.*\/playlist\.json|player\.vimeo\.com\/video\/\d+\/config\/?)(?:[?#]|$)/i;
 
 // ── Result types ─────────────────────────────────────────────────────────────
 
@@ -147,7 +147,7 @@ export class ExtractionManager {
 
     const hasVimeoSignal =
       /(?:^|\/\/)(?:www\.)?vimeo\.com\/|player\.vimeo\.com\/video\/|vimeocdn\.com\/.*\/playlist\.json/i.test(pageUrl) ||
-      /player\.vimeo\.com\/video\/|vimeocdn\.com\/.*\/playlist\.json/i.test(session?.pageHtml ?? '') ||
+      /player\.vimeo\.com\/video\/|vimeocdn\.com\/.*\/playlist\.json|data-vimeo-(?:id|url)\b|Vimeo\.Player\b/i.test(session?.pageHtml ?? '') ||
       (session?.mediaHints ?? []).some((hint) => {
         const url = String(hint.url ?? hint.src ?? '');
         return /player\.vimeo\.com\/video\/|vimeocdn\.com\/.*\/playlist\.json/i.test(url);

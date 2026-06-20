@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_test_all_urls() -> dict[str, tuple[str, str]]:
-    path = ROOT / "test_all_urls.py"
+    path = ROOT / "tests" / "test_all_urls.py"
     spec = importlib.util.spec_from_file_location("fcdownloader_test_all_urls", path)
     if not spec or not spec.loader:
         raise RuntimeError(f"could not import {path}")

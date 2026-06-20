@@ -33,7 +33,7 @@ const EXPECTED_BLOCKED_HOSTS = new Set(['www.reddit.com']);
 const EXPECTED_DEPLOYED_DRIFT_HOSTS = new Set(['www.dailymotion.com']);
 
 async function runTests() {
-  const { extractViaServer } = await import('./src/lib/serverExtractor');
+  const { extractViaServer } = await import('../src/lib/serverExtractor');
   console.log(`=== SERVER EXTRACTION (Tier 1 for all versions): ${BACKEND} ===`);
   for (const url of TEST_URLS) {
     const host = new URL(url).hostname;

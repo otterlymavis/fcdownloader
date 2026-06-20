@@ -1,9 +1,9 @@
 import './test_setup.js';
 import assert from 'node:assert/strict';
-import { ExtractionManager, ExtractionManagerDeps } from './src/lib/extractionManager';
-import { DetectedMedia } from './src/types';
-import { probeUniversalMediaFromSession } from './src/lib/universalMediaProbe';
-import { extractUniversalEmbedUrls, extractUniversalOEmbedUrls } from './src/lib/universalEmbedProbe';
+import { ExtractionManager, ExtractionManagerDeps } from '../src/lib/extractionManager';
+import { DetectedMedia } from '../src/types';
+import { probeUniversalMediaFromSession } from '../src/lib/universalMediaProbe';
+import { extractUniversalEmbedUrls, extractUniversalOEmbedUrls } from '../src/lib/universalEmbedProbe';
 
 function media(url: string, confidence = 0.9): DetectedMedia {
   return {
@@ -112,6 +112,25 @@ async function testBrowserVimeoIframeUsesDerivedConfigJson() {
   assert.deepEqual(serverCalls, []);
   const audit = result.media?.[0]?.sourceAudit ?? [];
   assert.equal(audit[audit.length - 1]?.strategy, 'vimeo-json');
+}
+
+async function testBrowserVimeoSdkDataUrlUsesDerivedConfigJson() {
+  const serverCalls: string[] = [];
+  const manager = new ExtractionManager(deps({
+    extractViaServer: async (url) => {
+      serverCalls.push(url);
+      return [];
+    },
+  }));
+
+  const result = await manager.extract('https://example.com/post', {
+    pageHtml: '<div data-vimeo-url="https://vimeo.com/123456789/privatehash"></div>',
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.strategy, 'universal-browser-probe');
+  assert.equal(result.media?.[0]?.url, 'https://player.vimeo.com/video/123456789/config?h=privatehash');
+  assert.deepEqual(serverCalls, []);
 }
 
 async function testCanonicalVimeoPageUsesConfigWithoutServer() {
@@ -266,6 +285,7 @@ async function main() {
   await testUnknownUsesBrowserFedUniversal();
   await testLowConfidenceUniversalDoesNotAutoDownload();
   await testBrowserVimeoIframeUsesDerivedConfigJson();
+  await testBrowserVimeoSdkDataUrlUsesDerivedConfigJson();
   await testCanonicalVimeoPageUsesConfigWithoutServer();
   await testBrowserIframeUsesPlatformFallbackWhenServerMisses();
   testEmbedProbeFindsBaseSrcdocAndObjectParamUrls();

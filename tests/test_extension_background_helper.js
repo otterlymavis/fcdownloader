@@ -9,7 +9,9 @@ const backgroundScript = fs.readFileSync(path.join(__dirname, "extension", "back
 const listeners = [];
 let helperHealth = { ok: true, version: "0.3.0-go" };
 let lastDownload = null;
+let currentTab = { id: 1, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", title: "Test YouTube" };
 const downloadChangeListeners = [];
+const webRequestCompletedListeners = [];
 
 const chrome = {
   runtime: {
@@ -35,7 +37,7 @@ const chrome = {
     onRemoved: { addListener() {} },
     onUpdated: { addListener() {} },
     async get() {
-      return { id: 1, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" };
+      return currentTab;
     },
     async create() {
       return { id: 2 };
@@ -50,7 +52,11 @@ const chrome = {
   },
   webRequest: {
     onBeforeSendHeaders: { addListener() {} },
-    onCompleted: { addListener() {} },
+    onCompleted: {
+      addListener(fn) {
+        webRequestCompletedListeners.push(fn);
+      },
+    },
   },
   cookies: {
     async getAll() {
@@ -120,6 +126,26 @@ function send(msg) {
   assert.strictEqual(currentHelper.ready, true);
   assert.strictEqual(currentHelper.problem, "");
 
+  currentTab = { id: 1, url: "https://publisher.example.com/post", title: "Publisher Post" };
+  assert(webRequestCompletedListeners.length > 0, "background should register webRequest completion listener");
+  webRequestCompletedListeners[0]({
+    tabId: 1,
+    url: "https://player.vimeo.com/video/123456789/config?h=privatehash",
+    statusCode: 200,
+    responseHeaders: [
+      { name: "Content-Type", value: "application/json" },
+      { name: "Content-Length", value: "2048" },
+    ],
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const vimeoList = await send({ type: "fcdl:list", tabId: 1 });
+  assert(vimeoList.items.some((item) =>
+    item.url === "https://player.vimeo.com/video/123456789/config?h=privatehash" &&
+    item.kind === "direct" &&
+    item.source === "network"
+  ), "Vimeo player config JSON should be captured from network events");
+
+  currentTab = { id: 1, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", title: "Test YouTube" };
   lastDownload = null;
   const localDownload = await send({
     type: "fcdl:download",

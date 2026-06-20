@@ -2866,6 +2866,37 @@ def test_data_vimeo_id_attribute_detected():
         f"data-vimeo-id not reconstructed: {result}"
 
 
+def test_data_vimeo_url_attribute_detected_with_hash():
+    """data-vimeo-url should reconstruct Vimeo embed URL and preserve unlisted hash."""
+    html = """
+    <html><body>
+    <div class="video-embed" data-vimeo-url="https://vimeo.com/123456789/privatehash"></div>
+    </body></html>
+    """
+    result = universal.scan_iframe_embed_urls(PAGE_URL, html)
+    assert "https://player.vimeo.com/video/123456789?h=privatehash" in result, \
+        f"data-vimeo-url not reconstructed with hash: {result}"
+
+
+def test_vimeo_player_sdk_url_option_detected_with_hash():
+    """Vimeo.Player(..., { url }) should be detected when no iframe exists yet."""
+    html = """
+    <html><body>
+    <div id="made-in-ny"></div>
+    <script src="https://player.vimeo.com/api/player.js"></script>
+    <script>
+      new Vimeo.Player("made-in-ny", {
+        url: "https://player.vimeo.com/video/246813579?h=abc123def4",
+        responsive: true
+      });
+    </script>
+    </body></html>
+    """
+    result = universal.scan_iframe_embed_urls(PAGE_URL, html)
+    assert "https://player.vimeo.com/video/246813579?h=abc123def4" in result, \
+        f"Vimeo.Player url option not detected: {result}"
+
+
 def test_data_youtube_id_attribute_detected():
     """data-youtube-id on any element should reconstruct YouTube embed URL."""
     html = """

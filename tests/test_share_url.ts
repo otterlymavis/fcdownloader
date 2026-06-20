@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { extractFirstUrl, extractSharedUrlFromDeepLink } from './src/lib/shareUrl';
+import { extractFirstUrl, extractSharedUrlFromDeepLink } from '../src/lib/shareUrl';
 
 const youtubeUrl = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&feature=share';
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { extractFacebook, extractFacebookMedia } from './src/lib/platformExtractors';
+import { extractFacebook, extractFacebookMedia } from '../src/lib/platformExtractors';
 
 const pageUrl = 'https://www.facebook.com/watch/?v=10153231379946729';
 const hdUrl = 'https:\\/\\/video.example.fbcdn.net\\/video-hd.mp4?token=abc\\u0026quality=hd';

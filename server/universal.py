@@ -1342,6 +1342,50 @@ def scan_iframe_embed_urls(page_url: str, html_text: str) -> list[str]:
             pass
         return False
 
+    def _vimeo_player_url(raw: str | None) -> str | None:
+        if not raw:
+            return None
+        value = html.unescape(str(raw)).strip()
+        if not value:
+            return None
+        if re.match(r"^\d+$", value):
+            return f"https://player.vimeo.com/video/{value}"
+        url = _clean_url(value.replace("\\u0026", "&").replace("\\u003d", "=").replace("\\/", "/"), page_url)
+        if not url:
+            return None
+        try:
+            parsed = urllib.parse.urlparse(url)
+            host = parsed.netloc.lower()
+            if host == "player.vimeo.com":
+                m = re.match(r"^/video/(\d+)(?:/|$)", parsed.path, re.I)
+                if not m:
+                    return None
+                return urllib.parse.urlunparse(parsed._replace(path=f"/video/{m.group(1)}", fragment=""))
+            if host not in {"vimeo.com", "www.vimeo.com"}:
+                return None
+            segments = [seg for seg in parsed.path.split("/") if seg]
+            id_index = next((i for i in range(len(segments) - 1, -1, -1) if re.match(r"^\d+$", segments[i])), -1)
+            if id_index < 0:
+                return None
+            query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+            if (
+                id_index == 0
+                and len(segments) == 2
+                and re.match(r"^[a-z0-9]+$", segments[1], re.I)
+                and not any(k == "h" for k, _ in query)
+            ):
+                query.append(("h", segments[1]))
+            return urllib.parse.urlunparse((
+                "https",
+                "player.vimeo.com",
+                f"/video/{segments[id_index]}",
+                "",
+                urllib.parse.urlencode(query),
+                "",
+            ))
+        except Exception:
+            return None
+
     for match in re.finditer(r"<(?:iframe|object|embed)\b[^>]*>", html_text, re.I):
         attrs = _meta_attrs(match.group(0))
         # Try each candidate in order; stop at the first one accepted as a known player.
@@ -1479,6 +1523,27 @@ def scan_iframe_embed_urls(page_url: str, html_text: str) -> list[str]:
         re.I,
     ):
         _try_add(div_m.group(1))
+
+    # Vimeo Player SDK auto-embeds: data-vimeo-url/data-vimeo-id on any element.
+    for vimeo_m in re.finditer(
+        r"<[a-zA-Z][^>]*\sdata-vimeo-(?:id|url)\s*=\s*[\"'][^\"']+[\"'][^>]*>",
+        html_text,
+        re.I,
+    ):
+        vimeo_attrs = _meta_attrs(vimeo_m.group(0))
+        _try_add(_vimeo_player_url(vimeo_attrs.get("data-vimeo-url") or vimeo_attrs.get("data-vimeo-id")))
+
+    # Vimeo Player SDK programmatic embeds: new Vimeo.Player(el, { id/url }).
+    for script_match in re.finditer(r"<script\b[^>]*>(.*?)</script>", html_text, re.I | re.S):
+        script_text = html.unescape(script_match.group(1)).replace("\\u002F", "/").replace("\\u0026", "&").replace("\\u003d", "=").replace("\\/", "/")
+        if not re.search(r"Vimeo\.Player|player\.vimeo\.com|vimeo\.com/", script_text, re.I):
+            continue
+        for option_m in re.finditer(r"""["']?(id|url)["']?\s*:\s*(?:"([^"]+)"|'([^']+)'|(\d{4,}))""", script_text, re.I):
+            key = option_m.group(1).lower()
+            value = option_m.group(2) or option_m.group(3) or option_m.group(4) or ""
+            if key == "url" and not re.search(r"vimeo\.com/", value, re.I):
+                continue
+            _try_add(_vimeo_player_url(value))
 
     # data-vimeo-id / data-youtube-id / data-yt-id / data-dailymotion-id on any element
     for id_m in re.finditer(

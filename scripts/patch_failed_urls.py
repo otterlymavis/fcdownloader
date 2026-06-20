@@ -21,6 +21,6 @@ def patch_file(filepath):
     except FileNotFoundError:
         pass
 
-patch_file("test_all_urls.py")
-patch_file("test_all_strategies.py")
+patch_file("tests/test_all_urls.py")
+patch_file("tests/test_all_strategies.py")
 patch_file("scripts/url_catalog.py")

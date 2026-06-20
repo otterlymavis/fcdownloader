@@ -5,7 +5,7 @@ import {
   selectVimeoTracks,
   VimeoPlaylist,
   VimeoTrack,
-} from './src/lib/vimeoJsonDownloader';
+} from '../src/lib/vimeoJsonDownloader';
 
 function track(
   id: string,

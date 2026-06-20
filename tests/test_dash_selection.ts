@@ -1,7 +1,7 @@
 import './test_setup.js';
 import assert from 'node:assert/strict';
-import { parseMPD, selectDashRepresentations } from './src/lib/dashDownloader';
-import { FormatOption } from './src/types';
+import { parseMPD, selectDashRepresentations } from '../src/lib/dashDownloader';
+import { FormatOption } from '../src/types';
 
 const mpd = `<?xml version="1.0"?>
 <MPD>

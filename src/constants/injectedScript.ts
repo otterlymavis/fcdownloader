@@ -65,7 +65,7 @@ export const INJECTED_SCRIPT = `
   function detectType(url, mime) {
     if (!url) return null;
     var u = url.split('?')[0].toLowerCase();
-    if (/vimeocdn\\.com.*\\/playlist\\.json$/i.test(u) || /player\\.vimeo\\.com\\/video\\/\\d+\\/config$/i.test(u)) return 'direct';
+    if (/vimeocdn\\.com.*\\/playlist\\.json$/i.test(u) || /player\\.vimeo\\.com\\/video\\/\\d+\\/config\\/?$/i.test(u)) return 'direct';
     if (/\\.m3u8?(?:$|[?#])/.test(u)) return 'hls';
     if (u.indexOf('.mpd')  !== -1) return 'dash';
     if (/\\.(ts|m4s|aac|m4a)$/.test(u)) return null;
@@ -232,7 +232,7 @@ export const INJECTED_SCRIPT = `
   function isNonContentUrl(url, mime) {
     var u = String(url || '').toLowerCase();
     var m = String(mime || '').toLowerCase();
-    if (/(?:vimeocdn\.com.*\/playlist\.json|player\.vimeo\.com\/video\/\d+\/config)(?:[?#]|$)/i.test(u)) return false;
+    if (/(?:vimeocdn\\.com.*\\/playlist\\.json|player\\.vimeo\\.com\\/video\\/\\d+\\/config\\/?)(?:[?#]|$)/i.test(u)) return false;
     if (/\\.(?:html?|php|aspx?)(?:[?#]|$)/i.test(u)) return true;
     if (m.indexOf('text/html') !== -1 || m.indexOf('application/xhtml') !== -1 || m.indexOf('application/json') !== -1) return true;
     if (/(?:doubleclick|googlesyndication|google-analytics|analytics|adservice|scorecardresearch|outbrain|taboola|treasuredata|bidswitch)/i.test(u)) return true;
@@ -637,7 +637,7 @@ export const INJECTED_SCRIPT = `
   function _isMediaEntry(e) {
     var n = e.name || '';
     if (_PERF_MEDIA_RE.test(n)) return true;
-    if (/(?:vimeocdn\\.com.*\\/playlist\\.json|player\\.vimeo\\.com\\/video\\/\\d+\\/config)(?:[?#]|$)/i.test(n)) return true;
+    if (/(?:vimeocdn\\.com.*\\/playlist\\.json|player\\.vimeo\\.com\\/video\\/\\d+\\/config\\/?)(?:[?#]|$)/i.test(n)) return true;
     // PerformanceResourceTiming.initiatorType is 'video' or 'audio' for native elements
     if (e.initiatorType === 'video' || e.initiatorType === 'audio') return true;
     // Large responses from xmlhttprequest / fetch are worth checking (may be DASH segments or media files)
@@ -1355,11 +1355,39 @@ export const INJECTED_SCRIPT = `
       if (sourceUrl) {
         var parsed = new URL(sourceUrl, location.href);
         suffix = parsed.search || '';
+        if (!suffix && /(?:^|\\.)vimeo\\.com$/i.test(parsed.hostname)) {
+          var parts = parsed.pathname.split('/').filter(Boolean);
+          var idIndex = parts.indexOf(String(id));
+          var privateHash = idIndex >= 0 ? parts[idIndex + 1] : '';
+          if (privateHash && /^[a-z0-9]+$/i.test(privateHash)) {
+            suffix = '?h=' + encodeURIComponent(privateHash);
+          }
+        }
       }
       return 'https://player.vimeo.com/video/' + id + '/config' + suffix;
     } catch (_) {
       return 'https://player.vimeo.com/video/' + id + '/config';
     }
+  }
+  function scanVimeoEmbeds(root) {
+    try {
+      var selector = 'iframe[src*="vimeo.com"],[data-vimeo-id],[data-vimeo-url]';
+      var elements = [];
+      if (root && root.matches && root.matches(selector)) elements.push(root);
+      elements = elements.concat(deepQuerySelectorAll(root || document, selector));
+      elements.forEach(function (el) {
+        var id = el.getAttribute && el.getAttribute('data-vimeo-id');
+        var sourceUrl = (el.getAttribute && (
+          el.getAttribute('data-vimeo-url') ||
+          el.getAttribute('src')
+        )) || '';
+        if (!id && sourceUrl) {
+          var match = sourceUrl.match(/vimeo\\.com\\/(?:video\\/)?([0-9]+)/i);
+          if (match) id = match[1];
+        }
+        if (id) emit(vimeoConfigUrl(id, sourceUrl), 'application/json', 'vimeo-embed-scan', 0.9);
+      });
+    } catch (_) {}
   }
   function patchVimeoSDK(Vimeo) {
     try {
@@ -1887,6 +1915,7 @@ export const INJECTED_SCRIPT = `
       muts.forEach(function (m) {
         m.addedNodes.forEach(function (node) {
           if (node.nodeType !== 1) return;
+          scanVimeoEmbeds(node);
           if (/^(VIDEO|AUDIO|SOURCE|IMG|PICTURE|TRACK)$/.test(node.tagName)) {
             emitElementMedia(node);
           }
@@ -1935,6 +1964,7 @@ export const INJECTED_SCRIPT = `
       deepQuerySelectorAll(document, 'video,audio,img').forEach(function (el) {
         emitElementMedia(el);
       });
+      scanVimeoEmbeds(document);
       performance.getEntriesByType('resource').forEach(function (e) { if (_isMediaEntry(e)) { emit(e.name, null); } });
     } catch (_) {}
     if (_ticks === 2 || _ticks === 6 || _ticks === 12 || _ticks === 20) {
@@ -1947,6 +1977,7 @@ export const INJECTED_SCRIPT = `
     deepQuerySelectorAll(document, 'video,audio,source,track,img,picture source').forEach(function (el) {
       emitElementMedia(el);
     });
+    scanVimeoEmbeds(document);
     try { performance.getEntriesByType('resource').forEach(function (e) { if (_isMediaEntry(e)) { emit(e.name, null); } }); }
     catch (_) {}
     scanBackgroundImages(document);
@@ -2024,6 +2055,7 @@ export const INJECTED_SCRIPT = `
       });
       performance.getEntriesByType('resource').forEach(function (e) { if (_isMediaEntry(e)) { emit(e.name, null); } });
       scanBackgroundImages(document);
+      scanVimeoEmbeds(document);
     } catch (_) {}
     scanGlobals();
   }

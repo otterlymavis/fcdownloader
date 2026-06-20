@@ -7,9 +7,54 @@ export type UniversalResultDecision =
   | { action: 'pick'; items: DetectedMedia[] };
 
 const UNIVERSAL_STRATEGIES = new Set(['universal-browser-probe', 'universal-media-probe']);
+const PICKER_MEDIA_PATH_RE = /\.(?:m3u8?|mpd|mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac|vtt|srt)(?:$|\/)/i;
+const META_MEDIA_HOST_RE = /(?:threadscdn\.com|cdninstagram\.com|fbcdn\.net)$/i;
+const VOLATILE_MEDIA_PARAM_RE = /^(?:token|auth(?:_token)?|access_token|signature|sig|expires?|exp|policy|key-?pair-?id|hdnts|hdnea|jwt|session|pathsig|x-amz-.+|x-goog-.+|_nc_(?:cat|sid|ohc|ht|gid|eui2)|oh|oe|ccb|efg|edm)$/i;
 
 export function isUniversalExtractionStrategy(strategy?: string): boolean {
   return !!strategy && UNIVERSAL_STRATEGIES.has(strategy);
+}
+
+function isThreadsUrl(url?: string): boolean {
+  if (!url) return false;
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'threads.net' || host === 'threads.com';
+  } catch {
+    return /threads\.(?:net|com)\//i.test(url);
+  }
+}
+
+function pickerAssetKey(item: DetectedMedia, pageUrl?: string): string {
+  const kind = getMediaKind(item);
+  try {
+    const parsed = new URL(item.url);
+    const host = parsed.host.toLowerCase().replace(/^www\./, '');
+    const path = parsed.pathname.replace(/\/+$/, '');
+    const isThreadsMetaAsset =
+      META_MEDIA_HOST_RE.test(host) &&
+      (
+        isThreadsUrl(pageUrl) ||
+        isThreadsUrl(item.sourcePageUrl) ||
+        isThreadsUrl(item.pageUrl) ||
+        /threadscdn\.com/i.test(item.url)
+      );
+
+    if (PICKER_MEDIA_PATH_RE.test(path) || isThreadsMetaAsset) {
+      const stableParams = Array.from(parsed.searchParams.entries())
+        .filter(([name]) => !VOLATILE_MEDIA_PARAM_RE.test(name))
+        .sort(([aName, aValue], [bName, bValue]) =>
+          aName.localeCompare(bName) || aValue.localeCompare(bValue)
+        );
+      const stableQuery = new URLSearchParams(stableParams).toString();
+      return `${kind}:${host}${path}${stableQuery ? `?${stableQuery}` : ''}`;
+    }
+
+    parsed.hash = '';
+    return `${kind}:${parsed.toString()}`;
+  } catch {
+    return `${kind}:${item.url.split('#')[0]}`;
+  }
 }
 
 function kindScore(kind: ReturnType<typeof getMediaKind>): number {
@@ -41,6 +86,19 @@ export function sortUniversalCandidates(items: DetectedMedia[]): DetectedMedia[]
   });
 }
 
+export function simplifyUniversalPickerCandidates(
+  items: DetectedMedia[],
+  pageUrl?: string,
+): DetectedMedia[] {
+  const grouped = new Map<string, DetectedMedia>();
+  for (const item of items) {
+    const key = pickerAssetKey(item, pageUrl);
+    const existing = grouped.get(key);
+    grouped.set(key, existing ? sortUniversalCandidates([existing, item])[0] ?? existing : item);
+  }
+  return sortUniversalCandidates(Array.from(grouped.values()));
+}
+
 function collapseEquivalentCandidates(items: DetectedMedia[]): DetectedMedia[] {
   const grouped = new Map<string, DetectedMedia>();
   const output: DetectedMedia[] = [];
@@ -65,14 +123,18 @@ function collapseEquivalentCandidates(items: DetectedMedia[]): DetectedMedia[] {
   return output;
 }
 
-export function decideUniversalResultHandling(strategy: string | undefined, items: DetectedMedia[]): UniversalResultDecision {
+export function decideUniversalResultHandling(
+  strategy: string | undefined,
+  items: DetectedMedia[],
+  pageUrl?: string,
+): UniversalResultDecision {
   if (items.length === 0) return { action: 'none', items: [] };
   if (!isUniversalExtractionStrategy(strategy)) {
     const collapsed = collapseEquivalentCandidates(items);
     return collapsed.length > 0 ? { action: 'enqueue', items: collapsed } : { action: 'none', items: [] };
   }
 
-  const sorted = sortUniversalCandidates(items);
+  const sorted = simplifyUniversalPickerCandidates(items, pageUrl);
   if (sorted.length <= 1) return { action: 'enqueue', items: sorted };
 
   // If there's exactly one primary (non-subtitle) item the user has no real

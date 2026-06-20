@@ -1,8 +1,8 @@
 import './test_setup.js';
 import assert from 'node:assert/strict';
-import { DetectedMedia } from './src/types';
-import { pickStrategy } from './src/lib/downloadStrategies';
-import { verifyUniversalDirectCandidates } from './src/lib/universalUrlVerifier';
+import { DetectedMedia } from '../src/types';
+import { pickStrategy } from '../src/lib/downloadStrategies';
+import { verifyUniversalDirectCandidates } from '../src/lib/universalUrlVerifier';
 
 function item(url: string, mediaType: DetectedMedia['mediaType'] = 'direct'): DetectedMedia {
   return {

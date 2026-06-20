@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
-import { INJECTED_SCRIPT } from './src/constants/injectedScript';
+import fs from 'node:fs';
+import { INJECTED_SCRIPT } from '../src/constants/injectedScript';
 
+assert.doesNotThrow(
+  () => new Function(INJECTED_SCRIPT),
+  'Injected script should remain valid JavaScript',
+);
 assert.ok(
   INJECTED_SCRIPT.includes("setAttribute('playsinline'"),
   'Injected script should force playsinline on video elements',
@@ -20,6 +25,22 @@ assert.ok(
 assert.ok(
   INJECTED_SCRIPT.includes('player\\.vimeo\\.com\\/video\\/\\d+\\/config'),
   'Injected script should detect Vimeo player config JSON as media',
+);
+assert.ok(
+  INJECTED_SCRIPT.includes('[data-vimeo-id],[data-vimeo-url]'),
+  'Injected script should scan Vimeo SDK data attributes',
+);
+assert.ok(
+  INJECTED_SCRIPT.includes("suffix = '?h=' + encodeURIComponent(privateHash)"),
+  'Injected script should preserve Vimeo unlisted-video hashes',
+);
+
+const browserView = fs.readFileSync('./src/components/BrowserView.tsx', 'utf8');
+assert.ok(
+  browserView.includes(
+    "injectedJavaScriptBeforeContentLoadedForMainFrameOnly={Platform.OS !== 'ios'}",
+  ),
+  'BrowserView should inject early detection into iOS subframes',
 );
 
 console.log('injected script ok');

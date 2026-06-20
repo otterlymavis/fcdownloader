@@ -4,7 +4,7 @@ import re
 with open("fresh_urls.json") as f:
     updates = json.load(f)
 
-with open("test_all_urls.py", "r") as f:
+with open("tests/test_all_urls.py", "r") as f:
     content = f.read()
 
 for name, new_url in updates.items():
@@ -22,7 +22,7 @@ for name in failed_to_fetch:
     pattern = r'(\s*)("' + re.escape(name) + r'":\s*\()'
     content = re.sub(pattern, r'\1# \2', content)
 
-with open("test_all_urls.py", "w") as f:
+with open("tests/test_all_urls.py", "w") as f:
     f.write(content)
 
-print("Updated test_all_urls.py successfully.")
+print("Updated tests/test_all_urls.py successfully.")

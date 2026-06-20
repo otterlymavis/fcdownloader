@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
-import { DetectedMedia } from './src/types';
-import { getSourceName, smartDedup } from './src/lib/mediaHelpers';
-import { decideUniversalResultHandling, sortUniversalCandidates } from './src/lib/universalResultPicker';
+import { DetectedMedia } from '../src/types';
+import { getSourceName, smartDedup } from '../src/lib/mediaHelpers';
+import {
+  decideUniversalResultHandling,
+  simplifyUniversalPickerCandidates,
+  sortUniversalCandidates,
+} from '../src/lib/universalResultPicker';
 
 function item(
   url: string,
@@ -117,6 +121,113 @@ assert.deepEqual(
     'https://cdn.example.com/series/clip-b/master.m3u8',
   ],
   'Separate same-page HLS streams stay selectable',
+);
+
+const expiringLow = item('https://media.example.com/post/clip.mp4?token=old', 'video', 0.6);
+const expiringHigh = item('https://media.example.com/post/clip.mp4?token=new', 'video', 0.9);
+assert.deepEqual(
+  simplifyUniversalPickerCandidates([expiringLow, expiringHigh]).map((candidate) => candidate.url),
+  ['https://media.example.com/post/clip.mp4?token=new'],
+  'Tokenized URLs for the same media file collapse to the best candidate',
+);
+const duplicateDecision = decideUniversalResultHandling(
+  'universal-media-probe',
+  [expiringLow, expiringHigh],
+  'https://example.com/post',
+);
+assert.equal(duplicateDecision.action, 'enqueue');
+assert.deepEqual(
+  duplicateDecision.items.map((candidate) => candidate.url),
+  ['https://media.example.com/post/clip.mp4?token=new'],
+  'A noisy list representing one real asset skips the picker',
+);
+
+const hdVariant = item('https://media.example.com/post/clip.mp4?token=a&quality=hd', 'video', 0.8);
+const sdVariant = item('https://media.example.com/post/clip.mp4?token=b&quality=sd', 'video', 0.8);
+assert.equal(
+  simplifyUniversalPickerCandidates([hdVariant, sdVariant]).length,
+  2,
+  'Query parameters that change media quality remain selectable',
+);
+assert.equal(
+  decideUniversalResultHandling(
+    'universal-media-probe',
+    [hdVariant, sdVariant],
+    'https://example.com/post',
+  ).action,
+  'pick',
+  'Different media qualities still open the picker',
+);
+
+const wideImage = item('https://images.example.com/post.jpg?width=2048&format=pjpg&token=a', 'image', 0.8);
+const smallImage = item('https://images.example.com/post.jpg?format=pjpg&token=b&width=640', 'image', 0.8);
+assert.equal(
+  simplifyUniversalPickerCandidates([wideImage, smallImage]).length,
+  2,
+  'Image transformation parameters remain distinct regardless of query order',
+);
+assert.equal(
+  decideUniversalResultHandling(
+    'universal-browser-probe',
+    [wideImage, smallImage],
+    'https://example.com/post',
+  ).action,
+  'pick',
+  'Different image transformations still open the picker',
+);
+
+const reorderedOld = item(
+  'https://media.example.com/post/clip.mp4?quality=hd&token=old&format=mp4',
+  'video',
+  0.7,
+);
+const reorderedNew = item(
+  'https://media.example.com/post/clip.mp4?format=mp4&token=new&quality=hd',
+  'video',
+  0.9,
+);
+assert.deepEqual(
+  simplifyUniversalPickerCandidates([reorderedOld, reorderedNew]).map((candidate) => candidate.url),
+  [reorderedNew.url],
+  'Stable query parameters are order-independent while refreshed tokens collapse',
+);
+
+const alternatePort = item('https://media.example.com:8443/post/clip.mp4?token=new', 'video', 0.9);
+assert.equal(
+  simplifyUniversalPickerCandidates([expiringHigh, alternatePort]).length,
+  2,
+  'Different media origins remain distinct when their ports differ',
+);
+
+const endpointA = item('https://media.example.com/watch?id=asset-a', 'video', 0.8);
+const endpointB = item('https://media.example.com/watch?id=asset-b', 'video', 0.8);
+assert.equal(
+  simplifyUniversalPickerCandidates([endpointA, endpointB]).length,
+  2,
+  'Extensionless query-ID endpoints remain distinct',
+);
+
+const galleryA = item('https://images.example.com/gallery/image-1.jpg?token=a', 'image', 0.8);
+const galleryB = item('https://images.example.com/gallery/image-2.jpg?token=b', 'image', 0.8);
+assert.equal(
+  simplifyUniversalPickerCandidates([galleryA, galleryB]).length,
+  2,
+  'Different gallery paths remain selectable',
+);
+
+const threadsPage = 'https://www.threads.net/@example/post/abc';
+const threadsOld = {
+  ...item('https://scontent.cdninstagram.com/v/t50/asset?token=old', 'video', 0.7),
+  pageUrl: threadsPage,
+};
+const threadsNew = {
+  ...item('https://scontent.cdninstagram.com/v/t50/asset?token=new', 'video', 0.9),
+  pageUrl: threadsPage,
+};
+assert.equal(
+  simplifyUniversalPickerCandidates([threadsOld, threadsNew], threadsPage).length,
+  1,
+  'Threads extensionless CDN duplicates still collapse',
 );
 
 console.log('universal result picker ok');

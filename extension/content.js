@@ -92,16 +92,114 @@
     return EMBED_HOSTS.some((h) => src.indexOf(h) !== -1);
   }
 
+  function cleanUrl(value) {
+    const raw = decode(value);
+    if (!raw || /^(?:data:|blob:|javascript:|mailto:|#)/i.test(raw)) return "";
+    try {
+      return new URL(raw, location.href).href;
+    } catch {
+      return "";
+    }
+  }
+
+  function vimeoConfigUrlFromValue(value) {
+    const cleaned = String(value || "").trim();
+    if (!cleaned) return "";
+    const raw = /^\d+$/.test(cleaned)
+      ? `https://player.vimeo.com/video/${cleaned}`
+      : cleanUrl(cleaned);
+    if (!raw) return "";
+    try {
+      const parsed = new URL(raw);
+      if (/^player\.vimeo\.com$/i.test(parsed.hostname)) {
+        const match = parsed.pathname.match(/^\/video\/(\d+)(?:\/|$)/i);
+        if (!match) return "";
+        parsed.pathname = `/video/${match[1]}/config`;
+        parsed.hash = "";
+        return parsed.href;
+      }
+      if (!/^(?:www\.)?vimeo\.com$/i.test(parsed.hostname)) return "";
+      const segments = parsed.pathname.split("/").filter(Boolean);
+      let idIndex = -1;
+      for (let i = segments.length - 1; i >= 0; i -= 1) {
+        if (/^\d+$/.test(segments[i])) {
+          idIndex = i;
+          break;
+        }
+      }
+      if (idIndex < 0) return "";
+      const config = new URL(`https://player.vimeo.com/video/${segments[idIndex]}/config`);
+      parsed.searchParams.forEach((paramValue, key) => config.searchParams.append(key, paramValue));
+      if (
+        idIndex === 0 &&
+        segments.length === 2 &&
+        /^[a-z0-9]+$/i.test(segments[1]) &&
+        !config.searchParams.has("h")
+      ) {
+        config.searchParams.set("h", segments[1]);
+      }
+      return config.href;
+    } catch {
+      return "";
+    }
+  }
+
   // ── Scanners ─────────────────────────────────────────────────────────────
 
   function scanIframes() {
     const found = [];
     document.querySelectorAll("iframe").forEach((el) => {
-      const src = el.src || el.getAttribute("data-src") || el.getAttribute("data-lazy-src") || "";
+      const src = el.src ||
+        el.getAttribute("data-src") ||
+        el.getAttribute("data-lazy-src") ||
+        el.getAttribute("data-consent-src") ||
+        el.getAttribute("data-cmp-src") ||
+        el.getAttribute("data-cookieconsent-src") ||
+        el.getAttribute("data-delayed-src") ||
+        "";
       if (isEmbed(src)) {
         found.push({ url: src, kind: "embed", source: "iframe" });
       }
     });
+    return found;
+  }
+
+  function scanVimeoSdkEmbeds() {
+    const found = [];
+    const seen = new Set();
+    const add = (value, source) => {
+      const url = vimeoConfigUrlFromValue(value);
+      if (!url || seen.has(url)) return;
+      seen.add(url);
+      found.push({
+        url,
+        kind: "direct",
+        source,
+        pageUrl: location.href,
+        referer: location.href,
+        label: "Vimeo player config",
+      });
+    };
+    document.querySelectorAll("[data-vimeo-id], [data-vimeo-url]").forEach((el) => {
+      add(el.getAttribute("data-vimeo-url") || el.getAttribute("data-vimeo-id"), "vimeo-data-attribute");
+    });
+    try {
+      const html = document.documentElement.outerHTML.slice(0, 1_000_000)
+        .replace(/\\u002F/gi, "/")
+        .replace(/\\u0026/g, "&")
+        .replace(/\\u003d/gi, "=")
+        .replace(/\\\//g, "/");
+      if (/Vimeo\.Player|player\.vimeo\.com|vimeo\.com\//i.test(html)) {
+        const optionRe = /["']?(id|url)["']?\s*:\s*(?:"([^"]+)"|'([^']+)'|(\d{4,}))/gi;
+        let match;
+        while ((match = optionRe.exec(html)) !== null && found.length < 20) {
+          const key = match[1];
+          const value = match[2] || match[3] || match[4] || "";
+          if (key.toLowerCase() === "url" && !/vimeo\.com\//i.test(value)) continue;
+          add(value, "vimeo-player-sdk");
+        }
+      }
+    } catch {}
     return found;
   }
 
@@ -700,6 +798,7 @@
       return scanXiaohongshu();
     }
     out.push(...scanIframes());
+    out.push(...scanVimeoSdkEmbeds());
     out.push(...scanVideoTags());
     if (shouldScanImages()) out.push(...scanImageTags());
     out.push(...scanMetaTags());

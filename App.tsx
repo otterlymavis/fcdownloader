@@ -67,7 +67,10 @@ import {
   isRuntimeDownloadCandidate,
   smartDedup,
 } from './src/lib/mediaHelpers';
-import { decideUniversalResultHandling } from './src/lib/universalResultPicker';
+import {
+  decideUniversalResultHandling,
+  simplifyUniversalPickerCandidates,
+} from './src/lib/universalResultPicker';
 import { inspectUniversalManifestCandidates } from './src/lib/universalManifestInspector';
 import { verifyUniversalDirectCandidates } from './src/lib/universalUrlVerifier';
 import { extractFirstUrl, extractSharedUrlFromDeepLink } from './src/lib/shareUrl';
@@ -224,6 +227,27 @@ function candidateSourceDetails(item: DetectedMedia): string | null {
   const size = audit?.contentLength ? formatBytes(audit.contentLength) : null;
   const confidence = typeof item.confidence === 'number' ? `${Math.round(item.confidence * 100)}%` : null;
   return compactMediaDetails(sourceLabel, status, size, confidence);
+}
+
+function mediaKindLabel(item: DetectedMedia): string {
+  const kind = getMediaKind(item);
+  if (kind === 'image') return 'Image';
+  if (kind === 'audio') return 'Audio';
+  if (kind === 'subtitle') return 'Subtitle';
+  return 'Video';
+}
+
+function candidateDisplayTitle(item: DetectedMedia, items: DetectedMedia[]): string {
+  const source = mediaSourceName(item);
+  const kind = getMediaKind(item);
+  const kindLabel = mediaKindLabel(item);
+  const sameSourceKind = items.filter((candidate) =>
+    getMediaKind(candidate) === kind && mediaSourceName(candidate) === source
+  );
+  const index = sameSourceKind.findIndex((candidate) => candidate.id === item.id);
+  const suffix = sameSourceKind.length > 1 && index >= 0 ? ` ${index + 1}` : '';
+  const prefix = source.toLowerCase() === kindLabel.toLowerCase() ? '' : `${source} `;
+  return `${prefix}${kindLabel}${suffix}`;
 }
 
 export default function App() {
@@ -391,16 +415,19 @@ export default function App() {
       const result = await extractionManager.extract(targetUrl);
       const inspected = await inspectUniversalManifestCandidates(result.strategy, result.media ?? []);
       const items = await verifyUniversalDirectCandidates(result.strategy, inspected);
-      const decision = decideUniversalResultHandling(result.strategy, items);
+      const decision = decideUniversalResultHandling(result.strategy, items, targetUrl);
       if (decision.action === 'enqueue') {
-        if (shouldPickThreadsCandidates(targetUrl, decision.items)) {
-          replaceDetectedItems(decision.items, targetUrl);
+        const enqueueItems = shouldPickThreadsCandidates(targetUrl, decision.items)
+          ? simplifyUniversalPickerCandidates(decision.items, targetUrl)
+          : decision.items;
+        if (shouldPickThreadsCandidates(targetUrl, enqueueItems)) {
+          replaceDetectedItems(enqueueItems, targetUrl);
           setPasteUrl('');
           setLoadedUrl(targetUrl);
           setBrowserInput(targetUrl);
           setUniversalPickerOpen(true);
           setVideosOpen(true);
-          showToast(translate('mediaItemsFound', resolvedLangRef.current, { count: decision.items.length }), 'info');
+          showToast(translate('mediaItemsFound', resolvedLangRef.current, { count: enqueueItems.length }), 'info');
           return;
         }
         setPasteUrl('');
@@ -410,7 +437,7 @@ export default function App() {
         // issuing network callbacks and native file writes.
         await waitForUiCommit();
         let started = 0;
-        for (const item of decision.items) {
+        for (const item of enqueueItems) {
           if (await enqueue(item)) started += 1;
         }
         if (started > 0) {
@@ -424,16 +451,17 @@ export default function App() {
         return;
       }
       if (decision.action === 'pick') {
-        replaceDetectedItems(decision.items, targetUrl);
+        const pickerItems = simplifyUniversalPickerCandidates(decision.items, targetUrl);
+        replaceDetectedItems(pickerItems, targetUrl);
         setPasteUrl('');
         setLoadedUrl(targetUrl);
         setBrowserInput(targetUrl);
         setUniversalPickerOpen(true);
         setVideosOpen(true);
         showToast(
-          decision.items.length === 1
+          pickerItems.length === 1
             ? translate('mediaItemFound', resolvedLangRef.current)
-            : translate('mediaItemsFound', resolvedLangRef.current, { count: decision.items.length }),
+            : translate('mediaItemsFound', resolvedLangRef.current, { count: pickerItems.length }),
           'info'
         );
         return;
@@ -589,6 +617,12 @@ export default function App() {
     return smartDedup([...detected, ...fromNet], loadedUrl);
   }, [detected, networkLog, loadedUrl]);
 
+  const pickerVideos = useMemo<DetectedMedia[]>(() => {
+    return universalPickerOpen
+      ? simplifyUniversalPickerCandidates(allVideos, loadedUrl)
+      : allVideos;
+  }, [allVideos, loadedUrl, universalPickerOpen]);
+
   const allTasks    = useMemo(() => [...active, ...history], [active, history]);
   const doneTasks   = useMemo(() => history.filter((t) => t.status === 'completed'), [history]);
   const failedTasks = useMemo(() => history.filter((t) => t.status !== 'completed'), [history]);
@@ -689,17 +723,20 @@ export default function App() {
       const result = await extractionManager.extract(url, session);
       const inspected = await inspectUniversalManifestCandidates(result.strategy, result.media ?? []);
       const items = await verifyUniversalDirectCandidates(result.strategy, inspected);
-      const decision = decideUniversalResultHandling(result.strategy, items);
+      const decision = decideUniversalResultHandling(result.strategy, items, url);
       if (decision.action === 'enqueue') {
-        if (shouldPickThreadsCandidates(url, decision.items)) {
-          addDetectedItems(decision.items);
+        const enqueueItems = shouldPickThreadsCandidates(url, decision.items)
+          ? simplifyUniversalPickerCandidates(decision.items, url)
+          : decision.items;
+        if (shouldPickThreadsCandidates(url, enqueueItems)) {
+          addDetectedItems(enqueueItems);
           setUniversalPickerOpen(true);
           setVideosOpen(true);
-          showToast(translate('mediaItemsFound', resolvedLangRef.current, { count: decision.items.length }), 'info');
+          showToast(translate('mediaItemsFound', resolvedLangRef.current, { count: enqueueItems.length }), 'info');
           return;
         }
         let started = 0;
-        for (const item of decision.items) {
+        for (const item of enqueueItems) {
           if (await enqueue(item)) started += 1;
         }
         if (started > 0) {
@@ -714,13 +751,14 @@ export default function App() {
         return;
       }
       if (decision.action === 'pick') {
-        addDetectedItems(decision.items);
+        const pickerItems = simplifyUniversalPickerCandidates(decision.items, url);
+        addDetectedItems(pickerItems);
         setUniversalPickerOpen(true);
         setVideosOpen(true);
         showToast(
-          decision.items.length === 1
+          pickerItems.length === 1
             ? translate('mediaItemFound', resolvedLangRef.current)
-            : translate('mediaItemsFound', resolvedLangRef.current, { count: decision.items.length }),
+            : translate('mediaItemsFound', resolvedLangRef.current, { count: pickerItems.length }),
           'info'
         );
         return;
@@ -914,6 +952,7 @@ export default function App() {
   }, [libSelected, remove]);
 
   const mediaCount  = allVideos.length;
+  const sheetMediaCount = pickerVideos.length;
   const activeCount = active.length;
 
   // ─────────────────────────────────────────────────────────
@@ -1855,8 +1894,8 @@ export default function App() {
                 <Text style={[s.sheetTitle, { color: t.ink, fontSize: fs(20) }]}>
                   {universalPickerOpen
                     ? translate('chooseMediaToDownload', resolvedLanguage)
-                    : mediaCount > 0
-                    ? (mediaCount === 1 ? translate('mediaItemFound', resolvedLanguage) : translate('mediaItemsFound', resolvedLanguage, { count: mediaCount }))
+                    : sheetMediaCount > 0
+                    ? (sheetMediaCount === 1 ? translate('mediaItemFound', resolvedLanguage) : translate('mediaItemsFound', resolvedLanguage, { count: sheetMediaCount }))
                     : translate('media', resolvedLanguage)}
                 </Text>
                 <Pressable android_ripple={RIPPLE_BL}
@@ -1866,7 +1905,7 @@ export default function App() {
                 </Pressable>
               </View>
 
-              {allVideos.length > 0 && (
+              {!universalPickerOpen && pickerVideos.length > 0 && (
                 <View style={[s.bulkDownloadRow, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
                   <Pressable android_ripple={RIPPLE}
                     style={[s.secondaryBtn, s.bulkDownloadBtn, { borderColor: t.sep }]}
@@ -1875,7 +1914,7 @@ export default function App() {
                       {translate('downloadAll', resolvedLanguage)}
                     </Text>
                   </Pressable>
-                  {allVideos.some((item) => getMediaKind(item) !== 'image') && (
+                  {pickerVideos.some((item) => getMediaKind(item) !== 'image') && (
                     <Pressable android_ripple={RIPPLE}
                       style={[s.secondaryBtn, s.bulkDownloadBtn, { borderColor: t.sep }]}
                       onPress={handleDownloadAllAudio}>
@@ -1890,7 +1929,7 @@ export default function App() {
               <ScrollView style={{ maxHeight: 360 }}
                 contentContainerStyle={{ paddingHorizontal: S.md, paddingBottom: S.sm }}
                 showsVerticalScrollIndicator={false}>
-                {allVideos.length === 0 && !mseActive && (
+                {pickerVideos.length === 0 && !mseActive && (
                   <View style={s.center}>
                     <Text style={[s.emptyHomeText, { color: t.ink2, fontSize: fs(14), textAlign: 'center',
                       paddingVertical: S.xl }]}>
@@ -1898,8 +1937,10 @@ export default function App() {
                     </Text>
                   </View>
                 )}
-                {allVideos.map((item) => {
-                  const source  = mediaSourceName(item);
+                {pickerVideos.map((item) => {
+                  const source = universalPickerOpen
+                    ? candidateDisplayTitle(item, pickerVideos)
+                    : mediaSourceName(item);
                   const quality = getQuality(item.url, item.label) || getMediaFormat(item);
                   const resolution = getMediaResolution(item);
                   const candidateDetails = candidateSourceDetails(item);

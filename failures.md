@@ -70,8 +70,8 @@ curl -s -X POST https://fcdownloader-extractor.fly.dev/extract \
 
 # Against local server
 cd server && uvicorn main:app --port 8080 --reload
-python3 test_all_urls.py --backend http://localhost:8080
-python3 test_all_urls.py --backend http://localhost:8080 Fashionsnap ViVi Mainichi
+python3 tests/test_all_urls.py --backend http://localhost:8080
+python3 tests/test_all_urls.py --backend http://localhost:8080 Fashionsnap ViVi Mainichi
 ```
 
 ---

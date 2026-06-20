@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { mediaHintsFromNetworkLog } from './src/lib/browserSessionStrategies';
-import { probeUniversalMedia } from './src/lib/universalMediaProbe';
+import { mediaHintsFromNetworkLog } from '../src/lib/browserSessionStrategies';
+import { probeUniversalMedia } from '../src/lib/universalMediaProbe';
 
 const pageUrl = 'https://example.com/watch/123';
 

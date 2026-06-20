@@ -81,6 +81,7 @@ const BrowserView = forwardRef<WebView, Props>(
         injectedJavaScriptBeforeContentLoaded={INJECTED_SCRIPT}
         injectedJavaScript={INJECTED_SCRIPT}
         injectedJavaScriptForMainFrameOnly={false}
+        injectedJavaScriptBeforeContentLoadedForMainFrameOnly={Platform.OS !== 'ios'}
         javaScriptEnabled
         onMessage={onMessage}
         // Cookies — persist in WKHTTPCookieStore / Android CookieManager.

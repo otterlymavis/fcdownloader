@@ -1,6 +1,6 @@
 import assert from 'node:assert';
-import { pickStrategy } from './src/lib/downloadStrategies';
-import { extractReddit, extractRedditRssMedia } from './src/lib/platformExtractors';
+import { pickStrategy } from '../src/lib/downloadStrategies';
+import { extractReddit, extractRedditRssMedia } from '../src/lib/platformExtractors';
 
 const pageUrl = 'https://www.reddit.com/r/shiba/comments/1tsveql/shibas_in_the_mountains/';
 const rss = `<?xml version="1.0"?>

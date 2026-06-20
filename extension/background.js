@@ -23,6 +23,7 @@ const LOCAL_HELPER_STATUS_TIMEOUT_MS = 3500;
 const LOCAL_HELPER_START_TIMEOUT_MS = 20000;
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i;
 const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i;
+const VIMEO_CONFIG_RE = /player\.vimeo\.com\/video\/\d+\/config\/?(?:[?#]|$)/i;
 const SERVER_ONLY_RE = /youtube\.com|youtu\.be|(?:player\.)?vimeo\.com|vimeocdn\.com|bilivideo\.(?:com|cn)|bilibili\.com|b23\.tv|weibo\.com|weibo\.cn|weibocdn\.com|xiaohongshu\.com|rednote\.com|xhslink\.com|xhscdn\.com|tiktok\.com|vm\.tiktok\.com|reddit\.com|redd\.it|naver\.com|naver\.me|pstatic\.net|nicovideo\.jp|nico\.ms|niconico\.com|nicochannel\.jp|seiga\.nicovideo\.jp|tver\.jp|tver\.co\.jp|abema\.tv|abema\.io|twitcasting\.tv|openrec\.tv|video\.fc2\.com|live\.fc2\.com|nhk\.or\.jp|nhk\.jp|cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp|fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|fujitv\.co\.jp|video\.yahoo\.co\.jp|news\.yahoo\.co\.jp|dmm\.co\.jp|dmm\.com|fanza\.jp|lemino\.docomo\.ne\.jp|animestore\.docomo\.ne\.jp|video\.dmkt-sp\.jp|unext\.jp|video\.unext\.jp|hulu\.jp|telasa\.jp|plus\.nhk\.jp|nhk-ondemand\.jp|wowow\.co\.jp|wod\.wowow\.co\.jp|b-ch\.com|bandainamcoid\.com|tv\.rakuten\.co\.jp|jod\.jsports\.co\.jp|jsports\.co\.jp|spoox\.skyperfectv\.co\.jp|skyperfectv\.co\.jp|locipo\.jp|dougaizm\.mbs\.jp|mbs\.jp|ytv\.co\.jp|video\.tv-tokyo\.co\.jp|douga\.tv-asahi\.co\.jp|ktv-smart\.jp|ktv\.jp|vod\.ntv\.co\.jp|cu\.ntv\.co\.jp|ameblo\.jp|ameba\.jp|natalie\.mu|oricon\.co\.jp|mdpr\.jp|modelpress\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|story\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net|trilltrill\.jp|note\.com|lineblog\.me|hatenablog\.(?:com|jp)|hatenadiary\.(?:com|jp)|hatena\.ne\.jp|blog\.fc2\.com|gyazo\.com|streamable\.com|redgifs\.com|linkedin\.com|bsky\.app|tumblr\.com/;
 const PAGE_HTML_RE = /(?:^|\.)(?:oricon\.co\.jp|mdpr\.jp|modelpress\.jp|news\.yahoo\.co\.jp|news\.naver\.com|n\.news\.naver\.com|m\.news\.naver\.com|entertain\.naver\.com|m\.entertain\.naver\.com|sports\.news\.naver\.com|m\.sports\.naver\.com|t\.bilibili\.com|bilibili\.com|ameblo\.jp|ameba\.jp|natalie\.mu|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|story\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net|trilltrill\.jp|lineblog\.me|hatenablog\.com|hatenablog\.jp|hatenadiary\.com|hatenadiary\.jp|hatena\.ne\.jp|blog\.fc2\.com|seiga\.nicovideo\.jp|story\.kakao\.com)$/i;
 const PROXY_REQUIRED_RE = /(?:(?:[a-z0-9-]+\.)*streaks\.jp|i\.fod\.fujitv\.co\.jp|fod-sp\.fujitv\.co\.jp|free\.tbs\.co\.jp|dmm\.co\.jp|dmm\.com|fanza\.jp|lemino\.docomo\.ne\.jp|animestore\.docomo\.ne\.jp|video\.dmkt-sp\.jp|unext\.jp|video\.unext\.jp|hulu\.jp|telasa\.jp|plus\.nhk\.jp|nhk-ondemand\.jp|wowow\.co\.jp|wod\.wowow\.co\.jp|b-ch\.com|bandainamcoid\.com|tv\.rakuten\.co\.jp|jod\.jsports\.co\.jp|jsports\.co\.jp|spoox\.skyperfectv\.co\.jp|skyperfectv\.co\.jp|locipo\.jp|dougaizm\.mbs\.jp|mbs\.jp|ytv\.co\.jp|video\.tv-tokyo\.co\.jp|douga\.tv-asahi\.co\.jp|ktv-smart\.jp|ktv\.jp|vod\.ntv\.co\.jp|cu\.ntv\.co\.jp|cdninstagram\.com|fbcdn\.net|threadscdn\.com|weibocdn\.com|xhscdn\.com|ci\.xiaohongshu\.com|bilivideo\.(?:com|cn)|biliimg\.com|hdslb\.com|pstatic\.net|pximg\.net|yimg\.jp|kakaocdn\.net|daumcdn\.net|img-mdpr\.freetls\.fastly\.net|obs\.line-scdn\.net|obs-beta\.line-scdn\.net|media\.trilltrill\.jp|fashionsnap-assets\.com|lohas\.nicoseiga\.jp|akamaized\.net)/i;
@@ -154,6 +155,7 @@ function sourceAuditForTab(tabId, pageUrl, extra = []) {
 // comments) would otherwise drown the actual embed in noise.
 function isCapturedVideoItem(item) {
   if (!item || item.kind === "image" || item.kind === "audio" || item.kind === "embed") return false;
+  if (VIMEO_CONFIG_RE.test(item.url || "")) return true;
   return item.source === "network" ||
     item.source === "video-tag" ||
     item.kind === "hls" ||
@@ -189,6 +191,7 @@ function helperAbsentFallbackScore(item) {
   if (!item || item.source === "youtube-hd-local" || item.source === "youtube-hd-server") return -1;
   if (item.source === "yt-innertube-android") return 100;
   if (item.source === "video-tag" && item.kind === "direct") return 90;
+  if (VIMEO_CONFIG_RE.test(item.url || "")) return 88;
   if (item.kind === "direct" && /\.(?:mp4|m4v|webm|mov)(?:[?#]|$)/i.test(item.url || "")) return 85;
   if (item.source === "network" && item.kind === "direct") return 80;
   if (item.source === "reddit-json" && item.kind !== "image") return 78;
@@ -232,6 +235,7 @@ function preferRuntimeCapturedMedia(tabId, pageUrl) {
 }
 
 function mediaKindForUrl(url) {
+  if (VIMEO_CONFIG_RE.test(url)) return "direct";
   if (url.includes(".m3u8")) return "hls";
   if (url.includes(".mpd")) return "dash";
   if (IMAGE_EXT_RE.test(url)) return "image";
@@ -462,6 +466,7 @@ try {
 
 function isLikelyMedia(url) {
   const u = url.toLowerCase().split("?")[0];
+  if (VIMEO_CONFIG_RE.test(url)) return true;
   if (u.endsWith(".m3u8") || u.endsWith(".mpd")) return true;
   if (u.endsWith(".mp4") || u.endsWith(".webm") || u.endsWith(".mov")) return true;
   // Network-level image captures are overwhelmingly thumbnails, avatars, and

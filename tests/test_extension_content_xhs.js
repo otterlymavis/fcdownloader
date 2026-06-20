@@ -23,7 +23,7 @@ function createElement(tagName, attrs = {}) {
   };
 }
 
-function runContentScript({ url, html, images = [], metas = [] }) {
+function runContentScript({ url, html, images = [], metas = [], vimeoElements = [] }) {
   const messages = [];
   const locationUrl = new URL(url);
   const documentElement = { outerHTML: html || "<html></html>" };
@@ -32,6 +32,7 @@ function runContentScript({ url, html, images = [], metas = [] }) {
     querySelectorAll(selector) {
       if (selector === "img, picture source") return images;
       if (selector.includes("meta[")) return metas;
+      if (selector.includes("data-vimeo")) return vimeoElements;
       return [];
     },
   };
@@ -136,6 +137,49 @@ function detectedItems(messages) {
   ]);
   assert(items.every((item) => item.source === "xhs-state"));
   assert(items.every((item) => !item.url.includes("avatar")));
+}
+
+{
+  const vimeoElement = createElement("DIV", {
+    "data-vimeo-url": "https://vimeo.com/987654321/deadbeef12",
+  });
+  const items = detectedItems(runContentScript({
+    url: "https://publisher.example.com/post",
+    html: "<html><body><div data-vimeo-url=\"https://vimeo.com/987654321/deadbeef12\"></div></body></html>",
+    vimeoElements: [vimeoElement],
+  }));
+
+  assert(items.some((item) =>
+    item.url === "https://player.vimeo.com/video/987654321/config?h=deadbeef12" &&
+    item.source === "vimeo-data-attribute" &&
+    item.kind === "direct"
+  ));
+}
+
+{
+  const html = `
+    <html><body>
+      <div id="vimeo-player"></div>
+      <script src="https://player.vimeo.com/api/player.js"></script>
+      <script>
+        new Vimeo.Player("vimeo-player", {
+          url: "https://vimeo.com/123456789/privatehash",
+          responsive: true
+        });
+      </script>
+    </body></html>
+  `;
+
+  const items = detectedItems(runContentScript({
+    url: "https://publisher.example.com/post",
+    html,
+  }));
+
+  assert(items.some((item) =>
+    item.url === "https://player.vimeo.com/video/123456789/config?h=privatehash" &&
+    item.source === "vimeo-player-sdk" &&
+    item.kind === "direct"
+  ));
 }
 
 console.log("extension content XHS tests passed");
