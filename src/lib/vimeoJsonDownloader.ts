@@ -26,6 +26,7 @@ export interface VimeoPlaylist {
 }
 
 const DOWNLOAD_BATCH = 4;
+const FRAGMENT_ATTEMPTS = 3;
 const VIMEO_PLAYLIST_JSON_RE = /vimeocdn\.com\/.*\/playlist\.json(?:[?#]|$)/i;
 
 class VimeoHttpError extends Error {
@@ -232,20 +233,50 @@ async function writeInit(track: VimeoTrack, path: string): Promise<void> {
 async function downloadFragment(
   url: string, path: string, headers: Record<string, string>, signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetchVimeo(url, headers, signal);
-  if (signal?.aborted) throw new Error('Cancelled');
-  if (!res.ok) {
-    throw new VimeoHttpError(
-      res.status,
-      url,
-      `fetching ${url.split('?')[0].split('/').pop()}`,
-    );
+  const donePath = `${path}.done`;
+  const existing = await FileSystem.getInfoAsync(path);
+  const done = await FileSystem.getInfoAsync(donePath);
+  if (existing.exists && (existing.size ?? 0) > 0 && done.exists) {
+    try {
+      if (await FileSystem.readAsStringAsync(donePath) === url) return;
+    } catch {}
   }
-  const bytes = await res.bytes();
-  if (bytes.length === 0) throw new Error('Empty fragment');
-  const file = new File(path);
-  file.create({ intermediates: true, overwrite: true });
-  file.write(bytes);
+  if (existing.exists || done.exists) {
+    try { await FileSystem.deleteAsync(path, { idempotent: true }); } catch {}
+    try { await FileSystem.deleteAsync(donePath, { idempotent: true }); } catch {}
+  }
+
+  let lastErr: Error = new Error('Vimeo fragment download failed');
+  for (let attempt = 0; attempt < FRAGMENT_ATTEMPTS; attempt += 1) {
+    try {
+      const res = await fetchVimeo(url, headers, signal);
+      if (signal?.aborted) throw new Error('Cancelled');
+      if (!res.ok) {
+        throw new VimeoHttpError(
+          res.status,
+          url,
+          `fetching ${url.split('?')[0].split('/').pop()}`,
+        );
+      }
+      const bytes = await res.bytes();
+      if (bytes.length === 0) throw new Error('Empty fragment');
+      const file = new File(path);
+      file.create({ intermediates: true, overwrite: true });
+      file.write(bytes);
+      await FileSystem.writeAsStringAsync(donePath, url);
+      return;
+    } catch (err) {
+      lastErr = err as Error;
+      if (signal?.aborted || lastErr.message === 'Cancelled') throw lastErr;
+      if (lastErr instanceof VimeoHttpError && lastErr.status < 500) throw lastErr;
+      try { await FileSystem.deleteAsync(path, { idempotent: true }); } catch {}
+      try { await FileSystem.deleteAsync(donePath, { idempotent: true }); } catch {}
+      if (attempt < FRAGMENT_ATTEMPTS - 1) {
+        await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastErr;
 }
 
 function appendFile(handle: ReturnType<File['open']>, path: string): void {

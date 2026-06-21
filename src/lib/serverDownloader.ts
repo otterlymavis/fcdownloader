@@ -26,6 +26,11 @@ function fileStem(media: DetectedMedia): string {
   return 'video';
 }
 
+function contentRangeTotal(contentRange: string | null): number {
+  const total = contentRange?.match(/\/(\d+)$/)?.[1];
+  return total ? parseInt(total, 10) : 0;
+}
+
 function canStreamSelectedDirectUrl(media: DetectedMedia): boolean {
   if (media.audioOnly || media.audioTrackUrl) return false;
   if (!media.httpHeaders || Object.keys(media.httpHeaders).length === 0) return false;
@@ -102,8 +107,42 @@ export async function downloadViaServer(
 }
 
 const MAX_DOWNLOAD_ATTEMPTS = 3;
+const READ_STALL_MS = 30_000;
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function readWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number,
+  abort: () => void,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          abort();
+          reject(new Error('Download stalled'));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function makeAttemptSignal(signal: AbortSignal | undefined): { signal: AbortSignal; cleanup: () => void; abort: () => void } {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (signal?.aborted) abort();
+  signal?.addEventListener('abort', abort);
+  return {
+    signal: controller.signal,
+    abort,
+    cleanup: () => signal?.removeEventListener('abort', abort),
+  };
+}
 
 /** Transient network/stream failures worth restarting the transfer for. */
 function isRetryableDownloadError(err: Error): boolean {
@@ -130,9 +169,19 @@ async function _streamServerDownloadOnce(
   opts: DownloadOptions,
 ): Promise<string> {
   const { signal, onStatus, onProgress } = opts;
-  const res = await expoFetch(url, { method: 'POST', headers, body, signal });
+  const attemptSignal = makeAttemptSignal(signal);
+  let res: Awaited<ReturnType<typeof expoFetch>>;
+  try {
+    res = await expoFetch(url, { method: 'POST', headers, body, signal: attemptSignal.signal });
+  } catch (err) {
+    attemptSignal.cleanup();
+    throw err;
+  }
 
-  if (signal?.aborted) throw new Error('Cancelled');
+  if (signal?.aborted) {
+    attemptSignal.cleanup();
+    throw new Error('Cancelled');
+  }
   if (!res.ok) {
     let detail = `Server download failed (${res.status})`;
     let errorCode: string | undefined;
@@ -156,10 +205,14 @@ async function _streamServerDownloadOnce(
     // Preserve the status code in the message so isRetryableDownloadError can
     // see 5xx even when a JSON detail replaced the default text.
     const finalDetail = /\(\d{3}\)/.test(detail) ? detail : `${detail} (${res.status})`;
+    attemptSignal.cleanup();
     if (errorCode) throw new ServerExtractionError(finalDetail, errorCode);
     throw new Error(finalDetail);
   }
-  if (!res.body) throw new Error('Server download returned an empty body');
+  if (!res.body) {
+    attemptSignal.cleanup();
+    throw new Error('Server download returned an empty body');
+  }
 
   // Guard: a real media stream is never JSON. Detect a JSON error body that
   // slipped through (wrong-status proxy response, CDN error, etc.).
@@ -172,6 +225,7 @@ async function _streamServerDownloadOnce(
       const msg = parsed?.detail ?? parsed?.error ?? text;
       if (typeof msg === 'string' && msg.trim()) detail = msg.slice(0, 400);
     } catch {}
+    attemptSignal.cleanup();
     throw new Error(detail);
   }
 
@@ -190,7 +244,7 @@ async function _streamServerDownloadOnce(
     const reader = res.body.getReader();
     let written = 0;
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithTimeout(reader, READ_STALL_MS, attemptSignal.abort);
       if (done) break;
       if (signal?.aborted) throw new Error('Cancelled');
       handle.writeBytes(value);
@@ -199,6 +253,7 @@ async function _streamServerDownloadOnce(
     }
   } finally {
     handle.close();
+    attemptSignal.cleanup();
   }
 
   if (file.size === 0) throw new Error('Server download produced an empty file');
@@ -221,6 +276,30 @@ async function _downloadYtdlStream(
   taskId: string,
   opts: DownloadOptions,
 ): Promise<string> {
+  const { signal, onStatus } = opts;
+  let lastError: Error = new Error('ytdl-stream failed');
+  for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    if (signal?.aborted) throw new Error('Cancelled');
+    try {
+      return await _downloadYtdlStreamOnce(media, taskId, opts);
+    } catch (err) {
+      const e = err as Error;
+      lastError = e;
+      if (signal?.aborted || e.message === 'Cancelled') throw e;
+      if (attempt >= MAX_DOWNLOAD_ATTEMPTS || !isRetryableDownloadError(e)) throw e;
+      debugWarn(`[serverDownloader] ytdl-stream attempt ${attempt} failed (${e.message.slice(0, 80)}); retrying`);
+      onStatus?.('fetching_manifest');
+      await delay(800 * attempt);
+    }
+  }
+  throw lastError;
+}
+
+async function _downloadYtdlStreamOnce(
+  media: DetectedMedia,
+  taskId: string,
+  opts: DownloadOptions,
+): Promise<string> {
   const { signal, onStatus, onProgress } = opts;
   onStatus?.('downloading');
 
@@ -230,10 +309,39 @@ async function _downloadYtdlStream(
   const cookies = await extractSessionCookies(media.pageUrl).catch(() => '');
   if (cookies) reqHeaders['X-FCDL-Cookies'] = cookies;
 
-  const res = await expoFetch(media.url, { headers: reqHeaders, signal });
+  const dir = `${FileSystem.documentDirectory}downloads/${taskId}/`;
+  await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  const filePath = `${dir}${fileStem(media)}.${guessExt(media)}`;
+  const existing = await FileSystem.getInfoAsync(filePath);
+  let written = existing.exists ? (existing.size ?? 0) : 0;
+  let fileReady = written > 0;
+  if (written > 0) reqHeaders.Range = `bytes=${written}-`;
 
-  if (signal?.aborted) throw new Error('Cancelled');
+  const attemptSignal = makeAttemptSignal(signal);
+  let res: Awaited<ReturnType<typeof expoFetch>>;
+  try {
+    res = await expoFetch(media.url, { headers: reqHeaders, signal: attemptSignal.signal });
+  } catch (err) {
+    attemptSignal.cleanup();
+    throw err;
+  }
+
+  if (signal?.aborted) {
+    attemptSignal.cleanup();
+    throw new Error('Cancelled');
+  }
   if (!res.ok) {
+    if (res.status === 416 && written > 0) {
+      const total = contentRangeTotal(res.headers.get('content-range'));
+      attemptSignal.cleanup();
+      if (total > 0 && written >= total) {
+        onStatus?.('assembling');
+        onProgress?.(1, 1);
+        return filePath;
+      }
+      try { await FileSystem.deleteAsync(filePath, { idempotent: true }); } catch {}
+      throw new Error('ytdl stream range reset required');
+    }
     let detail = `ytdl-stream failed (${res.status})`;
     let errorCode: string | undefined;
     if (res.status === 429) {
@@ -253,6 +361,7 @@ async function _downloadYtdlStream(
         }
       } catch { /* ignore parse errors — fall through to generic message */ }
     }
+    attemptSignal.cleanup();
     if (errorCode) throw new ServerExtractionError(detail, errorCode);
     throw new Error(detail);
   }
@@ -269,41 +378,52 @@ async function _downloadYtdlStream(
       const msg = parsed?.detail ?? parsed?.error ?? body;
       if (typeof msg === 'string' && msg.trim()) detail = msg.slice(0, 400);
     } catch {}
+    attemptSignal.cleanup();
     throw new Error(detail);
   }
 
-  if (!res.body) throw new Error('ytdl-stream returned an empty body');
+  if (!res.body) {
+    attemptSignal.cleanup();
+    throw new Error('ytdl-stream returned an empty body');
+  }
+
+  // A server without Range support may answer a resume request with 200.
+  // Restart the local file in that case so bytes are not duplicated.
+  if (written > 0 && res.status !== 206) {
+    written = 0;
+    fileReady = false;
+  }
 
   const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
-  const ext = guessExt(media, contentType);
-  const dir = `${FileSystem.documentDirectory}downloads/${taskId}/`;
-  const filePath = `${dir}${fileStem(media)}.${ext}`;
-  await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  const expectedTotal = res.status === 206
+    ? contentRangeTotal(res.headers.get('content-range')) || (written + contentLength)
+    : contentLength;
 
-  onProgress?.(0, contentLength || 1);
+  onProgress?.(written, expectedTotal || Math.max(written, 1));
 
   const file = new File(filePath);
-  file.create({ intermediates: true, overwrite: true });
+  if (!fileReady) file.create({ intermediates: true, overwrite: true });
   const handle = file.open();
 
   try {
+    handle.offset = written;
     const reader = res.body.getReader();
-    let written = 0;
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithTimeout(reader, READ_STALL_MS, attemptSignal.abort);
       if (done) break;
       if (signal?.aborted) throw new Error('Cancelled');
       handle.writeBytes(value);
       written += value.byteLength;
-      onProgress?.(written, contentLength || Math.max(written, 1));
+      onProgress?.(written, expectedTotal || Math.max(written, 1));
     }
   } finally {
     handle.close();
+    attemptSignal.cleanup();
   }
 
   if (file.size === 0) throw new Error('ytdl-stream produced an empty file');
-  if (contentLength > 0 && file.size < contentLength) {
-    throw new Error(`Truncated ytdl-stream download: ${file.size}/${contentLength} bytes`);
+  if (expectedTotal > 0 && file.size < expectedTotal) {
+    throw new Error(`Truncated ytdl-stream download: ${file.size}/${expectedTotal} bytes`);
   }
   // A real video file is always larger than 1 KB. A JSON error body that was
   // accidentally written to disk (e.g. due to a network-layer quirk) is tiny.

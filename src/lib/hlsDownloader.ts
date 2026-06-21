@@ -33,6 +33,8 @@ interface ParsedPlaylist {
 }
 
 const SEGMENT_BATCH = 12;
+const BYTE_RANGE_SEGMENT_BATCH = 3;
+const SHARED_BYTE_RANGE_SEGMENT_BATCH = 1;
 const SEGMENT_STALL_MS = 30_000; // per-segment wall-clock timeout before retry
 const MUX_READ_CHUNK_SIZE = 1024 * 1024;
 
@@ -149,6 +151,22 @@ async function downloadSegment(
   signal?: AbortSignal,
 ): Promise<void> {
   if (signal?.aborted) throw new Error('Cancelled');
+  const donePath = `${destPath}.done`;
+  const segmentIdentity = `${url}\n${headers['Range'] ?? ''}`;
+  const existing = await FileSystem.getInfoAsync(destPath);
+  const done = await FileSystem.getInfoAsync(donePath);
+  if (existing.exists && (existing.size ?? 0) > 0 && done.exists) {
+    try {
+      if (await FileSystem.readAsStringAsync(donePath) === segmentIdentity) {
+        debugLog('[downloadSegment] skipping existing:', destPath.split('/').pop(), 'size:', existing.size);
+        return;
+      }
+    } catch {}
+  }
+  if (existing.exists || done.exists) {
+    try { await FileSystem.deleteAsync(destPath, { idempotent: true }); } catch {}
+    try { await FileSystem.deleteAsync(donePath, { idempotent: true }); } catch {}
+  }
   debugLog('[downloadSegment] starting:', url.split('?')[0].split('/').pop(), 'range:', headers['Range']);
   let lastErr: Error = new Error('Segment download failed');
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -156,11 +174,18 @@ async function downloadSegment(
     try {
       // Race the download against a stall timeout so a frozen CDN connection
       // does not block the whole batch indefinitely.
-      const downloadPromise = FileSystem.downloadAsync(url, destPath, { headers });
-      const stallPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Segment stalled')), SEGMENT_STALL_MS),
-      );
-      const result = await Promise.race([downloadPromise, stallPromise]);
+      const resumable = FileSystem.createDownloadResumable(url, destPath, { headers });
+      const downloadPromise = resumable.downloadAsync();
+      let stallTimer: ReturnType<typeof setTimeout> | undefined;
+      const stallPromise = new Promise<never>((_, reject) => {
+        stallTimer = setTimeout(() => {
+          resumable.pauseAsync().catch(() => {});
+          reject(new Error('Segment stalled'));
+        }, SEGMENT_STALL_MS);
+      });
+      const result = await Promise.race([downloadPromise, stallPromise]).finally(() => {
+        if (stallTimer) clearTimeout(stallTimer);
+      });
       if (signal?.aborted) {
         try { await FileSystem.deleteAsync(destPath, { idempotent: true }); } catch {}
         throw new Error('Cancelled');
@@ -172,11 +197,14 @@ async function downloadSegment(
       if (!info.exists || (info.size ?? 0) === 0) {
         throw new Error(`Empty segment - ${url.split('?')[0].split('/').pop()}`);
       }
+      await FileSystem.writeAsStringAsync(donePath, segmentIdentity);
       debugLog('[downloadSegment] success:', destPath.split('/').pop(), 'size:', info.size);
       return;
     } catch (err: any) {
       lastErr = err as Error;
       if (signal?.aborted || lastErr.message === 'Cancelled') throw lastErr;
+      try { await FileSystem.deleteAsync(destPath, { idempotent: true }); } catch {}
+      try { await FileSystem.deleteAsync(donePath, { idempotent: true }); } catch {}
       if (attempt < 2) {
         debugLog('[downloadSegment] retrying after error:', lastErr.message);
         await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
@@ -184,7 +212,22 @@ async function downloadSegment(
     }
   }
   console.error('[downloadSegment] failed after 3 attempts:', lastErr.message);
+  try { await FileSystem.deleteAsync(destPath, { idempotent: true }); } catch {}
+  try { await FileSystem.deleteAsync(donePath, { idempotent: true }); } catch {}
   throw lastErr;
+}
+
+function segmentBatchSize(segments: string[], byteRanges?: (string | null)[]): number {
+  const hasByteRanges = Boolean(byteRanges?.some(Boolean));
+  if (!hasByteRanges) return SEGMENT_BATCH;
+
+  // Byte-range HLS often represents many logical segments as ranges of one
+  // large media object. On physical iOS, many simultaneous Range requests to
+  // the same URL can leave NSURLSession connections parked until our stall
+  // timer fires. Keep those shared-object playlists serial; use a modest batch
+  // only when ranges are spread across separate objects.
+  const uniqueUrls = new Set(segments.map((url) => url.split('#')[0]));
+  return uniqueUrls.size < segments.length ? SHARED_BYTE_RANGE_SEGMENT_BATCH : BYTE_RANGE_SEGMENT_BATCH;
 }
 
 async function muxSegments(
@@ -341,10 +384,13 @@ export async function downloadHLS(
   const segExt = isFmp4 ? 'm4s' : 'ts';
   const segPaths: string[] = new Array(segments.length);
 
-  for (let i = 0; i < segments.length; i += SEGMENT_BATCH) {
+  const batchSize = segmentBatchSize(segments, byteRanges);
+  const batchCount = Math.ceil(segments.length / batchSize);
+
+  for (let i = 0; i < segments.length; i += batchSize) {
     if (signal?.aborted) throw new Error('Cancelled');
-    const batch = segments.slice(i, i + SEGMENT_BATCH);
-    debugLog(`[downloadHLS] starting batch ${i / SEGMENT_BATCH + 1}/${Math.ceil(segments.length / SEGMENT_BATCH)}`);
+    const batch = segments.slice(i, i + batchSize);
+    debugLog(`[downloadHLS] starting batch ${i / batchSize + 1}/${batchCount}`);
     await Promise.all(batch.map((url, j) => {
       const idx = i + j;
       const br = byteRanges?.[idx];
@@ -362,8 +408,8 @@ export async function downloadHLS(
       }
       return downloadSegment(url, segPaths[idx], segmentHeaders, signal);
     }));
-    debugLog(`[downloadHLS] finished batch ${i / SEGMENT_BATCH + 1}/${Math.ceil(segments.length / SEGMENT_BATCH)}`);
-    onProgress?.(Math.min(i + SEGMENT_BATCH, segments.length), segments.length);
+    debugLog(`[downloadHLS] finished batch ${i / batchSize + 1}/${batchCount}`);
+    onProgress?.(Math.min(i + batchSize, segments.length), segments.length);
   }
 
   onStatus?.('assembling');

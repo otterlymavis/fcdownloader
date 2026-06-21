@@ -392,6 +392,8 @@ def stream_file(
     filepath: str,
     *,
     request_id: str | None = None,
+    start: int = 0,
+    length: int | None = None,
 ) -> Iterator[bytes]:
     """Generator that streams *filepath* in 64 KB chunks, then cleans up *tmpdir*.
 
@@ -405,12 +407,20 @@ def stream_file(
     disconnect_reason: str | None = None
 
     try:
+        remaining = length
         with open(filepath, "rb") as f:
+            if start > 0:
+                f.seek(start)
             while True:
-                chunk = f.read(65536)
+                read_size = 65536 if remaining is None else min(65536, remaining)
+                if read_size <= 0:
+                    break
+                chunk = f.read(read_size)
                 if not chunk:
                     break
                 bytes_sent += len(chunk)
+                if remaining is not None:
+                    remaining -= len(chunk)
                 yield chunk
     except GeneratorExit:
         disconnect_reason = "client disconnected (GeneratorExit)"

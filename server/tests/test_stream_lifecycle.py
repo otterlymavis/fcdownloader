@@ -85,6 +85,32 @@ class TestStreamFile:
         chunks = list(supervisor.stream_file(tmpdir, filepath))
         assert b"".join(chunks) == data
 
+    def test_yields_requested_byte_slice(self):
+        data = bytes(range(256)) * 1024
+        tmpdir, filepath = _make_tmpdir_with_file(data)
+        self._acquire()
+        chunks = list(supervisor.stream_file(tmpdir, filepath, start=1000, length=5000))
+        assert b"".join(chunks) == data[1000:6000]
+        assert not os.path.exists(tmpdir), "tmpdir should be deleted after ranged streaming"
+
+    def test_parse_single_range(self):
+        from fastapi import HTTPException
+        from main import _parse_single_range
+
+        assert _parse_single_range(None, 1000) is None
+        assert _parse_single_range("bytes=100-", 1000) == (100, 999)
+        assert _parse_single_range("bytes=100-199", 1000) == (100, 199)
+        assert _parse_single_range("bytes=100-2000", 1000) == (100, 999)
+
+        with pytest.raises(HTTPException) as invalid:
+            _parse_single_range("bytes=100-99", 1000)
+        assert invalid.value.status_code == 416
+
+        with pytest.raises(HTTPException) as unsatisfiable:
+            _parse_single_range("bytes=1000-", 1000)
+        assert unsatisfiable.value.status_code == 416
+        assert unsatisfiable.value.headers == {"Content-Range": "bytes */1000"}
+
     def test_cleans_tmpdir_on_normal_completion(self):
         tmpdir, filepath = _make_tmpdir_with_file(b"hello")
         self._acquire()

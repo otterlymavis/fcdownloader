@@ -9,6 +9,8 @@ import { muxVideoAudio } from './ffmpegMux';
 
 const SEGMENT_BATCH = 3;
 const MUX_CHUNK = 1024 * 1024;
+const LARGE_FILE_STALL_MS = 30_000;
+const LARGE_FILE_ATTEMPTS = 3;
 
 // ── URL helpers ────────────────────────────────────────────────
 
@@ -319,27 +321,73 @@ async function downloadLargeFile(
   onProgress?: (written: number, total: number) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  let aborted = false;
+  let resumeData: string | undefined;
+  let lastErr: Error = new Error('DASH track download failed');
 
-  const resumable = FileSystem.createDownloadResumable(
-    url, destPath, { headers },
-    ({ totalBytesWritten, totalBytesExpectedToWrite }) => {
-      if (totalBytesExpectedToWrite > 0) onProgress?.(totalBytesWritten, totalBytesExpectedToWrite);
-    },
-  );
+  for (let attempt = 0; attempt < LARGE_FILE_ATTEMPTS; attempt += 1) {
+    if (signal?.aborted) throw new Error('Cancelled');
+    let aborted = false;
+    let stallTimer: ReturnType<typeof setTimeout> | undefined;
+    let resumable: ReturnType<typeof FileSystem.createDownloadResumable>;
 
-  const abortHandler = () => { aborted = true; resumable.pauseAsync().catch(() => {}); };
-  signal?.addEventListener('abort', abortHandler);
+    const clearStallTimer = () => {
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = undefined;
+    };
 
-  try {
-    const result = await resumable.downloadAsync();
-    if (aborted || signal?.aborted) throw new Error('Cancelled');
-    if (!result || result.status < 200 || result.status >= 300) {
-      throw new Error(`HTTP ${result?.status ?? 'unknown'} downloading track`);
+    const armStallTimer = (reject: (err: Error) => void) => {
+      clearStallTimer();
+      stallTimer = setTimeout(() => {
+        resumable.pauseAsync()
+          .then((state) => { resumeData = state.resumeData; })
+          .catch(() => {})
+          .finally(() => reject(new Error('DASH download stalled')));
+      }, LARGE_FILE_STALL_MS);
+    };
+
+    try {
+      const stalled = new Promise<never>((_, reject) => {
+        resumable = FileSystem.createDownloadResumable(
+          url, destPath, { headers },
+          ({ totalBytesWritten, totalBytesExpectedToWrite }) => {
+            if (totalBytesExpectedToWrite > 0) onProgress?.(totalBytesWritten, totalBytesExpectedToWrite);
+            armStallTimer(reject);
+          },
+          resumeData,
+        );
+        armStallTimer(reject);
+      });
+
+      const abortHandler = () => {
+        aborted = true;
+        resumable.pauseAsync()
+          .then((state) => { resumeData = state.resumeData; })
+          .catch(() => {});
+      };
+      signal?.addEventListener('abort', abortHandler);
+
+      try {
+        const result = await Promise.race([resumable!.downloadAsync(), stalled]);
+        if (aborted || signal?.aborted) throw new Error('Cancelled');
+        if (!result || result.status < 200 || result.status >= 300) {
+          throw new Error(`HTTP ${result?.status ?? 'unknown'} downloading track`);
+        }
+        return;
+      } finally {
+        clearStallTimer();
+        signal?.removeEventListener('abort', abortHandler);
+      }
+    } catch (err) {
+      lastErr = err as Error;
+      if (signal?.aborted || lastErr.message === 'Cancelled') throw lastErr;
+      if (/HTTP [234]\d\d/.test(lastErr.message) || attempt === LARGE_FILE_ATTEMPTS - 1) {
+        throw lastErr;
+      }
+      await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
     }
-  } finally {
-    signal?.removeEventListener('abort', abortHandler);
   }
+
+  throw lastErr;
 }
 
 // ── Main entry point ───────────────────────────────────────────

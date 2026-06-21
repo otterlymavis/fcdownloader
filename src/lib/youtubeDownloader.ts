@@ -19,13 +19,11 @@
  * because browser-captured URLs typically reflect the low-res variant the
  * WebView was streaming.
  */
-import * as FileSystem from 'expo-file-system/legacy';
-import { File } from 'expo-file-system';
-import { fetch as expoFetch } from 'expo/fetch';
 import { DetectedMedia } from '../types';
 import { downloadHLS, DownloadOptions } from './hlsDownloader';
 import { downloadDASH } from './dashDownloader';
 import { downloadViaServer } from './serverDownloader';
+import { downloadDirect } from './directDownloader';
 import { extractYouTubeStreams } from './ytExtractor';
 import { extractViaServer } from './serverExtractor';
 import { debugLog } from './releaseLogger';
@@ -37,56 +35,6 @@ const YT_CDN_HEADERS: Record<string, string> = {
   'Referer': 'https://www.youtube.com/',
   'Accept':  '*/*',
 };
-
-async function streamToDisk(
-  url: string,
-  headers: Record<string, string>,
-  taskId: string,
-  signal: AbortSignal | undefined,
-  onProgress: DownloadOptions['onProgress'],
-): Promise<string> {
-  // Use a regex so URLs like /ytdl-stream (no file extension in path) fall
-  // back to 'mp4' instead of producing a garbage extension from split('.').
-  const extMatch = url.split('?')[0].match(/\.([a-z0-9]{2,5})$/i);
-  const ext      = extMatch ? extMatch[1].toLowerCase() : 'mp4';
-  const dir      = `${FileSystem.documentDirectory}downloads/${taskId}/`;
-  const filePath = `${dir}video.${ext}`;
-
-  await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-
-  debugLog('[ytDlp] GET', url.slice(0, 120));
-
-  const res = await expoFetch(url, { signal, headers });
-  debugLog('[ytDlp] response status:', res.status, 'content-length:', res.headers.get('content-length'));
-
-  if (!res.ok) throw new Error(`YouTube ${res.status}`);
-  if (!res.body) throw new Error('Empty response body');
-
-  const contentLength = parseInt(res.headers.get('content-length') ?? '0', 10);
-  const file = new File(filePath);
-  file.create({ intermediates: true, overwrite: true });
-  const handle = file.open();
-
-  try {
-    const reader = res.body.getReader();
-    let written = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (signal?.aborted) throw new Error('Cancelled');
-      handle.writeBytes(value);
-      written += value.byteLength;
-      if (contentLength > 0) onProgress?.(written, contentLength);
-    }
-  } finally {
-    handle.close();
-  }
-
-  if (file.size === 0) throw new Error('Downloaded file is empty — URL may have expired');
-
-  onProgress?.(1, 1);
-  return filePath;
-}
 
 export async function downloadYouTube(
   media: DetectedMedia,
@@ -146,11 +94,9 @@ export async function downloadYouTube(
 
   // Direct progressive mp4 (360p itag-18 or anything single-file).
   onStatus?.('downloading');
-  const path = await streamToDisk(
-    best.url,
-    best.httpHeaders ?? YT_CDN_HEADERS,
-    taskId, signal, onProgress,
+  return downloadDirect(
+    { ...best, mediaType: 'direct', httpHeaders: best.httpHeaders ?? YT_CDN_HEADERS },
+    taskId,
+    { ...opts, signal, onProgress },
   );
-  onStatus?.('assembling');
-  return path;
 }

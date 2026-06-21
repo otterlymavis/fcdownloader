@@ -130,6 +130,23 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _parse_single_range(range_header: str | None, size: int) -> tuple[int, int] | None:
+    if not range_header:
+        return None
+    match = re.fullmatch(r"bytes=(\d+)-(\d*)", range_header.strip())
+    if not match:
+        raise HTTPException(416, "Only single byte ranges are supported")
+    start = int(match.group(1))
+    end = int(match.group(2)) if match.group(2) else size - 1
+    if start >= size or end < start:
+        raise HTTPException(
+            416,
+            "Requested range is not satisfiable",
+            headers={"Content-Range": f"bytes */{size}"},
+        )
+    return start, min(end, size - 1)
+
+
 # ── App + middleware ──────────────────────────────────────────────────────────
 
 limiter = Limiter(key_func=_client_ip)
@@ -2122,6 +2139,7 @@ def ytdl_stream_endpoint(
     page_url: str = Query(..., description="Page URL to stream through yt-dlp download mode"),
     cookies: str | None = Query(None, description="Optional session cookies"),
     x_fcdl_cookies: str | None = Header(None, alias="X-FCDL-Cookies"),
+    range_header: str | None = Header(None, alias="Range"),
 ) -> StreamingResponse:
     page_url = normalize_url(page_url)
     if not page_url:
@@ -2149,15 +2167,32 @@ def ytdl_stream_endpoint(
         page_url, cookies_val, request_id=rid,
     )
 
+    byte_range = _parse_single_range(range_header, filesize)
+    start, end = byte_range if byte_range else (0, filesize - 1)
+    content_length = end - start + 1 if filesize > 0 else 0
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Content-Length": str(content_length),
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-cache, no-store",
+        "X-Request-ID": rid,
+    }
+    status_code = 200
+    if byte_range:
+        status_code = 206
+        headers["Content-Range"] = f"bytes {start}-{end}/{filesize}"
+
     return StreamingResponse(
-        supervisor.stream_file(tmpdir, filepath, request_id=rid),
+        supervisor.stream_file(
+            tmpdir,
+            filepath,
+            request_id=rid,
+            start=start,
+            length=content_length,
+        ),
         media_type="video/mp4",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Content-Length": str(filesize),
-            "Cache-Control": "no-cache, no-store",
-            "X-Request-ID": rid,
-        },
+        headers=headers,
+        status_code=status_code,
     )
 
 

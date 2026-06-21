@@ -5,6 +5,9 @@ import { extractSessionCookies } from './cookieManager';
 import { DetectedMedia } from '../types';
 import { DownloadOptions } from './hlsDownloader';
 
+const MAX_ATTEMPTS = 4;
+const READ_STALL_MS = 30_000;
+
 const MEDIA_EXTS = new Set([
   'mp4', 'm4v', 'webm', 'mov',
   'jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'heic',
@@ -77,6 +80,49 @@ function contentTypeLooksLikeMedia(contentType: string, media: DetectedMedia): b
   return ct.startsWith('video/') || ct.includes('mp4') || ct.includes('mpegurl');
 }
 
+function contentRangeTotal(contentRange: string | null): number {
+  const total = contentRange?.match(/\/(\d+)$/)?.[1];
+  return total ? parseInt(total, 10) : 0;
+}
+
+function withRange(headers: Record<string, string>, offset: number): Record<string, string> {
+  if (offset <= 0) return headers;
+  return { ...headers, Range: `bytes=${offset}-` };
+}
+
+async function readWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number,
+  abort: () => void,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          abort();
+          reject(new Error('Download stalled'));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function makeAttemptSignal(signal: AbortSignal | undefined): { signal: AbortSignal; cleanup: () => void; abort: () => void } {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (signal?.aborted) abort();
+  signal?.addEventListener('abort', abort);
+  return {
+    signal: controller.signal,
+    abort,
+    cleanup: () => signal?.removeEventListener('abort', abort),
+  };
+}
+
 export async function downloadDirect(
   media: DetectedMedia,
   taskId: string,
@@ -119,18 +165,36 @@ export async function downloadDirect(
   await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
 
   onStatus?.('downloading');
-  onProgress?.(0, 1);
 
-  const MAX_ATTEMPTS = 3;
   let lastErr: Error = new Error('Download failed');
   let downloadUrl = media.url;
   let tokenRefreshed = false;
+  const existingFile = await FileSystem.getInfoAsync(filePath);
+  let written = existingFile.exists ? (existingFile.size ?? 0) : 0;
+  let expectedTotal = 0;
+  let fileReady = written > 0;
+  onProgress?.(written, Math.max(written, 1));
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     if (signal?.aborted) throw new Error('Cancelled');
+    const attemptSignal = makeAttemptSignal(signal);
     try {
-      const res = await expoFetch(downloadUrl, { headers, signal });
+      const requestHeaders = withRange(headers, written);
+      const res = await expoFetch(downloadUrl, { headers: requestHeaders, signal: attemptSignal.signal });
       if (signal?.aborted) throw new Error('Cancelled');
       if (!res.ok) {
+        if (res.status === 416 && written > 0) {
+          const total = contentRangeTotal(res.headers.get('content-range'));
+          if (total > 0 && written >= total) {
+            onProgress?.(1, 1);
+            onStatus?.('assembling');
+            return filePath;
+          }
+          written = 0;
+          expectedTotal = 0;
+          fileReady = false;
+          attempt--;
+          continue;
+        }
         // On a first 403, try refreshing the CDN token before giving up.
         if (res.status === 403 && !tokenRefreshed && opts.onTokenExpired) {
           const freshUrl = await opts.onTokenExpired(media.url);
@@ -145,33 +209,50 @@ export async function downloadDirect(
       }
       if (!res.body) throw new Error('Download returned an empty body');
 
+      // Some CDNs ignore Range and return 200. In that case restart the local
+      // file so we do not append duplicate bytes to a partial download.
+      if (written > 0 && res.status !== 206) {
+        written = 0;
+        expectedTotal = 0;
+        fileReady = false;
+      }
+
       const ct = (res.headers.get('content-type') ?? '').toLowerCase();
       if (!contentTypeLooksLikeMedia(ct, media)) {
         throw new Error('Server returned a page or non-media response instead of downloadable media');
       }
 
       const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
-      onProgress?.(0, contentLength || 1);
+      expectedTotal = res.status === 206
+        ? contentRangeTotal(res.headers.get('content-range')) || (written + contentLength)
+        : contentLength;
+      onProgress?.(written, expectedTotal || Math.max(written, 1));
 
       const file = new File(filePath);
-      file.create({ intermediates: true, overwrite: true });
+      if (!fileReady) {
+        file.create({ intermediates: true, overwrite: true });
+        fileReady = true;
+      }
       const handle = file.open();
       try {
+        handle.offset = written;
         const reader = res.body.getReader();
-        let written = 0;
         while (true) {
-          const { done, value } = await reader.read();
+          const { done, value } = await readWithTimeout(reader, READ_STALL_MS, attemptSignal.abort);
           if (done) break;
           if (signal?.aborted) throw new Error('Cancelled');
           handle.writeBytes(value);
           written += value.byteLength;
-          onProgress?.(written, contentLength || Math.max(written, 1));
+          onProgress?.(written, expectedTotal || Math.max(written, 1));
         }
       } finally {
         handle.close();
       }
 
       if (file.size === 0) throw new Error('Downloaded file is empty — the URL may require a login or has expired');
+      if (expectedTotal > 0 && file.size < expectedTotal) {
+        throw new Error(`Truncated download: ${file.size}/${expectedTotal} bytes`);
+      }
       break; // success — exit retry loop
     } catch (err) {
       lastErr = err as Error;
@@ -180,6 +261,8 @@ export async function downloadDirect(
       const isRetryable = !/HTTP [234]\d\d|non-media|login|expired/.test(lastErr.message);
       if (!isRetryable || attempt === MAX_ATTEMPTS - 1) throw lastErr;
       await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+    } finally {
+      attemptSignal.cleanup();
     }
   }
 

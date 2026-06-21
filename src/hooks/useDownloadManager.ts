@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DetectedMedia, DownloadStatus, DownloadStrategy, DownloadTask } from '../types';
 import { deleteDownload } from '../lib/hlsDownloader';
@@ -8,6 +8,21 @@ import { extractionManager } from '../lib/extractionManager';
 import { getMediaGroupKey } from '../lib/mediaHelpers';
 
 const STORAGE_KEY = '@fcdownloader/tasks_v1';
+const MAX_AUTO_RETRIES = 2;
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export function isRetryableDownloadError(err: unknown): boolean {
+  if (err instanceof DRMProtectedError) return false;
+  if (err instanceof ServerExtractionError) {
+    return !err.code || !['AUTH_REQUIRED', 'GEO_BLOCKED', 'RATE_LIMITED'].includes(err.code);
+  }
+
+  const msg = ((err as Error)?.message || '').toLowerCase();
+  if (msg === 'cancelled' || msg.includes('drm-protected')) return false;
+  if (/http [234]\d\d|non-media|login|required|geo.?blocked|rate limit|forbidden|unauthorized/.test(msg)) return false;
+  return /stalled|truncated|network request failed|network|reset|econnreset|epipe|stream|connection|socket|timeout|timed out|eof|terminated|empty body|http 5\d\d/.test(msg);
+}
 
 // ── Reducer ───────────────────────────────────────────────────
 
@@ -19,7 +34,10 @@ type Action =
 
 function reducer(state: DownloadTask[], action: Action): DownloadTask[] {
   switch (action.type) {
-    case 'HYDRATE': return action.tasks;
+    case 'HYDRATE': {
+      const currentIds = new Set(state.map((task) => task.id));
+      return [...state, ...action.tasks.filter((task) => !currentIds.has(task.id))];
+    }
     case 'ADD':     return [action.task, ...state];
     case 'UPDATE':  return state.map((t) => t.id === action.id ? { ...t, ...action.patch } : t);
     case 'REMOVE':  return state.filter((t) => t.id !== action.id);
@@ -38,8 +56,13 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
   const [tasks, dispatch] = useReducer(reducer, []);
   const controllers = useRef<Map<string, AbortController>>(new Map());
   const activeDownloadKeys = useRef<Set<string>>(new Set());
+  const resumedTaskIds = useRef<Set<string>>(new Set());
+  const pendingPersistTasks = useRef<DownloadTask[]>([]);
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const lastPersistAt = useRef(0);
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  const [isHydrated, setIsHydrated] = useState(false);
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY)
@@ -48,16 +71,32 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
         const saved: DownloadTask[] = JSON.parse(raw);
         dispatch({
           type: 'HYDRATE',
-          tasks: saved.filter((t) => t.status === 'completed' || t.status === 'failed'),
+          tasks: saved.filter((t) => t.status !== 'cancelled'),
         });
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        setIsHydrated(true);
+      });
   }, []);
 
   useEffect(() => {
-    const saveable = tasks.filter((t) => t.status === 'completed' || t.status === 'failed');
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(saveable)).catch(() => {});
-  }, [tasks]);
+    if (!isHydrated) return;
+    pendingPersistTasks.current = tasks.filter((t) => t.status !== 'cancelled');
+
+    const persist = () => {
+      persistTimer.current = undefined;
+      lastPersistAt.current = Date.now();
+      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(pendingPersistTasks.current)).catch(() => {});
+    };
+
+    const elapsed = Date.now() - lastPersistAt.current;
+    if (elapsed >= 1_000 && !persistTimer.current) {
+      persist();
+    } else if (!persistTimer.current) {
+      persistTimer.current = setTimeout(persist, Math.max(0, 1_000 - elapsed));
+    }
+  }, [isHydrated, tasks]);
 
   const update = useCallback((id: string, patch: Partial<DownloadTask>) => {
     dispatch({ type: 'UPDATE', id, patch });
@@ -94,18 +133,39 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
       };
 
       try {
-        const localPlaylistPath = await runDownload(media, id, strategy, {
-          signal: controller.signal,
-          onStatus: (status: DownloadStatus, error?: string) => update(id, { status, error }),
-          onProgress: (done: number, total: number) =>
+        let lastProgressUpdateAt = 0;
+        let localPlaylistPath = '';
+        for (let attempt = 0; attempt <= MAX_AUTO_RETRIES; attempt += 1) {
+          try {
+            localPlaylistPath = await runDownload(media, id, strategy, {
+              signal: controller.signal,
+              onStatus: (status: DownloadStatus, error?: string) => update(id, { status, error }),
+              onProgress: (done: number, total: number) => {
+                const now = Date.now();
+                const isFinalMarker = done === 1 && total === 1;
+                if (!isFinalMarker && now - lastProgressUpdateAt < 200) return;
+                lastProgressUpdateAt = now;
+                update(id, {
+                  status: 'downloading',
+                  error: undefined,
+                  downloadedSegments: done,
+                  totalSegments: total,
+                  progress: total > 0 ? done / total : 0,
+                });
+              },
+              onTokenExpired,
+            });
+            break;
+          } catch (err) {
+            if (controller.signal.aborted || (err as Error).message === 'Cancelled') throw err;
+            if (attempt >= MAX_AUTO_RETRIES || !isRetryableDownloadError(err)) throw err;
             update(id, {
-              status: 'downloading',
-              downloadedSegments: done,
-              totalSegments: total,
-              progress: total > 0 ? done / total : 0,
-            }),
-          onTokenExpired,
-        });
+              status: 'fetching_manifest',
+              error: `Network interrupted — retrying (${attempt + 1}/${MAX_AUTO_RETRIES})`,
+            });
+            await delay(1_000 * (attempt + 1));
+          }
+        }
 
         const completedTask: DownloadTask = {
           ...task,
@@ -147,6 +207,27 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
     },
     [update],
   );
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    for (const task of tasks) {
+      if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') continue;
+      if (resumedTaskIds.current.has(task.id)) continue;
+
+      const dedupeKey = getDownloadDedupeKey(task.media);
+      if (activeDownloadKeys.current.has(dedupeKey)) continue;
+
+      resumedTaskIds.current.add(task.id);
+      activeDownloadKeys.current.add(dedupeKey);
+      const resumedTask: DownloadTask = {
+        ...task,
+        status: 'pending',
+        error: 'Resuming interrupted download',
+      };
+      update(task.id, resumedTask);
+      setTimeout(() => { void _run(resumedTask); }, 0);
+    }
+  }, [isHydrated, tasks, _run, update]);
 
   // ── Public API ────────────────────────────────────────────────
 
