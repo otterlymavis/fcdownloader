@@ -35,8 +35,10 @@ const (
 	serviceVersion       = "0.3.0-go"
 	apiVersion           = "v1"
 	maxURLLength         = 4096
+	maxCookieBytes       = 32 * 1024
 	defaultFormat        = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/best[ext=mp4]/best"
 	youtubeFormat        = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/bestvideo[height<=1080]+bestaudio/best[height>=720][height<=1080]"
+	bilibiliFormat       = "bv*[height<=1080][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080][ext=mp4]/b[height<=1080]/best"
 	pinnedYtDlpVersion   = "2026.03.17"
 	defaultYtDlpBaseURL  = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17"
 	nightlyYtDlpBaseURL  = "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download"
@@ -121,11 +123,11 @@ func main() {
 	mux.HandleFunc("/download/progress", handleDownloadProgress)
 
 	server := &http.Server{
-		Addr:              net.JoinHostPort(host, port),
+		Addr:              net.JoinHostPort(host, helperPort()),
 		Handler:           cors(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	logf("FCDownloader native helper listening on http://%s:%s", host, port)
+	logf("FCDownloader native helper listening on http://%s:%s", host, helperPort())
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logf("server stopped: %v", err)
 		os.Exit(1)
@@ -144,7 +146,7 @@ func cors(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin(r.Header.Get("Origin")))
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-FCDL-Helper-Token")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-FCDL-Helper-Token, X-FCDL-Cookies")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -245,7 +247,7 @@ func handleFormats(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
-	data, err := runYtDlpJSON(ctx, rawURL)
+	data, err := runYtDlpJSON(ctx, rawURL, r.Header.Get("X-FCDL-Cookies"))
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -266,7 +268,14 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 		return
 	}
 
-	filePath, cleanup, err := downloadMedia(r.Context(), rawURL, strings.TrimSpace(q.Get("format")), strings.TrimSpace(q.Get("max_height")))
+	filePath, cleanup, err := downloadMedia(
+		r.Context(),
+		rawURL,
+		strings.TrimSpace(q.Get("format")),
+		strings.TrimSpace(q.Get("max_height")),
+		r.Header.Get("X-FCDL-Cookies"),
+		truthy(q.Get("remove_watermark")),
+	)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -296,16 +305,27 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 100, Status: "complete"})
 }
 
-func runYtDlpJSON(ctx context.Context, rawURL string) (map[string]interface{}, error) {
+func runYtDlpJSON(ctx context.Context, rawURL, cookies string) (map[string]interface{}, error) {
 	ytDlp, channel, err := ytDlpPrimaryPath(ctx, rawURL)
 	if err != nil {
 		return nil, err
 	}
+	cookieFile, cookieCleanup, err := cookieFileFromHeader(cookies, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	defer cookieCleanup()
 	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 5, Status: "extracting"})
-	data, err := runYtDlpJSONWithPath(ctx, ytDlp, rawURL)
+	data, err := runYtDlpJSONWithPath(ctx, ytDlp, rawURL, cookieFile)
 	if err == nil {
 		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 10, Status: "extracted"})
 		return data, nil
+	}
+	if bilibiliURL(rawURL) {
+		if data, biliErr := runBilibiliAPIJSON(ctx, rawURL, cookies); biliErr == nil {
+			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 10, Status: "extracted"})
+			return data, nil
+		}
 	}
 	if !youtubeURL(rawURL) {
 		return data, err
@@ -317,7 +337,7 @@ func runYtDlpJSON(ctx context.Context, rawURL string) (map[string]interface{}, e
 		if stableErr != nil {
 			return nil, fmt.Errorf("%v; stable fallback unavailable: %w", err, stableErr)
 		}
-		data, err = runYtDlpJSONWithPath(ctx, stable, rawURL)
+		data, err = runYtDlpJSONWithPath(ctx, stable, rawURL, cookieFile)
 		if err == nil {
 			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 10, Status: "extracted"})
 		}
@@ -330,7 +350,7 @@ func runYtDlpJSON(ctx context.Context, rawURL string) (map[string]interface{}, e
 		if nightlyErr != nil {
 			return nil, fmt.Errorf("%v; nightly fallback unavailable: %w", err, nightlyErr)
 		}
-		data, err = runYtDlpJSONWithPath(ctx, nightly, rawURL)
+		data, err = runYtDlpJSONWithPath(ctx, nightly, rawURL, cookieFile)
 		if err == nil {
 			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 10, Status: "extracted"})
 		}
@@ -339,7 +359,7 @@ func runYtDlpJSON(ctx context.Context, rawURL string) (map[string]interface{}, e
 	return data, err
 }
 
-func runYtDlpJSONWithPath(ctx context.Context, ytDlp, rawURL string) (map[string]interface{}, error) {
+func runYtDlpJSONWithPath(ctx context.Context, ytDlp, rawURL, cookieFile string) (map[string]interface{}, error) {
 	args := []string{
 		"--dump-single-json",
 		"--skip-download",
@@ -347,8 +367,12 @@ func runYtDlpJSONWithPath(ctx context.Context, ytDlp, rawURL string) (map[string
 		"--socket-timeout", "30",
 		"--js-runtimes", "node",
 		"--remote-components", "ejs:github",
-		rawURL,
 	}
+	args = append(args, bilibiliHeaderArgs(rawURL)...)
+	if cookieFile != "" {
+		args = append(args, "--cookies", cookieFile)
+	}
+	args = append(args, rawURL)
 	cmd := exec.CommandContext(ctx, ytDlp, args...)
 	// Prevent orphaned node.js subprocesses from holding stdout/stderr pipes
 	// open after context cancellation; abandon I/O after 5 s.
@@ -402,7 +426,7 @@ func runYtDlpJSONWithPath(ctx context.Context, ytDlp, rawURL string) (map[string
 	}, nil
 }
 
-func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (string, func(), error) {
+func downloadMedia(ctx context.Context, rawURL, format, maxHeight, cookies string, removeWatermark bool) (string, func(), error) {
 	ytDlp, channel, err := ytDlpPrimaryPath(ctx, rawURL)
 	if err != nil {
 		return "", nil, err
@@ -412,7 +436,9 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (strin
 		return "", nil, err
 	}
 	if format == "" {
-		if regexp.MustCompile(`^\d{3,4}$`).MatchString(maxHeight) {
+		if bilibiliURL(rawURL) {
+			format = formatForHeight(bilibiliFormat, maxHeight)
+		} else if regexp.MustCompile(`^\d{3,4}$`).MatchString(maxHeight) {
 			format = fmt.Sprintf("bv*[height<=%s][ext=mp4]+ba[ext=m4a]/bv*[height<=%s]+ba/best[height<=%s]/best", maxHeight, maxHeight, maxHeight)
 		} else if youtubeURL(rawURL) {
 			format = youtubeFormat
@@ -426,14 +452,25 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (strin
 		return "", nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(tmp) }
+	cookieFile, cookieCleanup, err := cookieFileFromHeader(cookies, rawURL)
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	defer cookieCleanup()
 
 	runCtx, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
-	args := ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL)
+	args := ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL, cookieFile, removeWatermark)
 	out, err := runYtDlpWithProgress(runCtx, ytDlp, args, rawURL)
 	if err != nil {
 		cleanup()
 		stableErr := fmt.Errorf("%s", tail(out))
+		if bilibiliURL(rawURL) {
+			if apiPath, apiCleanup, apiErr := downloadBilibiliAPI(ctx, ffmpeg, rawURL, maxHeight, cookies); apiErr == nil {
+				return apiPath, apiCleanup, nil
+			}
+		}
 		if youtubeURL(rawURL) && channel == "nightly" {
 			logf("nightly yt-dlp failed for YouTube download; retrying with stable: %v", stableErr)
 			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: currentMediaPercent(rawURL), Status: "retrying"})
@@ -441,7 +478,7 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (strin
 			if stablePathErr != nil {
 				return "", nil, fmt.Errorf("%v; stable fallback unavailable: %w", stableErr, stablePathErr)
 			}
-			return downloadMediaWithYtDlp(ctx, stable, ffmpeg, rawURL, format)
+			return downloadMediaWithYtDlp(ctx, stable, ffmpeg, rawURL, format, cookies, removeWatermark)
 		}
 		if shouldRetryWithNightly(rawURL, stableErr.Error()) {
 			logf("stable yt-dlp failed for YouTube download; retrying with nightly: %v", stableErr)
@@ -450,7 +487,7 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (strin
 			if nightlyErr != nil {
 				return "", nil, fmt.Errorf("%v; nightly fallback unavailable: %w", stableErr, nightlyErr)
 			}
-			return downloadMediaWithYtDlp(ctx, nightly, ffmpeg, rawURL, format)
+			return downloadMediaWithYtDlp(ctx, nightly, ffmpeg, rawURL, format, cookies, removeWatermark)
 		}
 		return "", nil, stableErr
 	}
@@ -468,16 +505,22 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight string) (strin
 	return candidates[0], cleanup, nil
 }
 
-func downloadMediaWithYtDlp(ctx context.Context, ytDlp, ffmpeg, rawURL, format string) (string, func(), error) {
+func downloadMediaWithYtDlp(ctx context.Context, ytDlp, ffmpeg, rawURL, format, cookies string, removeWatermark bool) (string, func(), error) {
 	tmp, err := os.MkdirTemp("", "fcdl_native_*")
 	if err != nil {
 		return "", nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(tmp) }
+	cookieFile, cookieCleanup, err := cookieFileFromHeader(cookies, rawURL)
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	defer cookieCleanup()
 
 	runCtx, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
-	args := ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL)
+	args := ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL, cookieFile, removeWatermark)
 	out, err := runYtDlpWithProgress(runCtx, ytDlp, args, rawURL)
 	if err != nil {
 		cleanup()
@@ -526,7 +569,7 @@ func isMediaOutputFile(path string) bool {
 	}
 }
 
-func ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL string) []string {
+func ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL, cookieFile string, removeWatermark bool) []string {
 	concurrentFragments := strings.TrimSpace(os.Getenv("FCDL_YTDLP_CONCURRENT_FRAGMENTS"))
 	if concurrentFragments == "" {
 		concurrentFragments = "4"
@@ -549,6 +592,10 @@ func ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL string) []string {
 	}
 	if youtubeURL(rawURL) {
 		args = append(args, "--extractor-args", "youtube:player_client=default")
+	}
+	args = append(args, bilibiliHeaderArgs(rawURL)...)
+	if cookieFile != "" {
+		args = append(args, "--cookies", cookieFile)
 	}
 	args = append(args, rawURL)
 	return args
@@ -1029,6 +1076,17 @@ func allowedURL(value string) bool {
 	return host != "" && host != "localhost" && host != "127.0.0.1" && host != "::1"
 }
 
+func helperPort() string {
+	value := strings.TrimSpace(os.Getenv("FCDL_HELPER_PORT"))
+	if value == "" {
+		return port
+	}
+	if _, err := strconv.Atoi(value); err != nil {
+		return port
+	}
+	return value
+}
+
 func validLocalHost(hostHeader string) bool {
 	hostOnly := hostHeader
 	if host, _, err := net.SplitHostPort(hostHeader); err == nil {
@@ -1090,6 +1148,488 @@ func youtubeURL(value string) bool {
 	parsed, _ := url.Parse(value)
 	host := strings.ToLower(parsed.Hostname())
 	return host == "youtu.be" || strings.HasSuffix(host, "youtube.com") || strings.HasSuffix(host, "youtube-nocookie.com")
+}
+
+func bilibiliURL(value string) bool {
+	parsed, _ := url.Parse(value)
+	host := strings.ToLower(parsed.Hostname())
+	return strings.HasSuffix(host, "bilibili.com") || host == "b23.tv" || strings.HasSuffix(host, "bilibili.tv")
+}
+
+func bilibiliHeaderArgs(rawURL string) []string {
+	if !bilibiliURL(rawURL) {
+		return nil
+	}
+	return []string{
+		"--referer", "https://www.bilibili.com/",
+		"--add-header", "Origin:https://www.bilibili.com",
+		"--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+	}
+}
+
+func formatForHeight(format, maxHeight string) string {
+	if !regexp.MustCompile(`^\d{3,4}$`).MatchString(maxHeight) {
+		return format
+	}
+	return strings.ReplaceAll(format, "height<=1080", "height<="+maxHeight)
+}
+
+func truthy(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func cookieFileFromHeader(cookies, pageURL string) (string, func(), error) {
+	cookies = strings.TrimSpace(cookies)
+	if cookies == "" {
+		return "", func() {}, nil
+	}
+	if len([]byte(cookies)) > maxCookieBytes {
+		return "", func() {}, fmt.Errorf("cookie payload exceeds %d KB limit", maxCookieBytes/1024)
+	}
+	if !strings.Contains(cookies, "=") {
+		return "", func() {}, errors.New("no valid name=value cookie pairs found")
+	}
+	domains := cookieDomainsForURL(pageURL)
+	if len(domains) == 0 {
+		return "", func() {}, nil
+	}
+	file, err := os.CreateTemp("", "fcdl_native_cookies_*.txt")
+	if err != nil {
+		return "", func() {}, err
+	}
+	path := file.Name()
+	cleanup := func() { _ = os.Remove(path) }
+	if runtime.GOOS != "windows" {
+		_ = os.Chmod(path, 0o600)
+	}
+	expiry := time.Now().Add(24 * time.Hour).Unix()
+	writer := bufio.NewWriter(file)
+	_, _ = writer.WriteString("# Netscape HTTP Cookie File\n")
+	_, _ = writer.WriteString("# Generated by FCDownloader native helper per request\n")
+	for _, raw := range strings.Split(cookies, ";") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" || !strings.Contains(raw, "=") {
+			continue
+		}
+		parts := strings.SplitN(raw, "=", 2)
+		name := cookieField(strings.TrimSpace(parts[0]))
+		value := cookieField(strings.TrimSpace(parts[1]))
+		if name == "" {
+			continue
+		}
+		for _, domain := range domains {
+			_, _ = fmt.Fprintf(writer, "%s\tTRUE\t/\tFALSE\t%d\t%s\t%s\n", domain, expiry, name, value)
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", func() {}, err
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return path, cleanup, nil
+}
+
+func cookieDomainsForURL(pageURL string) []string {
+	parsed, _ := url.Parse(pageURL)
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return nil
+	}
+	if strings.HasSuffix(host, "bilibili.com") || strings.HasSuffix(host, "bilibili.tv") || host == "b23.tv" {
+		return []string{".bilibili.com", ".bilivideo.com", ".b23.tv", ".bilibili.tv"}
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) > 2 && len(parts[len(parts)-1]) >= 2 {
+		return []string{"." + strings.Join(parts[len(parts)-2:], ".")}
+	}
+	return []string{"." + host}
+}
+
+func cookieField(value string) string {
+	value = strings.ReplaceAll(value, "\t", "")
+	value = strings.ReplaceAll(value, "\r", "")
+	value = strings.ReplaceAll(value, "\n", "")
+	return value
+}
+
+type biliAPIResult struct {
+	BVID      string
+	CID       int64
+	Title     string
+	Thumbnail string
+	Duration  interface{}
+	Play      map[string]interface{}
+}
+
+func runBilibiliAPIJSON(ctx context.Context, rawURL, cookies string) (map[string]interface{}, error) {
+	result, err := fetchBilibiliAPI(ctx, rawURL, cookies)
+	if err != nil {
+		return nil, err
+	}
+	formats := bilibiliFormatsFromPlay(result.Play)
+	return map[string]interface{}{
+		"ok":         true,
+		"service":    "fcdownloader-native-helper",
+		"extractor":  "BiliBiliAPI",
+		"title":      result.Title,
+		"thumbnail":  result.Thumbnail,
+		"id":         result.BVID,
+		"webpageUrl": rawURL,
+		"duration":   result.Duration,
+		"formats":    formats,
+	}, nil
+}
+
+func downloadBilibiliAPI(ctx context.Context, ffmpeg, rawURL, maxHeight, cookies string) (string, func(), error) {
+	result, err := fetchBilibiliAPI(ctx, rawURL, cookies)
+	if err != nil {
+		return "", nil, err
+	}
+	tmp, err := os.MkdirTemp("", "fcdl_native_bili_*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(tmp) }
+
+	if videoURL, audioURL := pickBilibiliDash(result.Play, maxHeight); videoURL != "" && audioURL != "" {
+		outPath := filepath.Join(tmp, safeName(firstString(result.Title, result.BVID))+".mp4")
+		if err := muxBilibiliDash(ctx, ffmpeg, videoURL, audioURL, outPath, cookies); err != nil {
+			cleanup()
+			return "", nil, err
+		}
+		return outPath, cleanup, nil
+	}
+
+	if mediaURL := pickBilibiliDurl(result.Play); mediaURL != "" {
+		outPath := filepath.Join(tmp, safeName(firstString(result.Title, result.BVID))+".mp4")
+		if err := downloadBilibiliFile(ctx, mediaURL, outPath, cookies); err != nil {
+			cleanup()
+			return "", nil, err
+		}
+		return outPath, cleanup, nil
+	}
+
+	cleanup()
+	return "", nil, errors.New("Bilibili API returned no downloadable media")
+}
+
+func fetchBilibiliAPI(ctx context.Context, rawURL, cookies string) (biliAPIResult, error) {
+	bvid := resolveBVID(ctx, rawURL, cookies)
+	if bvid == "" {
+		return biliAPIResult{}, errors.New("Bilibili URL did not contain a BV id")
+	}
+	viewURL := "https://api.bilibili.com/x/web-interface/view?" + url.Values{"bvid": {bvid}}.Encode()
+	var viewResp map[string]interface{}
+	if err := fetchBilibiliJSON(ctx, viewURL, rawURL, cookies, &viewResp); err != nil {
+		return biliAPIResult{}, err
+	}
+	if code, _ := viewResp["code"].(float64); code != 0 {
+		return biliAPIResult{}, fmt.Errorf("Bilibili view API failed: %s", firstString(viewResp["message"], viewResp["msg"]))
+	}
+	data, _ := viewResp["data"].(map[string]interface{})
+	if data == nil {
+		return biliAPIResult{}, errors.New("Bilibili view API returned no data")
+	}
+	cid := int64(numberValue(data["cid"]))
+	aid := int64(numberValue(data["aid"]))
+	if cid == 0 {
+		return biliAPIResult{}, errors.New("Bilibili view API returned no cid")
+	}
+
+	playValues := url.Values{
+		"bvid":     {bvid},
+		"cid":      {strconv.FormatInt(cid, 10)},
+		"qn":       {"120"},
+		"fnval":    {"4048"},
+		"fourk":    {"1"},
+		"try_look": {"1"},
+	}
+	if aid > 0 {
+		playValues.Set("avid", strconv.FormatInt(aid, 10))
+	}
+	playURL := "https://api.bilibili.com/x/player/playurl?" + playValues.Encode()
+	var playResp map[string]interface{}
+	if err := fetchBilibiliJSON(ctx, playURL, rawURL, cookies, &playResp); err != nil {
+		return biliAPIResult{}, err
+	}
+	if code, _ := playResp["code"].(float64); code != 0 {
+		return biliAPIResult{}, fmt.Errorf("Bilibili playurl API failed: %s", firstString(playResp["message"], playResp["msg"]))
+	}
+	playData, _ := playResp["data"].(map[string]interface{})
+	if playData == nil {
+		return biliAPIResult{}, errors.New("Bilibili playurl API returned no data")
+	}
+
+	return biliAPIResult{
+		BVID:      bvid,
+		CID:       cid,
+		Title:     firstString(data["title"], bvid),
+		Thumbnail: firstString(data["pic"]),
+		Duration:  data["duration"],
+		Play:      playData,
+	}, nil
+}
+
+func fetchBilibiliJSON(ctx context.Context, requestURL, pageURL, cookies string, target interface{}) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return err
+	}
+	applyBilibiliHTTPHeaders(req.Header, pageURL, cookies)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("Bilibili API HTTP %d", resp.StatusCode)
+	}
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 8*1024*1024))
+	return decoder.Decode(target)
+}
+
+func applyBilibiliHTTPHeaders(headers http.Header, pageURL, cookies string) {
+	headers.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+	headers.Set("Referer", firstString(pageURL, "https://www.bilibili.com/"))
+	headers.Set("Origin", "https://www.bilibili.com")
+	if strings.TrimSpace(cookies) != "" {
+		headers.Set("Cookie", cookies)
+	}
+}
+
+func extractBVID(rawURL string) string {
+	match := regexp.MustCompile(`(?i)\bBV[0-9A-Za-z]+`).FindString(rawURL)
+	return match
+}
+
+func resolveBVID(ctx context.Context, rawURL, cookies string) string {
+	if bvid := extractBVID(rawURL); bvid != "" {
+		return bvid
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return ""
+	}
+	applyBilibiliHTTPHeaders(req.Header, "https://www.bilibili.com/", cookies)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if bvid := extractBVID(resp.Request.URL.String()); bvid != "" {
+		return bvid
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	return extractBVID(string(body))
+}
+
+func bilibiliFormatsFromPlay(play map[string]interface{}) []formatInfo {
+	var formats []formatInfo
+	if dash, _ := play["dash"].(map[string]interface{}); dash != nil {
+		for _, item := range interfaceSlice(dash["video"]) {
+			video, _ := item.(map[string]interface{})
+			if video == nil || firstString(video["baseUrl"], video["base_url"]) == "" {
+				continue
+			}
+			id := firstString(video["id"], video["codecid"])
+			height := video["height"]
+			label := firstString(video["new_description"], video["format_note"])
+			if label == "" && height != nil {
+				label = fmt.Sprintf("%.0fp", numberValue(height))
+			}
+			formats = append(formats, formatInfo{
+				FormatID: "bili-dash-v-" + id,
+				Label:    label,
+				Height:   height,
+				Ext:      "mp4",
+				VCodec:   video["codecs"],
+				ACodec:   "none",
+				Filesize: firstNonNil(video["size"], video["bandwidth"]),
+				Protocol: "https",
+			})
+		}
+		for _, item := range interfaceSlice(dash["audio"]) {
+			audio, _ := item.(map[string]interface{})
+			if audio == nil || firstString(audio["baseUrl"], audio["base_url"]) == "" {
+				continue
+			}
+			id := firstString(audio["id"])
+			formats = append(formats, formatInfo{
+				FormatID: "bili-dash-a-" + id,
+				Label:    "audio",
+				Ext:      "m4a",
+				VCodec:   "none",
+				ACodec:   audio["codecs"],
+				Filesize: firstNonNil(audio["size"], audio["bandwidth"]),
+				Protocol: "https",
+			})
+		}
+	}
+	for _, item := range interfaceSlice(play["durl"]) {
+		durl, _ := item.(map[string]interface{})
+		mediaURL := firstString(durl["url"])
+		if mediaURL == "" {
+			continue
+		}
+		quality := firstNonNil(play["quality"], durl["quality"])
+		formats = append(formats, formatInfo{
+			FormatID: "bili-durl-" + firstString(quality, durl["order"]),
+			Label:    firstString(play["format"], "mp4"),
+			Height:   quality,
+			Ext:      "mp4",
+			Filesize: durl["size"],
+			Protocol: "https",
+		})
+	}
+	return formats
+}
+
+func pickBilibiliDash(play map[string]interface{}, maxHeight string) (string, string) {
+	dash, _ := play["dash"].(map[string]interface{})
+	if dash == nil {
+		return "", ""
+	}
+	heightLimit := 1080.0
+	if regexp.MustCompile(`^\d{3,4}$`).MatchString(maxHeight) {
+		if parsed, err := strconv.Atoi(maxHeight); err == nil {
+			heightLimit = float64(parsed)
+		}
+	}
+	var bestVideo map[string]interface{}
+	for _, item := range interfaceSlice(dash["video"]) {
+		video, _ := item.(map[string]interface{})
+		if video == nil {
+			continue
+		}
+		mediaURL := firstString(video["baseUrl"], video["base_url"])
+		height := numberValue(video["height"])
+		if mediaURL == "" || height <= 0 || height > heightLimit {
+			continue
+		}
+		if bestVideo == nil || height > numberValue(bestVideo["height"]) || (height == numberValue(bestVideo["height"]) && strings.Contains(firstString(video["codecs"]), "avc1") && !strings.Contains(firstString(bestVideo["codecs"]), "avc1")) {
+			bestVideo = video
+		}
+	}
+	var bestAudio map[string]interface{}
+	for _, item := range interfaceSlice(dash["audio"]) {
+		audio, _ := item.(map[string]interface{})
+		if audio == nil || firstString(audio["baseUrl"], audio["base_url"]) == "" {
+			continue
+		}
+		if bestAudio == nil || numberValue(audio["bandwidth"]) > numberValue(bestAudio["bandwidth"]) {
+			bestAudio = audio
+		}
+	}
+	if bestVideo == nil || bestAudio == nil {
+		return "", ""
+	}
+	return firstString(bestVideo["baseUrl"], bestVideo["base_url"]), firstString(bestAudio["baseUrl"], bestAudio["base_url"])
+}
+
+func pickBilibiliDurl(play map[string]interface{}) string {
+	var best map[string]interface{}
+	for _, item := range interfaceSlice(play["durl"]) {
+		durl, _ := item.(map[string]interface{})
+		if durl == nil || firstString(durl["url"]) == "" {
+			continue
+		}
+		if best == nil || numberValue(durl["size"]) > numberValue(best["size"]) {
+			best = durl
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	return firstString(best["url"])
+}
+
+func muxBilibiliDash(ctx context.Context, ffmpeg, videoURL, audioURL, outPath, cookies string) error {
+	headers := bilibiliFFmpegHeaders(cookies)
+	cmd := exec.CommandContext(ctx, ffmpeg,
+		"-y",
+		"-headers", headers,
+		"-i", videoURL,
+		"-headers", headers,
+		"-i", audioURL,
+		"-c", "copy",
+		"-movflags", "+faststart",
+		outPath,
+	)
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ffmpeg Bilibili mux failed: %s", tail(out))
+	}
+	return nil
+}
+
+func downloadBilibiliFile(ctx context.Context, mediaURL, outPath, cookies string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
+	if err != nil {
+		return err
+	}
+	applyBilibiliHTTPHeaders(req.Header, "https://www.bilibili.com/", cookies)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("Bilibili media HTTP %d", resp.StatusCode)
+	}
+	out, err := os.Create(outPath)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+func bilibiliFFmpegHeaders(cookies string) string {
+	headers := "Referer: https://www.bilibili.com/\r\nOrigin: https://www.bilibili.com\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36\r\n"
+	if strings.TrimSpace(cookies) != "" {
+		headers += "Cookie: " + cookieField(cookies) + "\r\n"
+	}
+	return headers
+}
+
+func interfaceSlice(value interface{}) []interface{} {
+	items, _ := value.([]interface{})
+	return items
+}
+
+func numberValue(value interface{}) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case json.Number:
+		f, _ := v.Float64()
+		return f
+	case string:
+		f, _ := strconv.ParseFloat(v, 64)
+		return f
+	default:
+		return 0
+	}
 }
 
 func shouldRetryWithNightly(rawURL, message string) bool {

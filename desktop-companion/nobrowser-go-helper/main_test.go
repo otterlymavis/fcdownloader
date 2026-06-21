@@ -52,6 +52,21 @@ func TestYouTubeURL(t *testing.T) {
 	}
 }
 
+func TestHelperPortDefaultsAndHonorsOverride(t *testing.T) {
+	t.Setenv("FCDL_HELPER_PORT", "")
+	if got := helperPort(); got != "8765" {
+		t.Fatalf("default helper port = %q", got)
+	}
+	t.Setenv("FCDL_HELPER_PORT", "8766")
+	if got := helperPort(); got != "8766" {
+		t.Fatalf("override helper port = %q", got)
+	}
+	t.Setenv("FCDL_HELPER_PORT", "nope")
+	if got := helperPort(); got != "8765" {
+		t.Fatalf("invalid helper port should fall back, got %q", got)
+	}
+}
+
 func TestSafeName(t *testing.T) {
 	got := safeName(`hello:/\世界?.mp4`)
 	if got != "hello______.mp4" {
@@ -129,7 +144,7 @@ func TestYouTubeFailuresRetryWithNightly(t *testing.T) {
 
 func TestYtDlpDownloadArgsUseSteadierDefaults(t *testing.T) {
 	t.Setenv("FCDL_YTDLP_CONCURRENT_FRAGMENTS", "")
-	args := ytDlpDownloadArgs("best", "/tmp/ffmpeg", "/tmp/out", "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+	args := ytDlpDownloadArgs("best", "/tmp/ffmpeg", "/tmp/out", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "", false)
 	joined := strings.Join(args, "\x00")
 	for _, want := range []string{
 		"--retries\x0010",
@@ -142,6 +157,68 @@ func TestYtDlpDownloadArgsUseSteadierDefaults(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("download args missing %q: %#v", want, args)
 		}
+	}
+}
+
+func TestBilibiliDownloadArgsCarryHeadersAndCookies(t *testing.T) {
+	args := ytDlpDownloadArgs("best", "/tmp/ffmpeg", "/tmp/out", "https://www.bilibili.com/video/BV1xx411c7mD/", "/tmp/cookies.txt", true)
+	joined := strings.Join(args, "\x00")
+	for _, want := range []string{
+		"--referer\x00https://www.bilibili.com/",
+		"--add-header\x00Origin:https://www.bilibili.com",
+		"--cookies\x00/tmp/cookies.txt",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("Bilibili args missing %q: %#v", want, args)
+		}
+	}
+}
+
+func TestCookieFileFromHeaderMirrorsBilibiliDomains(t *testing.T) {
+	path, cleanup, err := cookieFileFromHeader("SESSDATA=abc; bili_jct=def", "https://www.bilibili.com/video/BV1xx411c7mD/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{".bilibili.com", ".bilivideo.com", "SESSDATA", "bili_jct"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("cookie file missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestBilibiliAPIHelpersPickDashAndDurl(t *testing.T) {
+	play := map[string]interface{}{
+		"dash": map[string]interface{}{
+			"video": []interface{}{
+				map[string]interface{}{"baseUrl": "https://v-720.m4s", "height": float64(720), "codecs": "hev1", "bandwidth": float64(100)},
+				map[string]interface{}{"baseUrl": "https://v-1080.m4s", "height": float64(1080), "codecs": "avc1.640028", "bandwidth": float64(200)},
+			},
+			"audio": []interface{}{
+				map[string]interface{}{"baseUrl": "https://a-low.m4s", "bandwidth": float64(64)},
+				map[string]interface{}{"baseUrl": "https://a-high.m4s", "bandwidth": float64(128)},
+			},
+		},
+		"durl": []interface{}{
+			map[string]interface{}{"url": "https://small.mp4", "size": float64(10)},
+			map[string]interface{}{"url": "https://large.mp4", "size": float64(20)},
+		},
+	}
+	video, audio := pickBilibiliDash(play, "1080")
+	if video != "https://v-1080.m4s" || audio != "https://a-high.m4s" {
+		t.Fatalf("unexpected DASH pick: video=%q audio=%q", video, audio)
+	}
+	video, _ = pickBilibiliDash(play, "720")
+	if video != "https://v-720.m4s" {
+		t.Fatalf("height cap should pick 720p, got %q", video)
+	}
+	if got := pickBilibiliDurl(play); got != "https://large.mp4" {
+		t.Fatalf("unexpected durl pick: %q", got)
 	}
 }
 

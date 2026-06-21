@@ -685,9 +685,19 @@ function cookieHeaderList(cookies) {
   return cookies ? [{ name: "X-FCDL-Cookies", value: cookies }] : [];
 }
 
-function localHelperDownloadUrl(pageUrl, youtubeOnly = false) {
+function isBilibiliPageUrl(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host.endsWith("bilibili.com") || host === "b23.tv" || host.endsWith("bilibili.tv");
+  } catch {
+    return /(?:bilibili\.com|b23\.tv|bilibili\.tv)/i.test(String(url || ""));
+  }
+}
+
+function localHelperDownloadUrl(pageUrl, youtubeOnly = false, options = {}) {
   const params = new URLSearchParams({ url: pageUrl });
   if (!youtubeOnly) params.set("max_height", "1080");
+  if (options.removeWatermark) params.set("remove_watermark", "1");
   return `http://127.0.0.1:8765/${youtubeOnly ? "youtube-hd" : "download"}?${params.toString()}`;
 }
 
@@ -1037,14 +1047,18 @@ async function preflightDirectUrl(url, headers = []) {
   }
 }
 
-async function preflightLocalHelperUrl(url) {
+async function preflightLocalHelperUrl(url, headers = []) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 120_000);
   try {
     const parsed = new URL(url);
     const mediaUrl = parsed.searchParams.get("url") || "";
     const checkUrl = `http://127.0.0.1:8765/formats?${new URLSearchParams({ url: mediaUrl }).toString()}`;
-    const r = await fetch(checkUrl, { method: "GET", signal: ac.signal });
+    const r = await fetch(checkUrl, {
+      method: "GET",
+      headers: fetchHeadersFromChromeHeaders(headers),
+      signal: ac.signal,
+    });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || data?.ok === false) {
       return { ok: false, error: data?.error || `HTTP ${r.status}` };
@@ -1174,7 +1188,7 @@ async function downloadItem(tabId, item) {
   const downloadPageUrl = item.pageUrl || referer || urlForBackend || tabPageUrl;
   const cookieSourceUrl = referer || urlForBackend;
   const cookies = await cookieHeaderFor(cookieSourceUrl);
-  const { backend } = await getSettings();
+  const { backend, removeWatermark } = await getSettings();
 
   debugLog("[fcdl] download", {
     item_url: (item.url || "").slice(0, 80),
@@ -1227,12 +1241,14 @@ async function downloadItem(tabId, item) {
     : (item.kind === "embed" || item.source === "iframe" || item.backendRouted || SERVER_ONLY_RE.test(downloadPageUrl || "")
       ? (downloadPageUrl || urlForBackend)
       : (urlForBackend || downloadPageUrl));
+  const isBilibiliHelperTarget = isBilibiliPageUrl(helperTarget);
+  const helperHeaders = cookieHeaderList(cookies);
   const helperCanTry =
     item.kind !== "image" &&
     helperTarget &&
     /^https?:\/\//i.test(helperTarget) &&
     !/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])/i.test(helperTarget) &&
-    (!cookies || isYoutubeHdHelperItem) &&
+    (!cookies || isYoutubeHdHelperItem || isBilibiliHelperTarget) &&
     (!hasReplayHeaders || isYoutubeHdHelperItem);
 
   const routes = [];
@@ -1292,9 +1308,9 @@ async function downloadItem(tabId, item) {
       if (!setup.ok) throw new Error(setup.error || "Companion video tools are not ready.");
     }
     const localUrl = localHelperDownloadUrl(helperTarget, true);
-    const check = await preflightLocalHelperUrl(localUrl);
+    const check = await preflightLocalHelperUrl(localUrl, helperHeaders);
     if (!check.ok) throw new Error(check.error);
-    const dlId = await chromeDownload(localUrl, suggestedFilename({ ...item, ext: "mp4" }, helperTarget, tabTitle));
+    const dlId = await chromeDownload(localUrl, suggestedFilename({ ...item, ext: "mp4" }, helperTarget, tabTitle), helperHeaders);
     _watchYtdlStreamDownload(dlId).catch((e) =>
       debugWarn("[fcdl] local helper watcher error:", e?.message || e)
     );
@@ -1320,10 +1336,12 @@ async function downloadItem(tabId, item) {
       const setup = await ensureLocalHelperTools();
       if (!setup.ok) throw new Error(setup.error || "Companion video tools are not ready.");
     }
-    const localUrl = localHelperDownloadUrl(helperTarget, false);
-    const check = await preflightLocalHelperUrl(localUrl);
+    const localUrl = localHelperDownloadUrl(helperTarget, false, {
+      removeWatermark: removeWatermark && isBilibiliHelperTarget,
+    });
+    const check = await preflightLocalHelperUrl(localUrl, helperHeaders);
     if (!check.ok) throw new Error(check.error);
-    const dlId = await chromeDownload(localUrl, suggestedFilename({ ...item, ext: "mp4" }, helperTarget, tabTitle));
+    const dlId = await chromeDownload(localUrl, suggestedFilename({ ...item, ext: "mp4" }, helperTarget, tabTitle), helperHeaders);
     _watchYtdlStreamDownload(dlId).catch((e) =>
       debugWarn("[fcdl] local helper watcher error:", e?.message || e)
     );
