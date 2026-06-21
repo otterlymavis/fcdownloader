@@ -262,6 +262,21 @@ function isConcreteStreamUrl(url) {
   return u.endsWith(".m3u8") || u.endsWith(".mpd") || isConcreteMediaUrl(url);
 }
 
+function isBilibiliNetworkNoise(url) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+    if (/\.(?:m4s|mp4|m4v|webm|mov|m3u8|mpd|mp3|m4a|aac)(?:$|[?#])/i.test(path)) return false;
+    if (/^(?:api|api\.vc|data)\.bilibili\.com$/i.test(host)) return true;
+    if (/^(?:i\d*|s\d*|archive)\.hdslb\.com$/i.test(host)) return true;
+    if (/(?:^|\.)biliapi\.(?:com|net)$/i.test(host)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function replayHeadersObject(headers = []) {
   const out = {};
   for (const h of headers || []) {
@@ -337,6 +352,7 @@ function addItem(tabId, pageUrl, item) {
   const s = ensureTab(tabId, pageUrl);
   if (!item || !item.url) return;
   if (isXhsPageUrl(pageUrl) && item.source === "network") return;
+  if (isBilibiliPageUrl(pageUrl) && item.source === "network" && isBilibiliNetworkNoise(item.url)) return;
   if (item.kind === "image" && isLikelyThumbnailUrl(item.url)) return;
   auditSourceCandidate(tabId, pageUrl, {
     url: item.url,
@@ -414,6 +430,7 @@ try {
         if (!details.tabId || details.tabId < 0) return;
         const u = details.url;
         if (!u || u.length < 12) return;
+        if (isBilibiliNetworkNoise(u)) return;
         const contentType = details.responseHeaders?.find((h) => /content-type/i.test(h.name))?.value || "";
         const mediaByType = NETWORK_CAPTURE_MEDIA_TYPES.some((type) =>
           contentType.toLowerCase().startsWith(type.toLowerCase())
@@ -466,6 +483,7 @@ try {
 
 function isLikelyMedia(url) {
   const u = url.toLowerCase().split("?")[0];
+  if (isBilibiliNetworkNoise(url)) return false;
   if (VIMEO_CONFIG_RE.test(url)) return true;
   if (u.endsWith(".m3u8") || u.endsWith(".mpd")) return true;
   if (u.endsWith(".mp4") || u.endsWith(".webm") || u.endsWith(".mov")) return true;

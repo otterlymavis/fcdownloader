@@ -215,6 +215,47 @@ assert.equal(
   'Different gallery paths remain selectable',
 );
 
+const vimeoPage = 'https://player.vimeo.com/video/103195?h=private';
+const vimeoHls = {
+  ...item('https://vod-adaptive.vimeocdn.com/video/master.m3u8?token=a', 'video', 0.85, 'hls'),
+  pageUrl: vimeoPage,
+  label: 'Performance title',
+  provenance: 'perf-observer' as const,
+};
+const vimeoJson = {
+  ...item('https://vod-adaptive.vimeocdn.com/video/playlist.json?token=a', 'video', 0.88),
+  pageUrl: vimeoPage,
+  mimeType: 'application/json',
+  label: 'application/json',
+  provenance: 'xhr-hook' as const,
+};
+const vimeoPoster = {
+  ...item('https://i.vimeocdn.com/video/poster.webp', 'image', 0.4),
+  pageUrl: vimeoPage,
+};
+const vimeoConfig = {
+  ...item('https://player.vimeo.com/video/103195/config?h=private', 'video', 0.9),
+  pageUrl: 'https://amuseplus.jp/mob/pageShw.php',
+  mimeType: 'application/json',
+  label: 'Vimeo player config',
+};
+const pageLogo = {
+  ...item('https://amuseplus.jp/assets/logo.png', 'image', 0.5),
+  pageUrl: 'https://amuseplus.jp/mob/pageShw.php',
+};
+const collapsedVimeo = simplifyUniversalPickerCandidates(
+  [vimeoHls, vimeoJson, vimeoPoster, vimeoConfig, pageLogo],
+  'https://amuseplus.jp/mob/pageShw.php',
+);
+assert.equal(collapsedVimeo.length, 2, 'one Vimeo embed and an unrelated page image should remain selectable');
+const collapsedVimeoVideo = collapsedVimeo.find((candidate) => candidate.mediaKind === 'video');
+assert.equal(collapsedVimeoVideo?.url, vimeoConfig.url, 'stable Vimeo config should back the visible item');
+assert.equal(collapsedVimeoVideo?.label, 'Performance title', 'useful player title should survive collapsing');
+assert(
+  collapsedVimeo.some((candidate) => candidate.url === pageLogo.url),
+  'unrelated page images should not be removed just because a Vimeo embed exists',
+);
+
 const threadsPage = 'https://www.threads.net/@example/post/abc';
 const threadsOld = {
   ...item('https://scontent.cdninstagram.com/v/t50/asset?token=old', 'video', 0.7),

@@ -45,6 +45,7 @@ const REGISTRY: SiteEntry[] = [
     pattern: /(?:youtube\.com\/(?:watch|shorts|embed|live)|youtu\.be\/)/i,
     caps: {
       preferredStrategies: ['yt-dlp', 'server-download', 'hls-segments'],
+      preferOnDevice: true,
       notes: 'Requires nsig transform; on-device extraction uses InnerTube iOS/Android clients',
     },
   },
@@ -155,6 +156,15 @@ const REGISTRY: SiteEntry[] = [
       notes: 'DRM-free streams use HLS; yt-dlp with Japanese headers handles most content',
     },
   },
+  {
+    pattern: /twitcasting\.tv\/[^/]+\/movie\/\d+/i,
+    caps: {
+      preferredStrategies: ['server-download', 'hls-segments'],
+      preferOnDevice: true,
+      acceptLanguage: 'ja,en-US;q=0.9',
+      notes: 'VOD manifests are short-lived; discover on device, then re-extract and stream through the server',
+    },
+  },
   // ── Japanese video portals ────────────────────────────────────────────────
   {
     pattern: /(?:cu\.tbs\.co\.jp|tbs\.co\.jp|tbs\.jp)\//i,
@@ -244,6 +254,7 @@ const REGISTRY: SiteEntry[] = [
     pattern: /(?:ameblo\.jp|ameba\.jp|natalie\.mu|oricon\.co\.jp|kstyle\.com|tistory\.com|daum\.net|tv\.kakao\.com|blog\.livedoor\.jp|livedoor\.blog|pixiv\.net|fanbox\.cc|t\.bilibili\.com|bilibili\.com\/(?:opus|read)|bunshun\.jp|dailyshincho\.jp|news-postseven\.com|josei7\.com|friday\.kodansha\.co\.jp|gendai\.media|withonline\.jp|vivi\.tv|cancam\.jp|classy-online\.jp|classyonline\.jp|jj-jj\.net|gingerweb\.jp|ar-mag\.jp|bisweb\.jp|ray-web\.jp|hpplus\.jp|ananweb\.jp|croissant-online\.jp|frau\.tokyo|mi-mollet\.com|fashion-press\.net|fashionsnap\.com|wwdjapan\.com|thetv\.jp|mantan-web\.jp|crank-in\.net|cinematoday\.jp|eiga\.com|realsound\.jp|spice\.eplus\.jp|jprime\.jp|smart-flash\.jp|flash\.jp|nikkan-gendai\.com|asagei\.com|entamenext\.com|girlsnews\.tv|girlswalker\.com|tokyo-sports\.co\.jp|hochi\.news|sponichi\.co\.jp|nikkansports\.com|sanspo\.com|mainichi\.jp|asahi\.com|yomiuri\.co\.jp|sankei\.com|tokyo-np\.co\.jp|47news\.jp|jiji\.com|itmedia\.co\.jp|impress\.co\.jp|news\.mynavi\.jp|ascii\.jp|gigazine\.net|trilltrill\.jp|note\.com|lineblog\.me|hatenablog\.(?:com|jp)|hatenadiary\.(?:com|jp)|hatena\.ne\.jp|blog\.fc2\.com|gyazo\.com|seiga\.nicovideo\.jp|story\.kakao\.com)/i,
     caps: {
       preferredStrategies: ['server-download', 'direct'],
+      preferOnDevice: true,
       acceptLanguage: 'ja-JP,ja;q=0.9,en-US;q=0.6,en;q=0.5',
       notes: 'Article/gallery images often need Referer and proxy download handling',
     },
@@ -261,6 +272,7 @@ const REGISTRY: SiteEntry[] = [
     pattern: /dailymotion\.com\/video\//i,
     caps: {
       preferredStrategies: ['hls-segments', 'server-download'],
+      preferOnDevice: true,
       notes: 'Public API endpoint at /player/metadata/video/{id} returns HLS URLs',
     },
   },

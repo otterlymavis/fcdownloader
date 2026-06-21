@@ -14,7 +14,7 @@ import {
   View,
 } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
-import WebView from 'react-native-webview';
+import WebView, { WebViewMessageEvent } from 'react-native-webview';
 import Icon from './src/components/Icon';
 import { SafeAreaProvider, SafeAreaView, initialWindowMetrics } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -314,6 +314,8 @@ export default function App() {
   const [pasteUrl, setPasteUrl]     = useState('');
   const [browserInput, setBrowserInput] = useState('');
   const [loadedUrl, setLoadedUrl]   = useState('about:blank');
+  const [currentBrowserUrl, setCurrentBrowserUrl] = useState('about:blank');
+  const [browserMounted, setBrowserMounted] = useState(false);
 
   // ── UI ────────────────────────────────────────────────────
   const [videosOpen, setVideosOpen]     = useState(false);
@@ -361,9 +363,16 @@ export default function App() {
   useEffect(() => {
     if (homepageSet.current) return;
     const home = bookmarks[0]?.url ?? 'https://www.google.com';
-    setLoadedUrl(home); setBrowserInput(home);
+    setLoadedUrl(home); setCurrentBrowserUrl(home); setBrowserInput(home);
     homepageSet.current = true;
   }, [bookmarks]);
+
+  // Keep the WebView alive after Browse is opened. In particular, WKWebView
+  // loses its current page and back/forward list when it is unmounted while
+  // the user checks a download in Library.
+  useEffect(() => {
+    if (tab === 'browser') setBrowserMounted(true);
+  }, [tab]);
 
   // ── Download manager ──────────────────────────────────────
   const { active, history, enqueue, retry, cancel, remove } = useDownloadManager({
@@ -424,6 +433,7 @@ export default function App() {
           replaceDetectedItems(enqueueItems, targetUrl);
           setPasteUrl('');
           setLoadedUrl(targetUrl);
+          setCurrentBrowserUrl(targetUrl);
           setBrowserInput(targetUrl);
           setUniversalPickerOpen(true);
           setVideosOpen(true);
@@ -455,6 +465,7 @@ export default function App() {
         replaceDetectedItems(pickerItems, targetUrl);
         setPasteUrl('');
         setLoadedUrl(targetUrl);
+        setCurrentBrowserUrl(targetUrl);
         setBrowserInput(targetUrl);
         setUniversalPickerOpen(true);
         setVideosOpen(true);
@@ -476,7 +487,7 @@ export default function App() {
     } finally {
       setExtracting(false);
     }
-    setLoadedUrl(targetUrl); setBrowserInput(targetUrl); setTab('browser');
+    setLoadedUrl(targetUrl); setCurrentBrowserUrl(targetUrl); setBrowserInput(targetUrl); setTab('browser');
   }, [
     closeVideosSheet,
     enqueue,
@@ -543,6 +554,10 @@ export default function App() {
     try {
       const parsed = Linking.parse(raw);
       debugLog('Incoming URL:', raw, parsed);
+      if (parsed.path === 'library' || parsed.path === '/library' || parsed.hostname === 'library') {
+        setTab('library');
+        return;
+      }
       if (parsed.path === 'test_strategies' || parsed.path === '/test_strategies' || parsed.hostname === 'test_strategies') {
         const mediaUrl = parsed.queryParams?.url ? String(parsed.queryParams.url) : null;
         const reportUrl = parsed.queryParams?.reportUrl ? String(parsed.queryParams.reportUrl) : null;
@@ -590,11 +605,11 @@ export default function App() {
   const allVideos = useMemo<DetectedMedia[]>(() => {
     const seen = new Set(detected.map((m) => m.url));
     const fromNet: DetectedMedia[] = networkLog
-      .filter((entry) => isRuntimeDownloadCandidate(entry.url, loadedUrl) && !seen.has(entry.url))
+      .filter((entry) => isRuntimeDownloadCandidate(entry.url, currentBrowserUrl) && !seen.has(entry.url))
       .map((entry) => ({
         id: `net_${entry.url}`,
         url: entry.url,
-        pageUrl: entry.pageUrl || loadedUrl,
+        pageUrl: entry.pageUrl || currentBrowserUrl,
         userAgent: '',
         timestamp: Date.now(),
         mediaType: guessMediaType(entry.url),
@@ -614,14 +629,17 @@ export default function App() {
           status: entry.status,
         }],
       }));
-    return smartDedup([...detected, ...fromNet], loadedUrl);
-  }, [detected, networkLog, loadedUrl]);
+    return simplifyUniversalPickerCandidates(
+      smartDedup([...detected, ...fromNet], currentBrowserUrl),
+      currentBrowserUrl,
+    );
+  }, [currentBrowserUrl, detected, networkLog]);
 
   const pickerVideos = useMemo<DetectedMedia[]>(() => {
     return universalPickerOpen
-      ? simplifyUniversalPickerCandidates(allVideos, loadedUrl)
+      ? simplifyUniversalPickerCandidates(allVideos, currentBrowserUrl)
       : allVideos;
-  }, [allVideos, loadedUrl, universalPickerOpen]);
+  }, [allVideos, currentBrowserUrl, universalPickerOpen]);
 
   const allTasks    = useMemo(() => [...active, ...history], [active, history]);
   const doneTasks   = useMemo(() => history.filter((t) => t.status === 'completed'), [history]);
@@ -686,9 +704,38 @@ export default function App() {
     if (!url) return;
     if (!url.startsWith('http')) url = `https://${url}`;
     setBrowserInput(url);
-    if (url === loadedUrl) webviewRef.current?.reload();
+    setCurrentBrowserUrl(url);
+    if (url === currentBrowserUrl) webviewRef.current?.reload();
     else setLoadedUrl(url);
-  }, [browserInput, loadedUrl]);
+  }, [browserInput, currentBrowserUrl]);
+
+  const handleBrowserMessage = useCallback((event: WebViewMessageEvent) => {
+    // History API navigation (common on Google and social sites) does not
+    // trigger WKWebView's native navigation callback. Mirror the URL reported
+    // by the injected page bridge so browser actions use the visible page.
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data.event === 'PAGE_NAVIGATE' || data.event === 'SESSION_SNAPSHOT') {
+        const pageUrl = String(data.url ?? data.pageUrl ?? '').trim();
+        if (/^https?:\/\//i.test(pageUrl)) {
+          setCurrentBrowserUrl(pageUrl);
+          setBrowserInput(pageUrl);
+        }
+      }
+    } catch {}
+    onMessage(event);
+  }, [onMessage]);
+
+  const handleToggleBrowserBookmark = useCallback(async () => {
+    // Ask the page for location.href at tap time. This also covers redirects
+    // and SPA routes that WKWebView may not expose through navigation state.
+    const snapshot = await captureSessionSnapshot((script) => webviewRef.current?.injectJavaScript(script));
+    const liveUrl = snapshot.pageUrl?.trim() || currentBrowserUrl;
+    if (!/^https?:\/\//i.test(liveUrl)) return;
+    setCurrentBrowserUrl(liveUrl);
+    setBrowserInput(liveUrl);
+    toggleBM(liveUrl, getPageTitle(liveUrl));
+  }, [captureSessionSnapshot, currentBrowserUrl, toggleBM]);
 
   const scanBrowserPage = useCallback(() => {
     webviewRef.current?.injectJavaScript(`
@@ -706,15 +753,15 @@ export default function App() {
     if (!target || target === 'about:blank') return undefined;
     const snapshot = await captureSessionSnapshot((script) => webviewRef.current?.injectJavaScript(script));
     return {
-      referer: snapshot.referer || snapshot.pageUrl || loadedUrl || target,
+      referer: snapshot.referer || snapshot.pageUrl || currentBrowserUrl || target,
       cookies: snapshot.cookies,
       pageHtml: snapshot.pageHtml,
       mediaHints: snapshot.mediaHints,
       sourceAudit: snapshot.sourceAudit,
     };
-  }, [captureSessionSnapshot, loadedUrl, tab]);
+  }, [captureSessionSnapshot, currentBrowserUrl, tab]);
 
-  const extractBrowserPage = useCallback(async (pageUrl = loadedUrl) => {
+  const extractBrowserPage = useCallback(async (pageUrl = currentBrowserUrl) => {
     const url = pageUrl.trim();
     if (!url || url === 'about:blank' || extracting) return;
     setExtracting(true);
@@ -747,7 +794,8 @@ export default function App() {
             'success'
           );
         }
-        setTab('library');
+        // Stay on the page so the user can continue browsing while the
+        // download is visible in the browser's progress strip.
         return;
       }
       if (decision.action === 'pick') {
@@ -768,7 +816,7 @@ export default function App() {
     } finally {
       setExtracting(false);
     }
-  }, [addDetectedItems, browserSessionFor, enqueue, extracting, loadedUrl, scanBrowserPage, showToast]);
+  }, [addDetectedItems, browserSessionFor, currentBrowserUrl, enqueue, extracting, scanBrowserPage, showToast]);
 
   // XHS gates its note pages and there's no inline player to detect, so a manual
   // Scan rarely surfaces anything. When an XHS note page finishes loading in the
@@ -811,7 +859,6 @@ export default function App() {
       : item);
     setSelectedFormatId(null);
     if (started) showToast(translate('downloadStarted', resolvedLangRef.current), 'success');
-    setTab('library');
   }, [closeVideosSheet, enqueue, selectedFormatId, showToast]);
 
   const handleDetectedAudioDownload = useCallback(async (item: DetectedMedia) => {
@@ -831,7 +878,6 @@ export default function App() {
     });
     setSelectedFormatId(null);
     if (started) showToast(translate('audioDownloadStarted', resolvedLangRef.current), 'success');
-    setTab('library');
   }, [closeVideosSheet, enqueue, showToast]);
 
   const handleDownloadAllDetected = useCallback(async () => {
@@ -849,7 +895,6 @@ export default function App() {
         'success'
       );
     }
-    setTab('library');
   }, [allVideos, closeVideosSheet, enqueue, showToast]);
 
   const handleDownloadAllAudio = useCallback(async () => {
@@ -880,7 +925,6 @@ export default function App() {
         'success'
       );
     }
-    setTab('library');
   }, [allVideos, closeVideosSheet, enqueue, showToast]);
 
   // ── Export / Gallery ──────────────────────────────────────
@@ -1095,8 +1139,14 @@ export default function App() {
       {/* ══════════════════════════════════════════════════ */}
       {/*  BROWSER TAB                                      */}
       {/* ══════════════════════════════════════════════════ */}
-      {tab === 'browser' && (
-        <View style={s.flex}>
+      {browserMounted && (
+        <View
+          pointerEvents={tab === 'browser' ? 'auto' : 'none'}
+          style={[
+            s.flex,
+            tab !== 'browser' && [StyleSheet.absoluteFillObject, { opacity: 0 }],
+          ]}
+        >
           {/* Two-row navbar */}
           <View style={[s.navBar, { backgroundColor: t.card, borderBottomColor: t.sep, borderBottomWidth: 1 }]}>
             {/* Row 1 */}
@@ -1152,15 +1202,19 @@ export default function App() {
                 </Text>
               </View>
             ) : (
-              <BrowserView ref={webviewRef} initialUrl={loadedUrl} key={loadedUrl}
-                onMessage={onMessage}
-                onNavigationChange={(url) => { setBrowserInput(url); onPageChange(url); }}
+              <BrowserView ref={webviewRef} initialUrl={loadedUrl}
+                onMessage={handleBrowserMessage}
+                onNavigationChange={(url) => {
+                  setCurrentBrowserUrl(url);
+                  setBrowserInput(url);
+                  onPageChange(url);
+                }}
                 onExtractPage={extractBrowserPage}
                 onLoadEnd={(e) => handleBrowserLoadEnd(e.nativeEvent.url)}
                 style={StyleSheet.absoluteFill} />
             )}
 
-            {loadedUrl !== 'about:blank' && (
+            {currentBrowserUrl !== 'about:blank' && (
               <Pressable
                 android_ripple={RIPPLE}
                 accessibilityRole="button"
@@ -1229,22 +1283,22 @@ export default function App() {
             </Pressable>
 
             {/* Floating bookmark FAB */}
-            {loadedUrl !== 'about:blank' && (
+            {currentBrowserUrl !== 'about:blank' && (
               <Pressable
                 android_ripple={{ color: 'rgba(255,255,255,0.2)', borderless: true }}
                 style={[s.bmFab, {
-                  backgroundColor: isSaved(loadedUrl, bookmarks) ? t.btn : t.card,
+                  backgroundColor: isSaved(currentBrowserUrl, bookmarks) ? t.btn : t.card,
                   bottom: 156,
                   ...(IS_IOS
                     ? { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } }
                     : { elevation: 5 }),
                 }]}
-                onPress={() => toggleBM(loadedUrl, getPageTitle(loadedUrl))}
+                onPress={() => { void handleToggleBrowserBookmark(); }}
               >
                 <Icon
-                  name={isSaved(loadedUrl, bookmarks) ? 'bookmark' : 'bookmark-outline'}
+                  name={isSaved(currentBrowserUrl, bookmarks) ? 'bookmark' : 'bookmark-outline'}
                   size={22}
-                  color={isSaved(loadedUrl, bookmarks) ? t.btnTxt : t.ink2}
+                  color={isSaved(currentBrowserUrl, bookmarks) ? t.btnTxt : t.ink2}
                 />
               </Pressable>
             )}
@@ -1659,6 +1713,7 @@ export default function App() {
                         ]);
                       } else {
                         setLoadedUrl(bm.url);
+                        setCurrentBrowserUrl(bm.url);
                         setBrowserInput(bm.url);
                         setTab('browser');
                       }

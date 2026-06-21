@@ -5,6 +5,7 @@ import { extractSessionCookies } from './cookieManager';
 import { DetectedMedia } from '../types';
 import { DownloadOptions } from './hlsDownloader';
 import { muxVideoAudio } from './ffmpegMux';
+import { downloadDirect } from './directDownloader';
 
 interface VimeoSegment { start?: number; end?: number; url: string; size?: number; }
 
@@ -23,6 +24,15 @@ export interface VimeoPlaylist {
   base_url?: string;
   video?: VimeoTrack[];
   audio?: VimeoTrack[];
+}
+
+export interface VimeoProgressiveFile {
+  url: string;
+  width?: number;
+  height?: number;
+  bitrate?: number;
+  mime?: string;
+  quality?: string;
 }
 
 const DOWNLOAD_BATCH = 4;
@@ -123,6 +133,33 @@ export function selectVimeoTracks(playlist: VimeoPlaylist): {
   };
 }
 
+export function selectBestVimeoProgressive(value: unknown, baseUrl: string): VimeoProgressiveFile | undefined {
+  const progressive = (value as any)?.request?.files?.progressive;
+  if (!Array.isArray(progressive)) return undefined;
+  const candidates = progressive.flatMap((item: any): VimeoProgressiveFile[] => {
+    if (!item || typeof item.url !== 'string') return [];
+    try {
+      const url = new URL(item.url.replace(/\\u0026/g, '&').replace(/\\\//g, '/'), baseUrl).toString();
+      if (!/^https?:/i.test(url)) return [];
+      return [{
+        url,
+        width: Number(item.width) || undefined,
+        height: Number(item.height) || undefined,
+        bitrate: Number(item.bitrate) || undefined,
+        mime: typeof item.mime === 'string' ? item.mime : undefined,
+        quality: typeof item.quality === 'string' ? item.quality : undefined,
+      }];
+    } catch {
+      return [];
+    }
+  });
+  return candidates.sort((a, b) =>
+    (b.height ?? 0) - (a.height ?? 0) ||
+    (b.width ?? 0) - (a.width ?? 0) ||
+    (b.bitrate ?? 0) - (a.bitrate ?? 0)
+  )[0];
+}
+
 function normalizeVimeoJsonUrl(value: string, baseUrl: string): string | undefined {
   const clean = value
     .replace(/\\u0026/g, '&')
@@ -179,7 +216,7 @@ export async function loadVimeoPlaylist(
   headers: Record<string, string>,
   opts: DownloadOptions,
   fetcher: VimeoFetcher = fetchVimeo,
-): Promise<{ playlistUrl: string; playlist: VimeoPlaylist }> {
+): Promise<{ playlistUrl: string; playlist: VimeoPlaylist; progressive?: VimeoProgressiveFile }> {
   const { signal, onTokenExpired } = opts;
   let currentUrl = initialUrl;
   let refreshed = false;
@@ -212,6 +249,8 @@ export async function loadVimeoPlaylist(
     }
 
     const value = await readVimeoJson(response, signal);
+    const progressive = selectBestVimeoProgressive(value, currentUrl);
+    if (progressive) return { playlistUrl: currentUrl, playlist: {}, progressive };
     const playlist = value as VimeoPlaylist;
     if (playlist.video?.length) return { playlistUrl: currentUrl, playlist };
 
@@ -394,6 +433,22 @@ export async function downloadVimeoJson(
       );
       const { playlistUrl, playlist } = loaded;
       resolvedPlaylistUrl = playlistUrl;
+      if (loaded.progressive) {
+        completed = true;
+        return await downloadDirect({
+          ...media,
+          url: loaded.progressive.url,
+          mimeType: loaded.progressive.mime || 'video/mp4',
+          mediaType: 'direct',
+          mediaKind: 'video',
+          width: loaded.progressive.width,
+          height: loaded.progressive.height,
+          bitrate: loaded.progressive.bitrate,
+          hasAudio: true,
+          hasVideo: true,
+          httpHeaders: fragmentHeaders,
+        }, taskId, opts);
+      }
       const { video, audio } = selectVimeoTracks(playlist);
       if (!video) throw new Error('Vimeo playlist has no video track');
 

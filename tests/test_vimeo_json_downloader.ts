@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import {
   findVimeoPlaylistJsonUrl,
   loadVimeoPlaylist,
+  selectBestVimeoProgressive,
   selectVimeoTracks,
   VimeoPlaylist,
   VimeoTrack,
 } from '../src/lib/vimeoJsonDownloader';
+import { pickStrategy, vimeoConfigUrlForMedia } from '../src/lib/downloadStrategies';
 
 function track(
   id: string,
@@ -40,6 +42,31 @@ assert.equal(
   'hd',
   'audio from the selected Vimeo rendition group should be preferred over an unmatched higher-bitrate track',
 );
+
+const progressive = selectBestVimeoProgressive({
+  request: { files: { progressive: [
+    { url: 'https://vod-progressive.akamaized.net/low.mp4', width: 640, height: 360, bitrate: 800000 },
+    { url: 'https://vod-progressive.akamaized.net/high.mp4', width: 1280, height: 720, bitrate: 2500000 },
+  ] } },
+}, 'https://player.vimeo.com/video/76979871/config');
+assert.equal(progressive?.url, 'https://vod-progressive.akamaized.net/high.mp4');
+assert.equal(progressive?.height, 720, 'highest-resolution progressive Vimeo MP4 should be preferred');
+
+const embeddedHls = {
+  id: 'vimeo-hls',
+  url: 'https://vod-adaptive-ak.vimeocdn.com/example/master.m3u8?token=signed',
+  pageUrl: 'https://player.vimeo.com/video/76979871?h=privatehash',
+  userAgent: 'test',
+  timestamp: Date.now(),
+  mediaType: 'hls' as const,
+  mediaKind: 'video' as const,
+};
+assert.equal(
+  vimeoConfigUrlForMedia(embeddedHls),
+  'https://player.vimeo.com/video/76979871/config?h=privatehash',
+);
+assert.equal(pickStrategy(embeddedHls), 'vimeo-json', 'Vimeo iframe HLS should resolve through player config');
+assert.equal(pickStrategy({ ...embeddedHls, mediaKind: 'subtitle', mediaType: 'direct' }), 'direct');
 
 const fallback = selectVimeoTracks({
   video: [track('video-only-id', 2_800_000, { width: 1280, height: 720 })],

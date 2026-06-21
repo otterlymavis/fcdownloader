@@ -22,6 +22,21 @@ const DIRECT_MEDIA_RE = /\.(?:mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp|mp3|m4a|
  */
 const YT_PAGE_RE = /(?:youtube\.com\/(?:watch|shorts|embed)|youtu\.be\/)/i;
 
+export function vimeoConfigUrlForMedia(media: DetectedMedia): string | undefined {
+  for (const raw of [media.url, media.sourcePageUrl, media.pageUrl]) {
+    if (!raw) continue;
+    try {
+      const parsed = new URL(raw);
+      if (parsed.hostname !== 'player.vimeo.com') continue;
+      const match = parsed.pathname.match(/^\/video\/(\d+)/i);
+      if (!match) continue;
+      const hash = parsed.searchParams.get('h');
+      return `https://player.vimeo.com/video/${match[1]}/config${hash ? `?h=${encodeURIComponent(hash)}` : ''}`;
+    } catch {}
+  }
+  return undefined;
+}
+
 export function pickStrategy(media: DetectedMedia): DownloadStrategy {
   const url  = media.url;
   const mime = media.mimeType ?? '';
@@ -29,7 +44,7 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
 
   if (media.audioOnly) return 'server-download';
   if (media.forceServerDownload) return 'server-download';
-  if (media.mediaKind === 'image' || media.mediaKind === 'audio') return 'direct';
+  if (media.mediaKind === 'image' || media.mediaKind === 'audio' || media.mediaKind === 'subtitle') return 'direct';
   if (/^(image|audio)\//i.test(mime)) return 'direct';
 
   // Auth-gated sites (Bilibili, Instagram, Xiaohongshu, NicoNico) hand back
@@ -87,6 +102,7 @@ export function pickStrategy(media: DetectedMedia): DownloadStrategy {
 
   // Vimeo JSON playlist
   if (VIMEO_PLAYLIST_JSON.test(url) || VIMEO_PLAYER_CONFIG_JSON.test(url)) return 'vimeo-json';
+  if (vimeoConfigUrlForMedia(media)) return 'vimeo-json';
 
   // Explicit DASH manifest
   if (media.mediaType === 'dash') return 'dash';
@@ -129,7 +145,12 @@ export async function runDownload(
       case 'yt-dlp':       return downloadYouTube(media, taskId, opts);
       case 'direct':       return downloadDirect(media, taskId, opts);
       case 'hls-segments': return downloadHLS(media, taskId, opts);
-      case 'vimeo-json':   return downloadVimeoJson(media, taskId, opts);
+      case 'vimeo-json':   return downloadVimeoJson({
+        ...media,
+        url: VIMEO_PLAYLIST_JSON.test(media.url) || VIMEO_PLAYER_CONFIG_JSON.test(media.url)
+          ? media.url
+          : vimeoConfigUrlForMedia(media) || media.url,
+      }, taskId, opts);
       case 'server-download': return downloadViaServer(media, taskId, opts);
       case 'dash':
       case 'ffmpeg':       return downloadDASH(media, taskId, opts);
@@ -151,6 +172,11 @@ export async function runDownload(
   }
 }
 
+function base64urlEncode(str: string): string {
+  const b64 = globalThis.btoa(str);
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
 async function downloadInBrowser(
   media: DetectedMedia,
   strategy: DownloadStrategy,
@@ -161,17 +187,37 @@ async function downloadInBrowser(
   let href = media.url;
   const base = await getServerExtractorUrl();
   const pageUrl = media.sourcePageUrl || media.pageUrl;
+  let isCrossOrigin = false;
+  try {
+    const parsedUrl = new URL(media.url, globalThis.location?.href);
+    if (globalThis.location && parsedUrl.origin !== globalThis.location.origin) {
+      isCrossOrigin = true;
+    }
+  } catch {}
+
   const shouldUseBackend =
     Boolean(base && pageUrl) &&
     (
       strategy !== 'direct' ||
       media.provenance === 'social-extractor' ||
       Boolean(media.httpHeaders && Object.keys(media.httpHeaders).length) ||
-      !DIRECT_MEDIA_RE.test(media.url)
+      !DIRECT_MEDIA_RE.test(media.url) ||
+      isCrossOrigin
     );
 
   if (base && shouldUseBackend) {
-    const params = new URLSearchParams({ url: pageUrl });
+    const params = new URLSearchParams({
+      url: strategy === 'direct' ? media.url : pageUrl,
+    });
+    if (strategy === 'direct' && pageUrl) params.set('referer', pageUrl);
+    if (strategy === 'direct' && (!media.httpHeaders || Object.keys(media.httpHeaders).length === 0)) {
+      const dummyHeaders = { 'User-Agent': 'Mozilla/5.0' };
+      const encoded = base64urlEncode(JSON.stringify(dummyHeaders));
+      params.set('headers', encoded);
+    } else if (media.httpHeaders && Object.keys(media.httpHeaders).length > 0) {
+      const encoded = base64urlEncode(JSON.stringify(media.httpHeaders));
+      params.set('headers', encoded);
+    }
     href = `${base}/download?${params.toString()}`;
   }
 
@@ -184,6 +230,7 @@ async function downloadInBrowser(
   const a = doc.createElement('a');
   a.href = href;
   a.rel = 'noopener';
+  a.target = '_blank';
   a.download = '';
   doc.body.appendChild(a);
   a.click();

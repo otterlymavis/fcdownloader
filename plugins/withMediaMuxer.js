@@ -128,30 +128,45 @@ function writeMuxerFiles(projectRoot) {
 // ── Xcode project manipulation ────────────────────────────────────────────────
 
 function addToXcodeProject(project, appTargetName) {
-  // Skip if already added — idempotent across repeated prebuilds.
-  const allFiles = project.pbxFileReferenceSection();
-  for (const key of Object.keys(allFiles)) {
-    const entry = allFiles[key];
-    if (typeof entry === 'object' && entry.path && entry.path.includes(SWIFT_FILE)) {
-      return;
-    }
-  }
-
-  // Create a PBX group for the muxer files and attach it to the main group
-  const groupResult = project.addPbxGroup(
-    [SWIFT_FILE, OBJC_FILE],
-    SUBDIR,
-    SUBDIR,
-  );
-  const mainGroupUuid = project.getFirstProject().firstProject.mainGroup;
-  project.addToPbxGroup(groupResult.uuid, mainGroupUuid);
-
-  const target = project.pbxTargetByName(appTargetName);
-  if (!target) {
+  const targetKey = project.findTargetKey(appTargetName);
+  if (!targetKey) {
     throw new Error(`[withMediaMuxer] could not find app target "${appTargetName}"`);
   }
-  project.addSourceFile(SWIFT_FILE, { target: target.uuid }, groupResult.uuid);
-  project.addSourceFile(OBJC_FILE,  { target: target.uuid }, groupResult.uuid);
+
+  const groups = project.hash.project.objects.PBXGroup;
+  let groupUuid = Object.keys(groups).find((key) => {
+    const entry = groups[key];
+    return typeof entry === 'object' && (entry.name === SUBDIR || entry.path === SUBDIR);
+  });
+  if (!groupUuid) {
+    const groupResult = project.addPbxGroup([], SUBDIR, SUBDIR);
+    groupUuid = groupResult.uuid;
+    const mainGroupUuid = project.getFirstProject().firstProject.mainGroup;
+    project.addToPbxGroup(groupUuid, mainGroupUuid);
+  }
+
+  const sources = project.pbxSourcesBuildPhaseObj(targetKey);
+  const allFiles = project.pbxFileReferenceSection();
+  for (const filename of [SWIFT_FILE, OBJC_FILE]) {
+    if (sources.files.some((file) => file.comment === `${filename} in Sources`)) continue;
+    const existingRef = Object.keys(allFiles).find((key) => {
+      const entry = allFiles[key];
+      return typeof entry === 'object' && String(entry.path || '').includes(filename);
+    });
+    if (existingRef) {
+      const file = {
+        basename: filename,
+        group: 'Sources',
+        fileRef: existingRef,
+        target: targetKey,
+        uuid: project.generateUuid(),
+      };
+      project.addToPbxBuildFileSection(file);
+      project.addToPbxSourcesBuildPhase(file);
+    } else {
+      project.addSourceFile(filename, { target: targetKey }, groupUuid);
+    }
+  }
 }
 
 // ── Plugin definition ─────────────────────────────────────────────────────────

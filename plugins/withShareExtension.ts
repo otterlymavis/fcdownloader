@@ -12,6 +12,7 @@
 
 import {
   ConfigPlugin,
+  withAppDelegate,
   withXcodeProject,
   withEntitlementsPlist,
   createRunOncePlugin,
@@ -529,6 +530,89 @@ function addShareIntentModuleToXcodeProject(project: any, appTargetName: string)
   project.addSourceFile(SHARE_INTENT_OBJC_FILE,  { target: target.uuid }, groupResult.uuid);
 }
 
+function patchAppDelegateForPendingShareFallback(contents: string): string {
+  if (contents.includes('pendingShareKey = "pendingShareUrl"')) {
+    return contents;
+  }
+
+  let next = contents.replace(
+    '  var reactNativeFactory: RCTReactNativeFactory?\n',
+    `  var reactNativeFactory: RCTReactNativeFactory?\n\n  private let appGroupId = "${APP_GROUP}"\n  private let pendingShareKey = "pendingShareUrl"\n`,
+  );
+
+  next = next.replace(
+    '#endif\n\n    return super.application(application, didFinishLaunchingWithOptions: launchOptions)',
+    `#endif\n\n    if let launchUrl = launchOptions?[.url] as? URL {\n      storePendingShareUrl(from: launchUrl)\n    }\n\n    return super.application(application, didFinishLaunchingWithOptions: launchOptions)`,
+  );
+
+  next = next.replace(
+    '  ) -> Bool {\n    let result = RCTLinkingManager.application(app, open: url, options: options)',
+    `  ) -> Bool {\n    storePendingShareUrl(from: url)\n    let result = RCTLinkingManager.application(app, open: url, options: options)`,
+  );
+
+  next = next.replace(
+    '  ) -> Bool {\n    let result = RCTLinkingManager.application(application, continue: userActivity, restorationHandler: restorationHandler)',
+    `  ) -> Bool {\n    if let url = userActivity.webpageURL {\n      storePendingShareUrl(from: url)\n    }\n    let result = RCTLinkingManager.application(application, continue: userActivity, restorationHandler: restorationHandler)`,
+  );
+
+  const helpers = `
+
+  private func storePendingShareUrl(from incomingUrl: URL) {
+    guard let sharedUrl = extractSharedUrl(from: incomingUrl),
+          let defaults = UserDefaults(suiteName: appGroupId) else {
+      return
+    }
+    defaults.set(sharedUrl.absoluteString, forKey: pendingShareKey)
+    defaults.synchronize()
+  }
+
+  private func extractSharedUrl(from incomingUrl: URL) -> URL? {
+    let scheme = incomingUrl.scheme?.lowercased()
+    if scheme == "http" || scheme == "https" {
+      return incomingUrl
+    }
+
+    guard scheme == "${APP_SCHEME}" || scheme == "${BUNDLE_ID}",
+          incomingUrl.host == "share",
+          let components = URLComponents(url: incomingUrl, resolvingAgainstBaseURL: false) else {
+      return nil
+    }
+
+    for name in ["url", "text", "link"] {
+      guard let value = components.queryItems?.first(where: { $0.name == name })?.value else {
+        continue
+      }
+      if let sharedUrl = firstHttpUrl(in: value) {
+        return sharedUrl
+      }
+    }
+    return nil
+  }
+
+  private func firstHttpUrl(in value: String) -> URL? {
+    let pattern = #"https?://[^\\s<>"'\\\\]+"#
+    guard let range = value.range(of: pattern, options: .regularExpression) else {
+      guard let url = URL(string: value),
+            let scheme = url.scheme?.lowercased(),
+            scheme == "http" || scheme == "https" else {
+        return nil
+      }
+      return url
+    }
+    let candidate = String(value[range])
+      .trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?)\\\\]}>'\\""))
+    guard let url = URL(string: candidate),
+          let scheme = url.scheme?.lowercased(),
+          scheme == "http" || scheme == "https" else {
+      return nil
+    }
+    return url
+  }
+`;
+
+  return next.replace('\n}\n\nclass ReactNativeDelegate:', `${helpers}\n}\n\nclass ReactNativeDelegate:`);
+}
+
 // ── Plugin definition ─────────────────────────────────────────────────────────
 
 const withShareExtensionPlugin: ConfigPlugin = (config) => {
@@ -565,6 +649,13 @@ const withShareExtensionPlugin: ConfigPlugin = (config) => {
         'name it "ShareExtension", then replace the generated files with ' +
         'those in ios/ShareExtension/. Error: ' + (e as Error).message,
       );
+    }
+    return c;
+  });
+
+  config = withAppDelegate(config, (c) => {
+    if (c.modResults.language === 'swift') {
+      c.modResults.contents = patchAppDelegateForPendingShareFallback(c.modResults.contents);
     }
     return c;
   });

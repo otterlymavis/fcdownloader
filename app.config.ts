@@ -51,7 +51,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     ios: {
       bundleIdentifier: 'com.otterpia.fcdownloader',
-      buildNumber: '28',
+      buildNumber: '29',
       supportsTablet: true,
       infoPlist: {
         ...(allowInsecureHttp ? { NSAppTransportSecurity: { NSAllowsArbitraryLoads: true } } : {}),

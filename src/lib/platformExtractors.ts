@@ -285,8 +285,10 @@ function _scanStructuredMediaData(html: string, pageUrl: string): DetectedMedia[
     if (typeof url !== 'string') return;
     const raw = url.replace(/\\u0026/g, '&').replace(/\\\//g, '/').trim();
     if (!raw || /^(?:data:|blob:|javascript:|mailto:|#)/i.test(raw)) return;
+    if (/^[{[]/.test(raw)) return;
     let clean = raw;
     try { clean = new URL(raw, pageUrl).toString(); } catch {}
+    if (/%7b|%7d|%5b|%5d/i.test(clean)) return;
     if (!clean.startsWith('http') || isLikelyNonContentMediaUrl(clean)) return;
     pushUnique(results, makeItem(clean, pageUrl, undefined, 'social-extractor', 0.72));
   };
@@ -754,7 +756,14 @@ async function extractDailymotion(pageUrl: string): Promise<DetectedMedia[]> {
           const url = q.url ?? '';
           const mime = (q.type ?? '').toLowerCase();
           if (url && (/\.m3u8?(?:[?#]|$)/i.test(url) || /mpegurl|m3u8?/.test(mime))) {
-            results.push(makeItem(url, pageUrl, 'Dailymotion HLS'));
+            const item = makeItem(url, pageUrl, 'Dailymotion HLS');
+            item.httpHeaders = {
+              'User-Agent': DESKTOP_UA,
+              'Accept': '*/*',
+              'Origin': 'https://www.dailymotion.com',
+              'Referer': pageUrl,
+            };
+            results.push(item);
           }
         }
       }
@@ -780,7 +789,8 @@ async function extractDailymotion(pageUrl: string): Promise<DetectedMedia[]> {
  * current YouTube anti-bot / Service Worker layers in a way we can rely on.
  */
 async function extractYouTube(pageUrl: string): Promise<DetectedMedia[]> {
-  // Tier 1: server-assisted HD (only if user configured a backend).
+  // Tier 1: server-assisted HD when configured. extractViaServer is a no-op
+  // when no backend is available, so the on-device path remains the fallback.
   try {
     const items = await extractViaServer(pageUrl);
     if (items.length > 0) return items;
@@ -788,9 +798,14 @@ async function extractYouTube(pageUrl: string): Promise<DetectedMedia[]> {
     debugWarn('[extractYouTube] server extractor errored:', String(e).slice(0, 200));
   }
 
-  // Tier 2: on-device InnerTube. Returns HLS HD when available, otherwise the
-  // 360p muxed mp4. Always returns at least the 360p item if InnerTube responds.
-  return extractYouTubeStreams(pageUrl);
+  // Tier 2: on-device InnerTube avoids server-IP bot checks and provides the
+  // progressive fallback when the server is unavailable or cannot extract.
+  try {
+    return await extractYouTubeStreams(pageUrl);
+  } catch (e) {
+    debugWarn('[extractYouTube] InnerTube errored:', String(e).slice(0, 200));
+    return [];
+  }
 }
 
 // ── TVer ──────────────────────────────────────────────────────────
@@ -1471,29 +1486,22 @@ async function extractModelpress(pageUrl: string): Promise<DetectedMedia[]> {
 }
 
 async function extractAmeba(pageUrl: string): Promise<DetectedMedia[]> {
-  // Server-first
-  try {
-    const items = await extractViaServer(pageUrl);
-    if (items.length > 0) return items.map(item => ({ ...item, label: item.label ?? 'Ameba' }));
-  } catch (e) {
-    debugWarn('[extractAmeba] server extractor errored:', String(e).slice(0, 200));
-  }
-
-  // On-page scan with locale-aware headers
+  // Article pages contain the intended gallery alongside optional embedded
+  // blog videos. Prefer the page scan so an unrelated video embed does not
+  // suppress the post's images.
   try {
     const html = await fetchHtml(pageUrl, DESKTOP_UA, getAcceptLanguage(pageUrl));
-    const results: DetectedMedia[] = [];
+    const results = _scanHtml(html, pageUrl, 'generic');
+    if (results.length > 0) return results.map(item => ({ ...item, label: item.label ?? 'Ameba' }));
+  } catch {}
 
-    extractUrls(html, /(https?:\/\/[^"'\\<>\s]*ameba(?:cdn|video)?[^"'\\<>\s]*\.(?:m3u8|mp4)[^"'\\<>\s]*)/gi)
-      .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'Ameba')));
-
-    // OG video fallback
-    extractUrls(html, /<meta\s+property\s*=\s*["']og:video(?::url)?["'][^>]+content\s*=\s*["']([^"']+)["']/gi)
-      .filter(u => u.startsWith('http'))
-      .forEach(u => pushUnique(results, makeItem(u, pageUrl, 'Ameba')));
-
-    return results;
-  } catch { return []; }
+  try {
+    const items = await extractViaServer(pageUrl);
+    return items.map(item => ({ ...item, label: item.label ?? 'Ameba' }));
+  } catch (e) {
+    debugWarn('[extractAmeba] server extractor errored:', String(e).slice(0, 200));
+    return [];
+  }
 }
 
 // ── Pixiv ─────────────────────────────────────────────────────────────────────
@@ -1694,17 +1702,35 @@ async function extractBluesky(pageUrl: string): Promise<DetectedMedia[]> {
   } catch { return []; }
 }
 
-async function extractTumblr(pageUrl: string): Promise<DetectedMedia[]> {
+export function tumblrApiUrl(pageUrl: string): string | undefined {
   try {
     const parsed = new URL(pageUrl);
-    const m = parsed.pathname.match(/\/post\/(\d+)/);
-    if (!m) return [];
-    const postId = m[1];
-    const host = parsed.host;
+    const legacy = parsed.pathname.match(/^\/post\/(\d+)(?:[/?#]|$)/);
+    if (legacy && /\.tumblr\.com$/i.test(parsed.hostname)) {
+      return `https://${parsed.hostname}/api/read/json?id=${legacy[1]}`;
+    }
 
-    const apiUrl = `https://${host}/api/read/json?id=${postId}`;
+    // Modern canonical URLs use tumblr.com/<blog>/<post-id>.  The legacy read
+    // endpoint still lives on the blog subdomain, not on www.tumblr.com.
+    const modern = parsed.pathname.match(/^\/([^/?#]+)\/(\d+)(?:[/?#]|$)/);
+    if (modern && /^(?:www\.)?tumblr\.com$/i.test(parsed.hostname)) {
+      const blog = modern[1].toLowerCase();
+      if (/^[a-z0-9-]+$/.test(blog)) {
+        return `https://${blog}.tumblr.com/api/read/json?id=${modern[2]}`;
+      }
+    }
+  } catch {}
+  return undefined;
+}
+
+async function extractTumblr(pageUrl: string): Promise<DetectedMedia[]> {
+  try {
+    const apiUrl = tumblrApiUrl(pageUrl);
+    if (!apiUrl) return [];
+    const api = new URL(apiUrl);
+    const postId = api.searchParams.get('id') ?? '';
     const res = await fetch(apiUrl, {
-      headers: { 'User-Agent': DESKTOP_UA, Accept: 'application/json, text/javascript, */*', Referer: `https://${host}/` },
+      headers: { 'User-Agent': DESKTOP_UA, Accept: 'application/json, text/javascript, */*', Referer: `https://${api.host}/` },
     });
     if (!res.ok) return [];
 
@@ -1817,6 +1843,11 @@ async function extractTwitCasting(pageUrl: string): Promise<DetectedMedia[]> {
       'Origin': 'https://twitcasting.tv',
       'Referer': 'https://twitcasting.tv/',
     };
+    // TwitCasting VOD manifests are signed and can reject a second device-side
+    // request even moments after extraction. Let the server re-extract and
+    // stream the current signed URL in one request instead of persisting a
+    // brittle manifest token in the task queue.
+    item.forceServerDownload = true;
     return [item];
   } catch { return []; }
 }
@@ -1827,7 +1858,7 @@ const PLATFORMS: Array<{ re: RegExp; fn: (url: string) => Promise<DetectedMedia[
   { re: /(?:twitter|x)\.com\/[^/]+\/status\/\d+/,                                  fn: extractTwitter     },
   { re: /redgifs\.com\/(?:watch|ifr|gif)\/[A-Za-z0-9]+/i,                          fn: extractRedgifs     },
   { re: /bsky\.app\/profile\/[^/?#]+\/post\/[A-Za-z0-9]+/,                         fn: extractBluesky     },
-  { re: /\.tumblr\.com\/post\/\d+/,                                                fn: extractTumblr      },
+  { re: /(?:[a-z0-9-]+\.tumblr\.com\/post\/\d+|(?:www\.)?tumblr\.com\/[a-z0-9-]+\/\d+)/i, fn: extractTumblr },
   // Mastodon: detect by snowflake ID in path — works across all fediverse instances
   { re: /\/(?:@[^/?#]+|users\/[^/?#]+\/statuses)\/\d{17,20}(?:[/?#]|$)/,          fn: extractMastodon    },
   { re: /instagram\.com\/(?:(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+|share\/(?:p|reel)\/[A-Za-z0-9_-]+)/, fn: extractInstagram   },

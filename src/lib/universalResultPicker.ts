@@ -10,6 +10,9 @@ const UNIVERSAL_STRATEGIES = new Set(['universal-browser-probe', 'universal-medi
 const PICKER_MEDIA_PATH_RE = /\.(?:m3u8?|mpd|mp4|m4v|webm|mov|avi|mkv|flv|mpg|mpeg|3gp|jpe?g|png|webp|gif|avif|heic|mp3|m4a|aac|wav|ogg|opus|flac|vtt|srt)(?:$|\/)/i;
 const META_MEDIA_HOST_RE = /(?:threadscdn\.com|cdninstagram\.com|fbcdn\.net)$/i;
 const VOLATILE_MEDIA_PARAM_RE = /^(?:token|auth(?:_token)?|access_token|signature|sig|expires?|exp|policy|key-?pair-?id|hdnts|hdnea|jwt|session|pathsig|x-amz-.+|x-goog-.+|_nc_(?:cat|sid|ohc|ht|gid|eui2)|oh|oe|ccb|efg|edm)$/i;
+const VIMEO_CONFIG_RE = /player\.vimeo\.com\/video\/(\d+)\/config\/?(?:[?#]|$)/i;
+const VIMEO_PLAYER_RE = /player\.vimeo\.com\/video\/(\d+)(?:[/?#]|$)/i;
+const VIMEO_PLAYLIST_RE = /vimeocdn\.com\/.*\/playlist\.json(?:[?#]|$)/i;
 
 export function isUniversalExtractionStrategy(strategy?: string): boolean {
   return !!strategy && UNIVERSAL_STRATEGIES.has(strategy);
@@ -65,6 +68,72 @@ function kindScore(kind: ReturnType<typeof getMediaKind>): number {
   return 0;
 }
 
+function vimeoVideoId(item: DetectedMedia): string | undefined {
+  for (const value of [item.url, item.sourcePageUrl, item.pageUrl]) {
+    const match = value?.match(VIMEO_CONFIG_RE) ?? value?.match(VIMEO_PLAYER_RE);
+    if (match) return match[1];
+  }
+  return undefined;
+}
+
+function vimeoCandidateScore(item: DetectedMedia): number {
+  if (VIMEO_CONFIG_RE.test(item.url)) return 50;
+  if (VIMEO_PLAYLIST_RE.test(item.url)) return 40;
+  if (item.mediaType === 'hls' || item.mediaType === 'dash') return 30;
+  if (getMediaKind(item) === 'video') return 20;
+  return 10;
+}
+
+function isGenericVimeoLabel(label?: string): boolean {
+  return !label || /^(?:vimeo|vimeo player config|vimeo json playlist|application\/json|hls|dash)$/i.test(label.trim());
+}
+
+function isVimeoSupportingImage(item: DetectedMedia): boolean {
+  if (getMediaKind(item) !== 'image') return false;
+  try {
+    const host = new URL(item.url).hostname;
+    return /(?:^|\.)vimeocdn\.com$/i.test(host);
+  } catch {
+    return false;
+  }
+}
+
+function collapseVimeoCandidates(items: DetectedMedia[]): DetectedMedia[] {
+  const groups = new Map<string, DetectedMedia[]>();
+  const passthrough: DetectedMedia[] = [];
+  for (const item of items) {
+    const id = vimeoVideoId(item);
+    if (!id) {
+      passthrough.push(item);
+      continue;
+    }
+    groups.set(id, [...(groups.get(id) ?? []), item]);
+  }
+  if (groups.size === 0) return items;
+
+  const collapsed = Array.from(groups.values()).map((group) => {
+    const selected = [...group].sort((a, b) =>
+      vimeoCandidateScore(b) - vimeoCandidateScore(a) ||
+      (b.confidence ?? 0) - (a.confidence ?? 0)
+    )[0];
+    const titled = group.find((item) => !isGenericVimeoLabel(item.sourceTitle || item.label));
+    return titled ? {
+      ...selected,
+      label: titled.sourceTitle || titled.label,
+      sourceTitle: titled.sourceTitle || titled.label,
+      thumbnailUrl: selected.thumbnailUrl || titled.thumbnailUrl,
+    } : selected;
+  });
+
+  // A live embedded player commonly causes WKWebView to report the site's logo
+  // and Vimeo poster frames as low-confidence images. They are supporting UI,
+  // not separate user choices, when a canonical Vimeo video is available.
+  const usefulPassthrough = passthrough.filter((item) =>
+    !isVimeoSupportingImage(item) || (item.confidence ?? 0) > 0.55
+  );
+  return [...collapsed, ...usefulPassthrough];
+}
+
 export function sortUniversalCandidates(items: DetectedMedia[]): DetectedMedia[] {
   return smartDedup(items).sort((a, b) => {
     const aKs = kindScore(getMediaKind(a));
@@ -90,8 +159,9 @@ export function simplifyUniversalPickerCandidates(
   items: DetectedMedia[],
   pageUrl?: string,
 ): DetectedMedia[] {
+  const collapsedItems = collapseVimeoCandidates(items);
   const grouped = new Map<string, DetectedMedia>();
-  for (const item of items) {
+  for (const item of collapsedItems) {
     const key = pickerAssetKey(item, pageUrl);
     const existing = grouped.get(key);
     grouped.set(key, existing ? sortUniversalCandidates([existing, item])[0] ?? existing : item);

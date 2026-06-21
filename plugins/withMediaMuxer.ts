@@ -142,43 +142,45 @@ function writeMuxerFiles(projectRoot: string): void {
 // ── Xcode project manipulation ────────────────────────────────────────────────
 
 function addToXcodeProject(project: any, appTargetName: string): void {
-  // Skip if already added — idempotent across repeated prebuilds.
-  const allFiles = project.pbxFileReferenceSection();
-  for (const key of Object.keys(allFiles)) {
-    const entry = allFiles[key];
-    if (typeof entry === 'object' && entry.path && entry.path.includes(SWIFT_FILE)) {
-      return;
-    }
-  }
-
-  // Create a PBX group for the muxer files
-  const groupResult = project.addPbxGroup(
-    [SWIFT_FILE, OBJC_FILE],
-    SUBDIR,
-    SUBDIR,
-  );
-
-  // Attach to main group
-  const mainGroupUuid: string = project.getFirstProject().firstProject.mainGroup;
-  project.addToPbxGroup(groupResult.uuid, mainGroupUuid);
-
-  // Add Swift and ObjC files to the main app's Sources build phase
-  const target = project.pbxTargetByName(appTargetName);
-  if (!target) {
+  const targetKey = project.findTargetKey(appTargetName);
+  if (!targetKey) {
     throw new Error(`[withMediaMuxer] could not find app target "${appTargetName}"`);
   }
-  // pbxTargetByName actually returns { uuid, pbxNativeTarget }. addBuildPhase takes the uuid.
-  // But addSourceFile is what we really want for an existing target's Sources phase.
-  project.addSourceFile(
-    SWIFT_FILE,
-    { target: target.uuid },
-    groupResult.uuid,
-  );
-  project.addSourceFile(
-    OBJC_FILE,
-    { target: target.uuid },
-    groupResult.uuid,
-  );
+
+  const groups = project.hash.project.objects.PBXGroup;
+  let groupUuid = Object.keys(groups).find((key) => {
+    const entry = groups[key];
+    return typeof entry === 'object' && (entry.name === SUBDIR || entry.path === SUBDIR);
+  });
+  if (!groupUuid) {
+    const groupResult = project.addPbxGroup([], SUBDIR, SUBDIR);
+    groupUuid = groupResult.uuid;
+    const mainGroupUuid: string = project.getFirstProject().firstProject.mainGroup;
+    project.addToPbxGroup(groupUuid, mainGroupUuid);
+  }
+
+  const sources = project.pbxSourcesBuildPhaseObj(targetKey);
+  const allFiles = project.pbxFileReferenceSection();
+  for (const filename of [SWIFT_FILE, OBJC_FILE]) {
+    if (sources.files.some((file: any) => file.comment === `${filename} in Sources`)) continue;
+    const existingRef = Object.keys(allFiles).find((key) => {
+      const entry = allFiles[key];
+      return typeof entry === 'object' && String(entry.path || '').includes(filename);
+    });
+    if (existingRef) {
+      const file = {
+        basename: filename,
+        group: 'Sources',
+        fileRef: existingRef,
+        target: targetKey,
+        uuid: project.generateUuid(),
+      };
+      project.addToPbxBuildFileSection(file);
+      project.addToPbxSourcesBuildPhase(file);
+    } else {
+      project.addSourceFile(filename, { target: targetKey }, groupUuid);
+    }
+  }
 }
 
 // ── Plugin definition ─────────────────────────────────────────────────────────

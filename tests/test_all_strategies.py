@@ -16,9 +16,11 @@ Run:
   python test_all_strategies.py --check-matrices  # no-network strategy coverage check
 """
 
-import argparse, ast, json, os, re, sys, time, threading
+import argparse, ast, json, os, re, sys, time, threading, socket
 import urllib.request, urllib.error, urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+socket.setdefaulttimeout(30)
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1554,7 +1556,7 @@ def validate_matrix_entries(label, entries):
     return errors
 
 def read_app_strategies_from_source():
-    path = os.path.join(os.path.dirname(__file__), "src", "types", "index.ts")
+    path = os.path.join(os.path.dirname(__file__), "..", "src", "types", "index.ts")
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             src = f.read()
@@ -1589,7 +1591,7 @@ def _collect_strategy_tuple_names(node):
     return names
 
 def read_backend_strategies_from_source():
-    path = os.path.join(os.path.dirname(__file__), "server", "strategies.py")
+    path = os.path.join(os.path.dirname(__file__), "..", "server", "strategies.py")
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             src = f.read()
@@ -1706,27 +1708,48 @@ def main():
         print(f"  Unknown backend strategies: {', '.join(extra_backend)}")
 
     total_pass = total_fail = skipped = total_expected = 0
+    print_lock = threading.Lock()
 
-    for name, url, strategies, browser_note in selected:
-        print(f"\n  ▸ {name}")
-        print(f"    {url}")
-        print(f"  {'─'*W}")
-
+    def process_platform(p_info):
+        name, url, strategies, browser_note = p_info
         results, bnote = run_platform(name, url, strategies, browser_note, backend)
 
+        out_lines = []
+        out_lines.append(f"\n  ▸ {name}")
+        out_lines.append(f"    {url}")
+        out_lines.append(f"  {'─'*W}")
+
+        p_pass = p_fail = p_expected = p_skipped = 0
         for label, r, elapsed in results:
             expected_reason = expected_failure_reason(name, label, r, results)
-            print(fmt_expected_result(label, r, elapsed, expected_reason))
+            out_lines.append(fmt_expected_result(label, r, elapsed, expected_reason))
             if r.ok:
-                total_pass += 1
+                p_pass += 1
             elif expected_reason:
-                total_expected += 1
+                p_expected += 1
             else:
-                total_fail += 1
+                p_fail += 1
                 if "not running" in r.detail:
-                    skipped += 1
+                    p_skipped += 1
 
-        print(f"    {bnote}")
+        out_lines.append(f"    {bnote}")
+
+        with print_lock:
+            for line in out_lines:
+                print(line)
+            sys.stdout.flush()
+
+        return p_pass, p_fail, p_expected, p_skipped
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = [pool.submit(process_platform, p) for p in selected]
+        for f in as_completed(futures):
+            p_pass, p_fail, p_expected, p_skipped = f.result()
+            total_pass += p_pass
+            total_fail += p_fail
+            total_expected += p_expected
+            skipped += p_skipped
+
 
     print(f"\n{'═'*W}")
     print(f"  Tested  : {total_pass + total_fail + total_expected} strategies across {len(selected)} platform(s)")

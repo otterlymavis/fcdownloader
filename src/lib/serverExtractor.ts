@@ -224,7 +224,18 @@ export async function extractViaServer(pageUrl: string, options: ServerExtractOp
   }
 }
 
-function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMedia[] {
+function serverUrlLooksAudio(url?: string): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    const mimeHint = parsed.searchParams.get('mime_type') ?? parsed.searchParams.get('mime');
+    return !!mimeHint && /^audio(?:_|\/)/i.test(mimeHint);
+  } catch {
+    return /[?&](?:mime_type|mime)=audio(?:_|%2f|\/)/i.test(url);
+  }
+}
+
+export function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMedia[] {
   if (r.kind === 'gallery' && Array.isArray(r.items)) {
     return r.items.flatMap((item) => toDetectedMedia(item, pageUrl));
   }
@@ -251,8 +262,25 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
     sourceAudit: r.sourceAudit,
   };
 
+  // Some TikTok endpoints are tagged as HLS by upstream metadata even though
+  // the signed URL explicitly serves audio/mpeg. Do not enqueue that audio
+  // companion as a video and later save an MP3 payload as video.mp4.
+  if (r.url && serverUrlLooksAudio(r.url)) {
+    return [{
+      ...baseItem,
+      url: r.url,
+      mimeType: 'audio/mpeg',
+      mediaType: 'direct',
+      mediaKind: 'audio',
+      label: r.label ?? 'Audio',
+      hasAudio: true,
+      hasVideo: false,
+    }];
+  }
+
   if (r.kind === 'hls' && r.url) {
     const redditHls = /(?:reddit\.com|redd\.it)\//i.test(pageUrl);
+    const volatileHls = /(?:twitter|x)\.com\//i.test(pageUrl);
     return [{
       ...baseItem,
       url: r.url,
@@ -262,7 +290,7 @@ function toDetectedMedia(r: ServerExtractResponse, pageUrl: string): DetectedMed
       label: r.label ?? 'HLS',
       // Reddit HLS uses a separate EXT-X-MEDIA audio rendition. Keep it on the
       // server mux path so mobile downloads include audio.
-      forceServerDownload: redditHls,
+      forceServerDownload: redditHls || volatileHls,
     }];
   }
 
