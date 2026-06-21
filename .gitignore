@@ -126,3 +126,4 @@ extension_helper_report.md
 extension_helper_report_v*.md
 webapp_url_report.md
 generate_webapp_report.py
+tests/temp_downloads*/

@@ -17,6 +17,12 @@ if (!process.env.CSC_LINK && !process.env.WIN_CSC_LINK) {
   signingEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
   if (process.platform === "win32") {
     builderArgs.push("--config.win.signAndEditExecutable=false");
+  } else if (process.platform === "darwin") {
+    // electron-builder ad-hoc signs unsigned macOS apps. On macOS 26, an
+    // ad-hoc signed app with hardened runtime enabled can fail at launch
+    // because the main executable and Electron Framework do not share a
+    // certificate Team ID. Real Developer ID builds keep hardened runtime.
+    builderArgs.push("--config.mac.hardenedRuntime=false");
   }
 }
 

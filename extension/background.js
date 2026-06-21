@@ -1803,7 +1803,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
     if (msg.type === "fcdl:helper_start") {
-      await launchLocalCompanion();
       const ready = await waitForLocalHelper(LOCAL_HELPER_START_TIMEOUT_MS);
       const health = await fetchLocalHelperInfo(LOCAL_HELPER_STATUS_TIMEOUT_MS);
       sendResponse({ ok: true, ready: ready && localHelperReady(health), health, problem: localHelperProblem(health) });

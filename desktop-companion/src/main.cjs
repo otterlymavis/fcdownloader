@@ -8,6 +8,7 @@ const HELPER_HOST = "127.0.0.1";
 const HELPER_PORT = 8765;
 const HEALTH_URL = `http://${HELPER_HOST}:${HELPER_PORT}/health`;
 const PROTOCOL = "fcdownloader-companion";
+const MIN_HELPER_VERSION = [0, 4, 0];
 
 let mainWindow = null;
 let tray = null;
@@ -100,6 +101,20 @@ function log(line) {
   }
 }
 
+function parseVersion(versionStr) {
+  const m = String(versionStr || "").match(/(\d+)\.(\d+)\.(\d+)/);
+  return m ? m.slice(1).map(Number) : null;
+}
+
+function versionAtLeast(parsed, min) {
+  if (!parsed) return false;
+  for (let i = 0; i < min.length; i++) {
+    if ((parsed[i] || 0) > min[i]) return true;
+    if ((parsed[i] || 0) < min[i]) return false;
+  }
+  return true;
+}
+
 function checkHealth() {
   return new Promise((resolve) => {
     const req = http.get(HEALTH_URL, { timeout: 2500 }, (res) => {
@@ -111,6 +126,20 @@ function checkHealth() {
       resolve(false);
     });
     req.on("error", () => resolve(false));
+  });
+}
+
+function checkHelperVersion() {
+  return new Promise((resolve) => {
+    const req = http.get(HEALTH_URL, { timeout: 2500 }, (res) => {
+      let body = "";
+      res.on("data", (d) => { body += d; });
+      res.on("end", () => {
+        try { resolve(parseVersion(JSON.parse(body).version)); } catch { resolve(null); }
+      });
+    });
+    req.on("timeout", () => { req.destroy(); resolve(null); });
+    req.on("error", () => resolve(null));
   });
 }
 
@@ -174,8 +203,18 @@ async function stopExternalLocalHelpers() {
 
 async function startHelper() {
   if (await checkHealth()) {
-    setState({ running: true, healthy: true, pid: helperProcess?.pid ?? null, message: "Ready on 127.0.0.1:8765", runtime: helperState.runtime || "external helper" });
-    return helperState;
+    const version = await checkHelperVersion();
+    if (versionAtLeast(version, MIN_HELPER_VERSION)) {
+      setState({ running: true, healthy: true, pid: helperProcess?.pid ?? null, message: "Ready on 127.0.0.1:8765", runtime: helperState.runtime || "external helper" });
+      return helperState;
+    }
+    log(`Outdated helper v${version ? version.join(".") : "?"} found; restarting with current version...`);
+    if (helperProcess && helperProcess.exitCode === null) {
+      helperProcess.kill();
+      helperProcess = null;
+    }
+    await stopExternalLocalHelpers();
+    await new Promise((r) => setTimeout(r, 600));
   }
 
   if (helperProcess) return helperState;
@@ -333,6 +372,12 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on("second-instance", async () => {
+    showWindow();
+    await startHelper();
+  });
+
+  app.on("open-url", async (event, _url) => {
+    event.preventDefault();
     showWindow();
     await startHelper();
   });
