@@ -3,12 +3,13 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const backgroundScript = fs.readFileSync(path.join(__dirname, "extension", "background.js"), "utf8")
+const backgroundScript = fs.readFileSync(path.join(__dirname, "..", "extension", "background.js"), "utf8")
   .replace(/import \{ FCDL_DEFAULT_BACKEND \} from "\.\/config\.js";/, 'const FCDL_DEFAULT_BACKEND = "";');
 
 const listeners = [];
-let helperHealth = { ok: true, version: "0.3.0-go" };
+let helperHealth = { ok: true, version: "0.4.0-go" };
 let lastDownload = null;
+const fetchedUrls = [];
 let currentTab = { id: 1, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", title: "Test YouTube" };
 const downloadChangeListeners = [];
 const webRequestCompletedListeners = [];
@@ -60,7 +61,7 @@ const chrome = {
   },
   cookies: {
     async getAll() {
-      return [];
+      return [{ name: "SESSDATA", value: "local-session" }];
     },
   },
   downloads: {
@@ -92,9 +93,11 @@ vm.runInNewContext(backgroundScript, {
   URL,
   URLSearchParams,
   AbortController,
+  Headers,
   console,
   chrome,
   fetch: async (url) => {
+    fetchedUrls.push(String(url));
     if (String(url).includes("/health")) {
       return { ok: true, json: async () => helperHealth };
     }
@@ -121,7 +124,7 @@ function send(msg) {
   assert.strictEqual(oldHelper.ready, false);
   assert.match(oldHelper.problem, /outdated/i);
 
-  helperHealth = { ok: true, version: "0.3.0-go" };
+  helperHealth = { ok: true, version: "0.4.0-go" };
   const currentHelper = await send({ type: "fcdl:helper_status" });
   assert.strictEqual(currentHelper.ready, true);
   assert.strictEqual(currentHelper.problem, "");
@@ -145,6 +148,84 @@ function send(msg) {
     item.source === "network"
   ), "Vimeo player config JSON should be captured from network events");
 
+  const biliPage = "https://www.bilibili.com/video/BV1QkjC6nEQU/";
+  currentTab = { id: 1, url: biliPage, title: "Bilibili Video" };
+  await send({
+    type: "fcdl:detected",
+    tabId: 1,
+    pageUrl: biliPage,
+    items: [{
+      url: biliPage,
+      pageUrl: biliPage,
+      kind: "embed",
+      source: "bili-playinfo",
+      label: "Bilibili",
+      backendRouted: true,
+    }],
+  });
+  for (const url of [
+    "https://upos-hz-mirrorakam.akamaized.net/upgcxcode/25/27/39252722725/39252722725-1-30080.m4s?deadline=1",
+    "https://upos-sz-mirrorcosov.bilivideo.com/upgcxcode/25/27/39252722725/39252722725-1-30280.m4s?deadline=1",
+    "https://boss.hdslb.com/bfs/seed/jinkela/short/ai.m4s",
+    "https://broadcast.chat.bilibili.com/sub",
+  ]) {
+    webRequestCompletedListeners[0]({
+      tabId: 1,
+      url,
+      statusCode: 200,
+      responseHeaders: [
+        { name: "Content-Type", value: url.includes("30280") ? "audio/mp4" : "video/mp4" },
+        { name: "Content-Length", value: "123456" },
+      ],
+    });
+  }
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const biliList = await send({ type: "fcdl:list", tabId: 1 });
+  assert.strictEqual(biliList.items.length, 1, `Bilibili CDN fragments should be hidden: ${JSON.stringify(biliList.items)}`);
+  assert.strictEqual(biliList.items[0].source, "bili-playinfo");
+  assert.strictEqual(biliList.items[0].url, biliPage);
+  assert(
+    biliList.technicalItems.length >= 3,
+    `hidden Bilibili fragments should remain available as technical sources: ${JSON.stringify(biliList.technicalItems)}`
+  );
+
+  const articlePage = "https://publisher.example.com/watch/123";
+  currentTab = { id: 1, url: articlePage, title: "Publisher Video" };
+  webRequestCompletedListeners[0]({
+    tabId: 1,
+    url: "https://cdn.example-video.net/hls/segment-00001.mp4?token=abc&expires=999",
+    statusCode: 200,
+    responseHeaders: [
+      { name: "Content-Type", value: "video/mp2t" },
+      { name: "Content-Length", value: "262144" },
+    ],
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  let noisyList = await send({ type: "fcdl:list", tabId: 1 });
+  assert(
+    noisyList.items.some((item) => item.source === "network"),
+    "standalone network media should remain visible before a better page-level item exists"
+  );
+  await send({
+    type: "fcdl:detected",
+    tabId: 1,
+    pageUrl: articlePage,
+    items: [{
+      url: articlePage,
+      pageUrl: articlePage,
+      kind: "embed",
+      source: "backend",
+      label: "Publisher Video",
+      backendRouted: true,
+    }],
+  });
+  noisyList = await send({ type: "fcdl:list", tabId: 1 });
+  assert.strictEqual(noisyList.items.length, 1, `page-level media should hide CDN fragments: ${JSON.stringify(noisyList.items)}`);
+  assert.strictEqual(noisyList.items[0].source, "backend");
+  assert.strictEqual(noisyList.items[0].url, articlePage);
+  assert.strictEqual(noisyList.technicalItems.length, 1, "hidden generic CDN fragment should be preserved");
+  assert.match(noisyList.technicalItems[0].reason, /better page-level/i);
+
   currentTab = { id: 1, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", title: "Test YouTube" };
   lastDownload = null;
   const localDownload = await send({
@@ -159,10 +240,21 @@ function send(msg) {
     },
   });
   assert.strictEqual(localDownload.ok, true, localDownload.error);
+  assert.strictEqual(localDownload.route, "local helper");
+  assert.strictEqual(localDownload.progressUrl, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
   assert(lastDownload, "local helper download should call chrome.downloads.download");
+  assert(
+    fetchedUrls.some((url) => url.startsWith("http://127.0.0.1:8765/formats?")),
+    "local helper download should validate extraction before handing the URL to Chrome"
+  );
   assert.match(lastDownload.url, /^http:\/\/127\.0\.0\.1:8765\/youtube-hd\?/);
   assert.match(lastDownload.url, /url=https%3A%2F%2Fwww\.youtube\.com%2Fwatch%3Fv%3DdQw4w9WgXcQ/);
   assert.strictEqual(lastDownload.filename, "Test YouTube.mp4");
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(lastDownload.headers)),
+    [{ name: "X-FCDL-Cookies", value: "SESSDATA=local-session" }],
+    "local companion should receive browser cookies even when remote cookie sharing is disabled"
+  );
 
   console.log("extension background helper tests passed");
 })().catch((error) => {

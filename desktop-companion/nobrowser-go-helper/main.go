@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
@@ -32,13 +33,14 @@ var toolManifestJSON []byte
 const (
 	host                 = "127.0.0.1"
 	port                 = "8765"
-	serviceVersion       = "0.3.0-go"
+	serviceVersion       = "0.4.0-go"
 	apiVersion           = "v1"
 	maxURLLength         = 4096
 	maxCookieBytes       = 32 * 1024
 	defaultFormat        = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/best[ext=mp4]/best"
 	youtubeFormat        = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/bestvideo[height<=1080]+bestaudio/best[height>=720][height<=1080]"
 	bilibiliFormat       = "bv*[height<=1080][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080][ext=mp4]/b[height<=1080]/best"
+	bilibiliCleanFormat  = "bv*[height>=720][height<=1080][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/bv*[height>=720][height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height>=720][height<=1080]+ba/b[height>=720][height<=1080][ext=mp4]/b[height>=720][height<=1080]"
 	pinnedYtDlpVersion   = "2026.03.17"
 	defaultYtDlpBaseURL  = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17"
 	nightlyYtDlpBaseURL  = "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download"
@@ -267,21 +269,47 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "url must be a YouTube URL"})
 		return
 	}
+	format := strings.TrimSpace(q.Get("format"))
+	maxHeight := strings.TrimSpace(q.Get("max_height"))
+	cookies := r.Header.Get("X-FCDL-Cookies")
+	removeWatermark := truthy(q.Get("remove_watermark"))
+	if bilibiliURL(rawURL) && removeWatermark {
+		preflightCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		if err := ensureBilibiliTVNoWatermarkAvailable(preflightCtx, rawURL, maxHeight, cookies); err != nil {
+			logf("Bilibili no-watermark preflight failed: %v", err)
+			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	// Start the browser download before yt-dlp finishes producing the file.
+	// Without an early response Chrome waits with no visible download and can
+	// time out on longer videos. URL validation still happens above, while
+	// extraction failures are reported by closing the in-progress download.
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Content-Disposition", `attachment; filename="fcdownloader_video.mp4"`)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
 
 	filePath, cleanup, err := downloadMedia(
 		r.Context(),
 		rawURL,
-		strings.TrimSpace(q.Get("format")),
-		strings.TrimSpace(q.Get("max_height")),
-		r.Header.Get("X-FCDL-Cookies"),
-		truthy(q.Get("remove_watermark")),
+		format,
+		maxHeight,
+		cookies,
+		removeWatermark,
 	)
 	if cleanup != nil {
 		defer cleanup()
 	}
 	if err != nil {
 		logf("download error: %v", err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
 		return
 	}
 
@@ -289,13 +317,10 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 	if err != nil {
 		logf("failed to open downloaded file: %v", err)
 		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "downloaded media file could not be opened"})
 		return
 	}
 	defer file.Close()
 
-	w.Header().Set("Content-Type", "video/mp4")
-	w.Header().Set("Content-Disposition", `attachment; filename="fcdownloader_video.mp4"`)
 	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 99, Status: "serving"})
 	if _, err := io.Copy(w, file); err != nil {
 		logf("failed to serve downloaded file: %v", err)
@@ -427,17 +452,31 @@ func runYtDlpJSONWithPath(ctx context.Context, ytDlp, rawURL, cookieFile string)
 }
 
 func downloadMedia(ctx context.Context, rawURL, format, maxHeight, cookies string, removeWatermark bool) (string, func(), error) {
-	ytDlp, channel, err := ytDlpPrimaryPath(ctx, rawURL)
+	ffmpeg, err := ffmpegPath(ctx)
 	if err != nil {
 		return "", nil, err
 	}
-	ffmpeg, err := ffmpegPath(ctx)
+
+	if bilibiliURL(rawURL) && removeWatermark {
+		path, cleanup, err := downloadBilibiliTVNoWatermark(ctx, ffmpeg, rawURL, maxHeight, cookies)
+		if err != nil {
+			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
+			return "", nil, err
+		}
+		return path, cleanup, nil
+	}
+
+	ytDlp, channel, err := ytDlpPrimaryPath(ctx, rawURL)
 	if err != nil {
 		return "", nil, err
 	}
 	if format == "" {
 		if bilibiliURL(rawURL) {
-			format = formatForHeight(bilibiliFormat, maxHeight)
+			if removeWatermark {
+				format = formatForHeight(bilibiliCleanFormat, maxHeight)
+			} else {
+				format = formatForHeight(bilibiliFormat, maxHeight)
+			}
 		} else if regexp.MustCompile(`^\d{3,4}$`).MatchString(maxHeight) {
 			format = fmt.Sprintf("bv*[height<=%s][ext=mp4]+ba[ext=m4a]/bv*[height<=%s]+ba/best[height<=%s]/best", maxHeight, maxHeight, maxHeight)
 		} else if youtubeURL(rawURL) {
@@ -467,8 +506,11 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight, cookies strin
 		cleanup()
 		stableErr := fmt.Errorf("%s", tail(out))
 		if bilibiliURL(rawURL) {
-			if apiPath, apiCleanup, apiErr := downloadBilibiliAPI(ctx, ffmpeg, rawURL, maxHeight, cookies); apiErr == nil {
+			if apiPath, apiCleanup, apiErr := downloadBilibiliAPI(ctx, ffmpeg, rawURL, maxHeight, cookies, removeWatermark); apiErr == nil {
 				return apiPath, apiCleanup, nil
+			}
+			if removeWatermark {
+				return "", nil, errors.New("Bilibili only exposed its low-resolution watermarked preview. Sign in to Bilibili in Chrome and try again")
 			}
 		}
 		if youtubeURL(rawURL) && channel == "nightly" {
@@ -540,6 +582,39 @@ func downloadMediaWithYtDlp(ctx context.Context, ytDlp, ffmpeg, rawURL, format, 
 	return candidates[0], cleanup, nil
 }
 
+func finalizeDownloadedMedia(ctx context.Context, ffmpeg, rawURL, inputPath, tmp string, removeWatermark bool) (string, error) {
+	if !removeWatermark || !bilibiliURL(rawURL) {
+		return inputPath, nil
+	}
+	outputPath := filepath.Join(tmp, "fcdownloader-watermark-free.mp4")
+	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 96, Status: "removing-watermark"})
+	if err := removeBilibiliWatermark(ctx, ffmpeg, inputPath, outputPath); err != nil {
+		return "", err
+	}
+	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 98, Status: "ready"})
+	return outputPath, nil
+}
+
+func removeBilibiliWatermark(ctx context.Context, ffmpeg, inputPath, outputPath string) error {
+	videoArgs := []string{"-c:v", "libx264", "-preset", "veryfast", "-crf", "18"}
+	if runtime.GOOS == "darwin" {
+		videoArgs = []string{"-c:v", "h264_videotoolbox", "-b:v", "5000k", "-maxrate", "8000k", "-bufsize", "16000k"}
+	}
+	args := []string{
+		"-y", "-i", inputPath,
+		"-vf", "delogo=x=24:y=34:w=410:h=82:show=0",
+	}
+	args = append(args, videoArgs...)
+	args = append(args, "-c:a", "copy", "-movflags", "+faststart", outputPath)
+	cmd := exec.CommandContext(ctx, ffmpeg, args...)
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ffmpeg Bilibili watermark cleanup failed: %s", tail(out))
+	}
+	return nil
+}
+
 func mediaFileCandidates(dir string, files []os.DirEntry) []string {
 	var candidates []string
 	for _, file := range files {
@@ -577,11 +652,13 @@ func ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL, cookieFile string, removeWat
 	args := []string{
 		"-f", format,
 		"--newline",
-		"--no-part",
-		"--retries", "10",
-		"--fragment-retries", "20",
+		"--continue",
+		"--retries", "infinite",
+		"--fragment-retries", "infinite",
 		"--file-access-retries", "5",
+		"--retry-sleep", "3",
 		"--socket-timeout", "30",
+		"--http-chunk-size", "10M",
 		"--concurrent-fragments", concurrentFragments,
 		"--merge-output-format", "mp4",
 		"--remux-video", "mp4",
@@ -701,7 +778,7 @@ func ffmpegPath(ctx context.Context) (string, error) {
 	target := filepath.Join(cacheRoot(), "ffmpeg", asset.Filename)
 	expected := envDefault("FCDL_FFMPEG_SHA256", asset.SHA256)
 	if cachedToolValid(target, expected) {
-		return target, nil
+		return ffmpegAlias(target)
 	}
 	config := readHelperConfig()
 	url := asset.URL
@@ -713,7 +790,28 @@ func ffmpegPath(ctx context.Context) (string, error) {
 	if err := downloadFile(ctx, "ffmpeg", url, target, expected); err != nil {
 		return "", err
 	}
-	return target, nil
+	return ffmpegAlias(target)
+}
+
+func ffmpegAlias(target string) (string, error) {
+	name := "ffmpeg"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	alias := filepath.Join(filepath.Dir(target), name)
+	if filepath.Clean(alias) == filepath.Clean(target) {
+		return target, nil
+	}
+	if executable(alias) {
+		return alias, nil
+	}
+	_ = os.Remove(alias)
+	if err := os.Link(target, alias); err != nil {
+		if err := os.Symlink(target, alias); err != nil {
+			return "", fmt.Errorf("create ffmpeg alias: %w", err)
+		}
+	}
+	return alias, nil
 }
 
 func stableYtDlpCachePath() string {
@@ -1289,7 +1387,7 @@ func runBilibiliAPIJSON(ctx context.Context, rawURL, cookies string) (map[string
 	}, nil
 }
 
-func downloadBilibiliAPI(ctx context.Context, ffmpeg, rawURL, maxHeight, cookies string) (string, func(), error) {
+func downloadBilibiliAPI(ctx context.Context, ffmpeg, rawURL, maxHeight, cookies string, requireCleanHD bool) (string, func(), error) {
 	result, err := fetchBilibiliAPI(ctx, rawURL, cookies)
 	if err != nil {
 		return "", nil, err
@@ -1300,26 +1398,170 @@ func downloadBilibiliAPI(ctx context.Context, ffmpeg, rawURL, maxHeight, cookies
 	}
 	cleanup := func() { _ = os.RemoveAll(tmp) }
 
-	if videoURL, audioURL := pickBilibiliDash(result.Play, maxHeight); videoURL != "" && audioURL != "" {
+	if videoURL, audioURL := pickBilibiliDash(result.Play, maxHeight, requireCleanHD); videoURL != "" && audioURL != "" {
 		outPath := filepath.Join(tmp, safeName(firstString(result.Title, result.BVID))+".mp4")
 		if err := muxBilibiliDash(ctx, ffmpeg, videoURL, audioURL, outPath, cookies); err != nil {
 			cleanup()
 			return "", nil, err
 		}
-		return outPath, cleanup, nil
-	}
-
-	if mediaURL := pickBilibiliDurl(result.Play); mediaURL != "" {
-		outPath := filepath.Join(tmp, safeName(firstString(result.Title, result.BVID))+".mp4")
-		if err := downloadBilibiliFile(ctx, mediaURL, outPath, cookies); err != nil {
-			cleanup()
-			return "", nil, err
+		if requireCleanHD {
+			cleanPath := filepath.Join(tmp, "fcdownloader-watermark-free.mp4")
+			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 96, Status: "removing-watermark"})
+			if err := removeBilibiliWatermark(ctx, ffmpeg, outPath, cleanPath); err != nil {
+				cleanup()
+				return "", nil, err
+			}
+			return cleanPath, cleanup, nil
 		}
 		return outPath, cleanup, nil
 	}
 
+	if !requireCleanHD {
+		if mediaURL := pickBilibiliDurl(result.Play); mediaURL != "" {
+			outPath := filepath.Join(tmp, safeName(firstString(result.Title, result.BVID))+".mp4")
+			if err := downloadBilibiliFile(ctx, mediaURL, outPath, cookies); err != nil {
+				cleanup()
+				return "", nil, err
+			}
+			return outPath, cleanup, nil
+		}
+	}
+
 	cleanup()
 	return "", nil, errors.New("Bilibili API returned no downloadable media")
+}
+
+func downloadBilibiliTVNoWatermark(ctx context.Context, ffmpeg, rawURL, maxHeight, cookies string) (string, func(), error) {
+	result, err := fetchBilibiliTVAPI(ctx, rawURL, cookies)
+	if err != nil {
+		return "", nil, err
+	}
+	videoURL, audioURL := pickBilibiliTVCleanDash(result.Play, maxHeight)
+	if videoURL == "" || audioURL == "" {
+		return "", nil, errors.New("Bilibili did not expose a true no-watermark source for this video; refusing to blur the watermark")
+	}
+	tmp, err := os.MkdirTemp("", "fcdl_native_bili_tv_*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(tmp) }
+	outPath := filepath.Join(tmp, safeName(firstString(result.Title, result.BVID))+".mp4")
+	if err := muxBilibiliDash(ctx, ffmpeg, videoURL, audioURL, outPath, cookies); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return outPath, cleanup, nil
+}
+
+func ensureBilibiliTVNoWatermarkAvailable(ctx context.Context, rawURL, maxHeight, cookies string) error {
+	result, err := fetchBilibiliTVAPI(ctx, rawURL, cookies)
+	if err != nil {
+		return err
+	}
+	videoURL, audioURL := pickBilibiliTVCleanDash(result.Play, maxHeight)
+	if videoURL == "" || audioURL == "" {
+		return errors.New("Bilibili did not expose a true no-watermark source for this video; refusing to blur the watermark")
+	}
+	return nil
+}
+
+func fetchBilibiliTVAPI(ctx context.Context, rawURL, cookies string) (biliAPIResult, error) {
+	result, err := fetchBilibiliAPI(ctx, rawURL, cookies)
+	if err != nil {
+		return biliAPIResult{}, err
+	}
+	aid := int64(numberValue(result.Play["aid"]))
+	if aid == 0 {
+		// The web playurl payload does not include aid; fetchBilibiliAPI already
+		// resolved metadata, so ask the view endpoint again to keep this helper
+		// small and deterministic.
+		bvid := firstString(result.BVID)
+		viewURL := "https://api.bilibili.com/x/web-interface/view?" + url.Values{"bvid": {bvid}}.Encode()
+		var viewResp map[string]interface{}
+		if err := fetchBilibiliJSON(ctx, viewURL, rawURL, cookies, &viewResp); err != nil {
+			return biliAPIResult{}, err
+		}
+		if data, _ := viewResp["data"].(map[string]interface{}); data != nil {
+			aid = int64(numberValue(data["aid"]))
+		}
+	}
+	if aid == 0 || result.CID == 0 {
+		return biliAPIResult{}, errors.New("Bilibili TV API requires aid and cid")
+	}
+	values := url.Values{
+		"appkey":   {"4409e2ce8ffd12b8"},
+		"avid":     {strconv.FormatInt(aid, 10)},
+		"build":    {"103800"},
+		"cid":      {strconv.FormatInt(result.CID, 10)},
+		"device":   {"android"},
+		"fnval":    {"80"},
+		"fnver":    {"0"},
+		"fourk":    {"1"},
+		"mobi_app": {"android_tv_yst"},
+		"platform": {"android"},
+		"qn":       {"120"},
+		"ts":       {strconv.FormatInt(time.Now().Unix(), 10)},
+	}
+	values.Set("sign", bilibiliTVSign(values))
+	playURL := "https://api.snm0516.aisee.tv/x/tv/ugc/playurl?" + values.Encode()
+	var playResp map[string]interface{}
+	if err := fetchBilibiliTVJSON(ctx, playURL, rawURL, &playResp); err != nil {
+		return biliAPIResult{}, err
+	}
+	if code, _ := playResp["code"].(float64); code != 0 {
+		return biliAPIResult{}, fmt.Errorf("Bilibili TV playurl API failed: %s", firstString(playResp["message"], playResp["msg"]))
+	}
+	return biliAPIResult{
+		BVID:      result.BVID,
+		CID:       result.CID,
+		Title:     result.Title,
+		Thumbnail: result.Thumbnail,
+		Duration:  result.Duration,
+		Play:      playResp,
+	}, nil
+}
+
+func fetchBilibiliTVJSON(ctx context.Context, requestURL, pageURL string, target interface{}) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 BiliDroid/1.6.6 os/android mobi_app/android_tv_yst build/103800 channel/master innerVer/103800 osVer/11 network/2")
+	req.Header.Set("Referer", firstString(pageURL, "https://www.bilibili.com/"))
+	req.Header.Set("Accept", "*/*")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("Bilibili TV API HTTP %d", resp.StatusCode)
+	}
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 8*1024*1024))
+	return decoder.Decode(target)
+}
+
+func bilibiliTVSign(values url.Values) string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		if strings.EqualFold(key, "sign") {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var data strings.Builder
+	for _, key := range keys {
+		if data.Len() > 0 {
+			data.WriteByte('&')
+		}
+		data.WriteString(key)
+		data.WriteByte('=')
+		data.WriteString(url.QueryEscape(values.Get(key)))
+	}
+	data.WriteString("59b43e04ad6965f34319062b478f83dd")
+	sum := md5.Sum([]byte(data.String()))
+	return hex.EncodeToString(sum[:])
 }
 
 func fetchBilibiliAPI(ctx context.Context, rawURL, cookies string) (biliAPIResult, error) {
@@ -1494,7 +1736,7 @@ func bilibiliFormatsFromPlay(play map[string]interface{}) []formatInfo {
 	return formats
 }
 
-func pickBilibiliDash(play map[string]interface{}, maxHeight string) (string, string) {
+func pickBilibiliDash(play map[string]interface{}, maxHeight string, requireCleanHD bool) (string, string) {
 	dash, _ := play["dash"].(map[string]interface{})
 	if dash == nil {
 		return "", ""
@@ -1513,7 +1755,65 @@ func pickBilibiliDash(play map[string]interface{}, maxHeight string) (string, st
 		}
 		mediaURL := firstString(video["baseUrl"], video["base_url"])
 		height := numberValue(video["height"])
-		if mediaURL == "" || height <= 0 || height > heightLimit {
+		if mediaURL == "" || height <= 0 || height > heightLimit || (requireCleanHD && height < 720) {
+			continue
+		}
+		if bestVideo == nil || height > numberValue(bestVideo["height"]) || (height == numberValue(bestVideo["height"]) && strings.Contains(firstString(video["codecs"]), "avc1") && !strings.Contains(firstString(bestVideo["codecs"]), "avc1")) {
+			bestVideo = video
+		}
+	}
+	var bestAudio map[string]interface{}
+	for _, item := range interfaceSlice(dash["audio"]) {
+		audio, _ := item.(map[string]interface{})
+		if audio == nil || firstString(audio["baseUrl"], audio["base_url"]) == "" {
+			continue
+		}
+		if bestAudio == nil || numberValue(audio["bandwidth"]) > numberValue(bestAudio["bandwidth"]) {
+			bestAudio = audio
+		}
+	}
+	if bestVideo == nil || bestAudio == nil {
+		return "", ""
+	}
+	return firstString(bestVideo["baseUrl"], bestVideo["base_url"]), firstString(bestAudio["baseUrl"], bestAudio["base_url"])
+}
+
+func pickBilibiliTVCleanDash(play map[string]interface{}, maxHeight string) (string, string) {
+	cleanQualityIDs := map[int]bool{}
+	qualities := interfaceSlice(play["accept_quality"])
+	watermarks := interfaceSlice(play["accept_watermark"])
+	for i, quality := range qualities {
+		if i >= len(watermarks) {
+			continue
+		}
+		watermarked, ok := watermarks[i].(bool)
+		if ok && !watermarked {
+			cleanQualityIDs[int(numberValue(quality))] = true
+		}
+	}
+	if len(cleanQualityIDs) == 0 {
+		return "", ""
+	}
+	dash, _ := play["dash"].(map[string]interface{})
+	if dash == nil {
+		return "", ""
+	}
+	heightLimit := 1080.0
+	if regexp.MustCompile(`^\d{3,4}$`).MatchString(maxHeight) {
+		if parsed, err := strconv.Atoi(maxHeight); err == nil {
+			heightLimit = float64(parsed)
+		}
+	}
+	var bestVideo map[string]interface{}
+	for _, item := range interfaceSlice(dash["video"]) {
+		video, _ := item.(map[string]interface{})
+		if video == nil {
+			continue
+		}
+		qualityID := int(numberValue(video["id"]))
+		mediaURL := firstString(video["baseUrl"], video["base_url"])
+		height := numberValue(video["height"])
+		if mediaURL == "" || !cleanQualityIDs[qualityID] || height < 720 || height > heightLimit {
 			continue
 		}
 		if bestVideo == nil || height > numberValue(bestVideo["height"]) || (height == numberValue(bestVideo["height"]) && strings.Contains(firstString(video["codecs"]), "avc1") && !strings.Contains(firstString(bestVideo["codecs"]), "avc1")) {

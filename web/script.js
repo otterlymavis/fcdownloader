@@ -32,7 +32,7 @@ const downloadToggle = $("download-menu-toggle");
 const downloadMenu = $("download-menu");
 
 const LOCAL_HELPER = "http://127.0.0.1:8765";
-const EXPECTED_HELPER_VERSION = "0.3.0-go";
+const EXPECTED_HELPER_VERSION = "0.4.0-go";
 const DIRECT_MEDIA_RE = /\.(?:mp4|m4v|webm|mov|mp3|m4a|aac|wav|ogg|opus|flac|jpe?g|png|webp|gif|avif)(?:[?#]|$)|googlevideo\.com\/videoplayback|(?:video|audio)\.twimg\.com|cdninstagram\.com|fbcdn\.net|v\.redd\.it|vod\.pstatic\.net/i;
 const YOUTUBE_RE = /(?:youtube\.com\/(?:watch|shorts|embed)|youtu\.be\/|youtube-nocookie\.com\/embed)/i;
 const WEB_PROXY_REQUIRED_RE = /(?:cdninstagram\.com|fbcdn\.net|threadscdn\.com|weibocdn\.com|xhscdn\.com|bilivideo\.com|biliimg\.com|hdslb\.com|pstatic\.net|pximg\.net|yimg\.jp|kakaocdn\.net|daumcdn\.net|img-mdpr\.freetls\.fastly\.net)/i;

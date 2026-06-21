@@ -22,10 +22,12 @@ const statusProgressContainer = $("status-progress-container");
 const statusProgressFill = $("status-progress-fill");
 const moreEl      = $("more");
 const moreList    = $("more-list");
+const technicalEl = $("technical");
+const technicalList = $("technical-list");
 const bulkActions = $("bulk-actions");
 const selectAllBtn = $("select-all");
 const downloadSelectedBtn = $("download-selected");
-const MIN_HELPER_VERSION = "0.3.0-go";
+const MIN_HELPER_VERSION = "0.4.0-go";
 const HELPER_STATUS_TIMEOUT_MS = 2500;
 const HELPER_START_TIMEOUT_MS = 26000;
 const HELPER_READY_GRACE_MS = 10000;
@@ -39,6 +41,7 @@ let helperNeedsSetup = false;
 let preferCapturedMedia = false;
 let waitingForCapturedMedia = false;
 let currentVisibleItems = [];
+let currentTechnicalItems = [];
 let selectedItemKeys = new Set();
 let pinnedExtractResult = false;
 let currentGalleryInfo = null;
@@ -567,6 +570,7 @@ function render(items) {
     if (primaryAudioBtn) primaryAudioBtn.hidden = true;
     emptyEl.hidden   = false;
     moreEl.hidden    = true;
+    if (technicalEl) technicalEl.hidden = currentTechnicalItems.length === 0;
     if (bulkActions) bulkActions.hidden = true;
     selectedItemKeys = new Set();
     return;
@@ -629,6 +633,32 @@ function render(items) {
   updateBulkControls();
 }
 
+function renderTechnicalSources(items) {
+  currentTechnicalItems = Array.isArray(items) ? items : [];
+  if (!technicalEl || !technicalList) return;
+  if (!currentTechnicalItems.length) {
+    technicalEl.hidden = true;
+    technicalList.innerHTML = "";
+    return;
+  }
+  technicalEl.hidden = false;
+  const summary = technicalEl.querySelector("summary");
+  if (summary) summary.textContent = `Show technical sources (${currentTechnicalItems.length})`;
+  technicalList.innerHTML = "";
+  currentTechnicalItems.slice(0, 20).forEach((item) => {
+    const li = document.createElement("li");
+    li.innerHTML = `
+      <div class="row-meta">
+        <div class="row-title">${escapeHtml(titleOf(item, hostname(item.url)))}</div>
+        <div class="row-sub">${escapeHtml([item.reason, itemMeta(item), hostname(item.url)].filter(Boolean).join(" - "))}</div>
+      </div>
+      <button type="button" title="Save raw source" aria-label="Save raw source"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></button>
+    `;
+    li.querySelector("button").addEventListener("click", () => downloadItem(item));
+    technicalList.appendChild(li);
+  });
+}
+
 function reconcileSelection(items) {
   const validKeys = new Set(items.map(itemKey).filter(Boolean));
   selectedItemKeys = new Set([...selectedItemKeys].filter((key) => validKeys.has(key)));
@@ -657,6 +687,7 @@ function refresh() {
   chrome.runtime.sendMessage({ type: "fcdl:list", tabId: currentTabId }, (resp) => {
     if (!resp) return;
     const items = resp.items || [];
+    renderTechnicalSources(resp.technicalItems || []);
     renderHelperStatus(needsCompanion(currentPageUrl, items));
     if (pinnedExtractResult) return;
     if (waitingForCapturedMedia && items.some(isCapturedVideo)) {
@@ -966,8 +997,13 @@ async function downloadItem(item) {
     setErrorStatus(resp?.error, "Download failed.");
     return;
   }
-  
-  if (!isCompanion || !helperLikelyReady) {
+
+  const usedCompanion = resp.route === "local helper";
+  if (usedCompanion && !progressPollInterval) {
+    startProgressPolling(resp.progressUrl || item.url || currentPageUrl);
+  }
+
+  if (!usedCompanion && (!isCompanion || !helperLikelyReady)) {
     if (resp.downloadId) {
       startDownloadTracking(resp.downloadId);
     } else {

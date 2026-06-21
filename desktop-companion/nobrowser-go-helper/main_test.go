@@ -147,16 +147,22 @@ func TestYtDlpDownloadArgsUseSteadierDefaults(t *testing.T) {
 	args := ytDlpDownloadArgs("best", "/tmp/ffmpeg", "/tmp/out", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "", false)
 	joined := strings.Join(args, "\x00")
 	for _, want := range []string{
-		"--retries\x0010",
-		"--fragment-retries\x0020",
+		"--continue",
+		"--retries\x00infinite",
+		"--fragment-retries\x00infinite",
 		"--file-access-retries\x005",
+		"--retry-sleep\x003",
 		"--socket-timeout\x0030",
+		"--http-chunk-size\x0010M",
 		"--concurrent-fragments\x004",
 		"--extractor-args\x00youtube:player_client=default",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("download args missing %q: %#v", want, args)
 		}
+	}
+	if strings.Contains(joined, "--no-part") {
+		t.Fatalf("download args must preserve resumable partial files: %#v", args)
 	}
 }
 
@@ -209,16 +215,52 @@ func TestBilibiliAPIHelpersPickDashAndDurl(t *testing.T) {
 			map[string]interface{}{"url": "https://large.mp4", "size": float64(20)},
 		},
 	}
-	video, audio := pickBilibiliDash(play, "1080")
+	video, audio := pickBilibiliDash(play, "1080", false)
 	if video != "https://v-1080.m4s" || audio != "https://a-high.m4s" {
 		t.Fatalf("unexpected DASH pick: video=%q audio=%q", video, audio)
 	}
-	video, _ = pickBilibiliDash(play, "720")
+	video, _ = pickBilibiliDash(play, "720", false)
 	if video != "https://v-720.m4s" {
 		t.Fatalf("height cap should pick 720p, got %q", video)
 	}
+	previewOnly := map[string]interface{}{
+		"dash": map[string]interface{}{
+			"video": []interface{}{map[string]interface{}{"baseUrl": "https://preview-480.m4s", "height": float64(480)}},
+			"audio": []interface{}{map[string]interface{}{"baseUrl": "https://audio.m4s", "bandwidth": float64(128)}},
+		},
+	}
+	video, _ = pickBilibiliDash(previewOnly, "1080", true)
+	if video != "" {
+		t.Fatalf("clean HD selection must reject a 480p preview, got %q", video)
+	}
 	if got := pickBilibiliDurl(play); got != "https://large.mp4" {
 		t.Fatalf("unexpected durl pick: %q", got)
+	}
+}
+
+func TestBilibiliTVCleanDashRequiresNoWatermarkFlag(t *testing.T) {
+	play := map[string]interface{}{
+		"accept_quality":     []interface{}{float64(80), float64(64)},
+		"accept_watermark":   []interface{}{true, false},
+		"accept_description": []interface{}{"高清 1080P", "高清 720P"},
+		"dash": map[string]interface{}{
+			"video": []interface{}{
+				map[string]interface{}{"baseUrl": "https://watermarked-1080.m4s", "id": float64(80), "height": float64(1080), "codecs": "avc1.640033"},
+				map[string]interface{}{"baseUrl": "https://clean-720.m4s", "id": float64(64), "height": float64(720), "codecs": "avc1.640033"},
+			},
+			"audio": []interface{}{
+				map[string]interface{}{"baseUrl": "https://audio.m4s", "bandwidth": float64(128)},
+			},
+		},
+	}
+	video, audio := pickBilibiliTVCleanDash(play, "1080")
+	if video != "https://clean-720.m4s" || audio != "https://audio.m4s" {
+		t.Fatalf("expected only no-watermark TV quality, got video=%q audio=%q", video, audio)
+	}
+	play["accept_watermark"] = []interface{}{true, true}
+	video, audio = pickBilibiliTVCleanDash(play, "1080")
+	if video != "" || audio != "" {
+		t.Fatalf("all-watermarked TV qualities must not be treated as clean: video=%q audio=%q", video, audio)
 	}
 }
 

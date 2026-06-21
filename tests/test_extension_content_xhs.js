@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const contentScript = fs.readFileSync(path.join(__dirname, "extension", "content.js"), "utf8");
+const contentScript = fs.readFileSync(path.join(__dirname, "..", "extension", "content.js"), "utf8");
 
 function createElement(tagName, attrs = {}) {
   return {

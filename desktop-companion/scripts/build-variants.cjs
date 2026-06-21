@@ -140,6 +140,17 @@ function writeMacAppBundle(appDir, helperBin, arch) {
   <string>FCDownloader Native Helper</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>FCDownloader Companion</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>fcdownloader-companion</string>
+      </array>
+    </dict>
+  </array>
   <key>CFBundleShortVersionString</key>
   <string>${plistEscape(VERSION)}</string>
   <key>CFBundleVersion</key>

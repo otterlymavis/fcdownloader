@@ -18,7 +18,7 @@
 import { FCDL_DEFAULT_BACKEND } from "./config.js";
 const DEFAULT_BACKEND = (FCDL_DEFAULT_BACKEND || "").trim().replace(/\/+$/, "");
 const DEBUG_LOGS = false;
-const LOCAL_HELPER_MIN_VERSION = "0.3.0-go";
+const LOCAL_HELPER_MIN_VERSION = "0.4.0-go";
 const LOCAL_HELPER_STATUS_TIMEOUT_MS = 3500;
 const LOCAL_HELPER_START_TIMEOUT_MS = 20000;
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i;
@@ -80,7 +80,7 @@ const requestHeadersByUrl = new Map();
 function ensureTab(tabId, pageUrl) {
   let s = tabState.get(tabId);
   if (!s || s.pageUrl !== pageUrl) {
-    s = { tabId, pageUrl, items: [], sourceAudit: [], preferCapturedMedia: false, updatedAt: Date.now() };
+    s = { tabId, pageUrl, items: [], technicalItems: [], sourceAudit: [], preferCapturedMedia: false, updatedAt: Date.now() };
     tabState.set(tabId, s);
   }
   return s;
@@ -267,10 +267,24 @@ function isBilibiliNetworkNoise(url) {
     const parsed = new URL(url);
     const host = parsed.hostname.toLowerCase();
     const path = parsed.pathname.toLowerCase();
+    // Bilibili pages fan out into many DASH video/audio segment URLs on
+    // bilivideo/hdslb/upos mirrors. Those are not user-facing downloads: the
+    // helper should download the page URL and choose/mux the real media.
+    if (
+      /(?:^|\.)bilivideo\.(?:com|cn)$/i.test(host) ||
+      /(?:^|\.)hdslb\.com$/i.test(host) ||
+      /^upos-[a-z0-9-]+/i.test(host) ||
+      /(?:^|\.)akamaized\.net$/i.test(host) && /^upos-/i.test(host) ||
+      /\/upgcxcode\//i.test(path) ||
+      /\/live-bvc\//i.test(path) ||
+      /\/bfs\//i.test(path)
+    ) return true;
+    if (/^(?:broadcast\.chat|api|api\.vc|data)\.bilibili\.com$/i.test(host)) return true;
+    if (/^(?:api|api\.vc|data)\.bilibili\.com$/i.test(host)) return true;
+    if (/(?:^|\.)biliapi\.(?:com|net)$/i.test(host)) return true;
     if (/\.(?:m4s|mp4|m4v|webm|mov|m3u8|mpd|mp3|m4a|aac)(?:$|[?#])/i.test(path)) return false;
     if (/^(?:api|api\.vc|data)\.bilibili\.com$/i.test(host)) return true;
     if (/^(?:i\d*|s\d*|archive)\.hdslb\.com$/i.test(host)) return true;
-    if (/(?:^|\.)biliapi\.(?:com|net)$/i.test(host)) return true;
     return false;
   } catch {
     return false;
@@ -335,6 +349,63 @@ function xhsFallbackItem(pageUrl) {
   };
 }
 
+function isPageLevelMediaItem(item) {
+  if (!item || item.source === "network") return false;
+  if (item.source === "backend" || item.backendRouted) return true;
+  if (item.source === "youtube-hd-local" || item.source === "youtube-hd-server") return true;
+  if (item.source === "bili-playinfo" || item.source === "weibo-page" || item.source === "japanese-page") return true;
+  if (item.source === "xhs-state" || item.source === "xhs-page") return true;
+  if (item.kind === "embed" || item.source === "iframe") return true;
+  return false;
+}
+
+function sameSiteHost(a, b) {
+  try {
+    const ah = new URL(a).hostname.toLowerCase();
+    const bh = new URL(b).hostname.toLowerCase();
+    return ah === bh || ah.endsWith(`.${bh}`) || bh.endsWith(`.${ah}`);
+  } catch {
+    return false;
+  }
+}
+
+function isLikelyCdnFragmentUrl(mediaUrl, pageUrl = "") {
+  try {
+    const parsed = new URL(mediaUrl);
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+    const query = parsed.search.toLowerCase();
+    if (isBilibiliNetworkNoise(mediaUrl)) return true;
+    if (sameSiteHost(mediaUrl, pageUrl) && !/(?:segment|fragment|chunk|frag|hls|dash|m3u8|mpd|m4s)/i.test(path)) return false;
+    if (/\.(?:m4s|m4a)(?:$|[?#])/i.test(path)) return true;
+    if (/(?:^|[\/_.-])(?:seg(?:ment)?|frag(?:ment)?|chunk|part)[-_]?\d+/i.test(path)) return true;
+    if (/[?&](?:range|rn|deadline|expires?|token|signature|sig|policy|x-amz-|hdnea|hdnts|bytestart|byteend)=/i.test(query)) return true;
+    if (/(?:^|\.)((?:akamaized|akamaihd|cloudfront|fastly|edgesuite|edgekey|bilivideo|googlevideo|byteoversea|bytecdn|mcdn|cdn|vod|video-cdn)\.(?:net|com|cn)|.*(?:cdn|edge|cache|vod|media|video|stream).*)$/i.test(host) && !sameSiteHost(mediaUrl, pageUrl)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function hasPageLevelMediaItem(state) {
+  return Boolean(state?.items?.some(isPageLevelMediaItem));
+}
+
+function addTechnicalItem(state, item, reason = "technical source") {
+  if (!state || !item?.url) return;
+  const baseUrl = item.url.replace(/[?&]range=[^&]*/g, "").replace(/[?&]rn=[^&]*/g, "");
+  if ((state.technicalItems || []).some((i) => i.url === baseUrl || i.url === item.url)) return;
+  const tech = {
+    ...item,
+    url: baseUrl,
+    reason,
+    capturedAt: Date.now(),
+    priority: itemPriority(item, state.preferCapturedMedia),
+  };
+  state.technicalItems = [tech, ...(state.technicalItems || [])].slice(0, 30);
+  state.updatedAt = Date.now();
+}
+
 function pruneXhsTabState(tabId, pageUrl) {
   if (tabId == null || !isXhsPageUrl(pageUrl)) return [];
   const s = ensureTab(tabId, pageUrl);
@@ -352,7 +423,14 @@ function addItem(tabId, pageUrl, item) {
   const s = ensureTab(tabId, pageUrl);
   if (!item || !item.url) return;
   if (isXhsPageUrl(pageUrl) && item.source === "network") return;
-  if (isBilibiliPageUrl(pageUrl) && item.source === "network" && isBilibiliNetworkNoise(item.url)) return;
+  if (item.source === "network" && hasPageLevelMediaItem(s) && isLikelyCdnFragmentUrl(item.url, pageUrl)) {
+    addTechnicalItem(s, item, "Hidden because a better page-level media item exists");
+    return;
+  }
+  if (isBilibiliPageUrl(pageUrl) && item.source === "network" && isBilibiliNetworkNoise(item.url)) {
+    addTechnicalItem(s, item, "Bilibili CDN/audio/video fragment");
+    return;
+  }
   if (item.kind === "image" && isLikelyThumbnailUrl(item.url)) return;
   auditSourceCandidate(tabId, pageUrl, {
     url: item.url,
@@ -368,6 +446,17 @@ function addItem(tabId, pageUrl, item) {
   }
   if (isXhsPageUrl(pageUrl) && isXhsExtractorItem(item)) {
     s.items = s.items.filter((i) => isXhsExtractorItem(i));
+  }
+  if (isPageLevelMediaItem(item)) {
+    const kept = [];
+    for (const existing of s.items) {
+      if (existing.source === "network" && isLikelyCdnFragmentUrl(existing.url, pageUrl)) {
+        addTechnicalItem(s, existing, "Hidden because a better page-level media item exists");
+      } else {
+        kept.push(existing);
+      }
+    }
+    s.items = kept;
   }
   // De-dupe by URL (strip range / rn so byte-segment requests collapse onto
   // their master URL).
@@ -430,7 +519,18 @@ try {
         if (!details.tabId || details.tabId < 0) return;
         const u = details.url;
         if (!u || u.length < 12) return;
-        if (isBilibiliNetworkNoise(u)) return;
+        if (isBilibiliNetworkNoise(u)) {
+          chrome.tabs.get(details.tabId).then((tab) => {
+            if (!tab?.url) return;
+            const state = ensureTab(details.tabId, tab.url);
+            addTechnicalItem(state, {
+              url: u,
+              kind: mediaKindForUrl(u),
+              source: "network",
+            }, "Bilibili CDN/audio/video fragment");
+          }).catch(() => {});
+          return;
+        }
         const contentType = details.responseHeaders?.find((h) => /content-type/i.test(h.name))?.value || "";
         const mediaByType = NETWORK_CAPTURE_MEDIA_TYPES.some((type) =>
           contentType.toLowerCase().startsWith(type.toLowerCase())
@@ -522,6 +622,22 @@ async function cookieHeaderFor(url) {
     const cookies = await chrome.cookies.getAll({ url });
     if (!cookies || !cookies.length) return "";
     // Format as Cookie: name=value; name=value
+    return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  } catch {
+    return "";
+  }
+}
+
+// Remote-cookie consent must not disable authentication for the local
+// companion. These cookies stay on loopback and let sites such as Bilibili
+// expose clean HD streams instead of anonymous watermarked previews.
+async function localHelperCookieHeaderFor(url) {
+  try {
+    if (/(?:youtube\.com|youtu\.be|googlevideo\.com)/i.test(url || "")) {
+      return youtubeCookieHeader();
+    }
+    const cookies = await chrome.cookies.getAll({ url });
+    if (!cookies || !cookies.length) return "";
     return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
   } catch {
     return "";
@@ -1206,6 +1322,7 @@ async function downloadItem(tabId, item) {
   const downloadPageUrl = item.pageUrl || referer || urlForBackend || tabPageUrl;
   const cookieSourceUrl = referer || urlForBackend;
   const cookies = await cookieHeaderFor(cookieSourceUrl);
+  const localHelperCookies = await localHelperCookieHeaderFor(cookieSourceUrl);
   const { backend, removeWatermark } = await getSettings();
 
   debugLog("[fcdl] download", {
@@ -1260,7 +1377,7 @@ async function downloadItem(tabId, item) {
       ? (downloadPageUrl || urlForBackend)
       : (urlForBackend || downloadPageUrl));
   const isBilibiliHelperTarget = isBilibiliPageUrl(helperTarget);
-  const helperHeaders = cookieHeaderList(cookies);
+  const helperHeaders = cookieHeaderList(localHelperCookies);
   const helperCanTry =
     item.kind !== "image" &&
     helperTarget &&
@@ -1355,7 +1472,7 @@ async function downloadItem(tabId, item) {
       if (!setup.ok) throw new Error(setup.error || "Companion video tools are not ready.");
     }
     const localUrl = localHelperDownloadUrl(helperTarget, false, {
-      removeWatermark: removeWatermark && isBilibiliHelperTarget,
+      removeWatermark: isBilibiliHelperTarget || removeWatermark,
     });
     const check = await preflightLocalHelperUrl(localUrl, helperHeaders);
     if (!check.ok) throw new Error(check.error);
@@ -1391,7 +1508,13 @@ async function downloadItem(tabId, item) {
   const errors = [];
   for (const route of routes) {
     try {
-      return await route.run();
+      const result = await route.run();
+      if (result && typeof result === "object" && result.downloadId) return result;
+      return {
+        downloadId: result,
+        route: route.name,
+        progressUrl: route.name === "local helper" ? helperTarget : "",
+      };
     } catch (e) {
       const message = String(e?.message || e);
       errors.push(`${route.name}: ${message}`);
@@ -1671,7 +1794,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const s = tabId != null ? tabState.get(tabId) : null;
       const pageUrl = tab?.url || "";
       const items = isXhsPageUrl(pageUrl) ? pruneXhsTabState(tabId, pageUrl) : (s?.items || []);
-      sendResponse({ pageUrl, items, settings: await getSettings() });
+      sendResponse({ pageUrl, items, technicalItems: s?.technicalItems || [], settings: await getSettings() });
       return;
     }
     if (msg.type === "fcdl:helper_status") {
@@ -1749,8 +1872,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     if (msg.type === "fcdl:download") {
       try {
-        const id = await downloadItem(msg.tabId, msg.item);
-        sendResponse({ ok: true, downloadId: id });
+        const result = await downloadItem(msg.tabId, msg.item);
+        sendResponse({ ok: true, ...result });
       } catch (e) {
         sendResponse({ ok: false, error: String(e.message || e) });
       }

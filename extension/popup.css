@@ -317,12 +317,14 @@ button, .primary, .ghost {
 
 /* ── "Other videos" details ──────────────────────────────────────────── */
 
-#more {
+#more,
+#technical {
   margin: 0;
   border-top: 1px solid var(--border);
   padding-top: 10px;
 }
-#more summary {
+#more summary,
+#technical summary {
   cursor: pointer;
   color: var(--ink-2);
   font-size: 12px;
@@ -330,8 +332,10 @@ button, .primary, .ghost {
   list-style: none;
   user-select: none;
 }
-#more summary::-webkit-details-marker { display: none; }
-#more summary::before {
+#more summary::-webkit-details-marker,
+#technical summary::-webkit-details-marker { display: none; }
+#more summary::before,
+#technical summary::before {
   content: "▸";
   display: inline-block;
   margin-right: 6px;
@@ -339,14 +343,17 @@ button, .primary, .ghost {
   transition: transform 0.15s;
   color: var(--ink-3);
 }
-#more[open] summary::before { transform: rotate(90deg); }
+#more[open] summary::before,
+#technical[open] summary::before { transform: rotate(90deg); }
 
-#more-list {
+#more-list,
+#technical-list {
   list-style: none;
   margin: 8px 0 0;
   padding: 0;
 }
-#more-list li {
+#more-list li,
+#technical-list li {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -354,22 +361,26 @@ button, .primary, .ghost {
   border-bottom: 1px solid var(--border);
   font-size: 12px;
 }
-#more-list li:last-child { border-bottom: none; }
+#more-list li:last-child,
+#technical-list li:last-child { border-bottom: none; }
 #more-list .best-media-row {
   align-items: flex-start;
 }
-#more-list .row-meta {
+#more-list .row-meta,
+#technical-list .row-meta {
   flex: 1;
   min-width: 0;
 }
-#more-list .row-title {
+#more-list .row-title,
+#technical-list .row-title {
   font-weight: 500;
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-#more-list .row-sub {
+#more-list .row-sub,
+#technical-list .row-sub {
   color: var(--ink-3);
   font-size: 11px;
   white-space: nowrap;
@@ -411,7 +422,8 @@ button, .primary, .ghost {
   padding: 6px 10px;
   font-size: 12px;
 }
-#more-list button {
+#more-list button,
+#technical-list button {
   font-size: 11px;
   padding: 5px 10px;
   min-height: 28px;
@@ -423,10 +435,16 @@ button, .primary, .ghost {
 #more-list .audio-btn {
   color: var(--ink);
 }
-#more-list button:hover {
+#more-list button:hover,
+#technical-list button:hover {
   background: var(--surface-2);
   color: var(--ink);
   border-color: var(--border-strong);
+}
+.technical-note {
+  margin: 4px 0 6px;
+  color: var(--ink-3);
+  font-size: 11px;
 }
 
 /* ── Footer ──────────────────────────────────────────────────────────── */

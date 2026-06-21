@@ -2,7 +2,7 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 
-const popup = fs.readFileSync(path.join(__dirname, "extension", "popup.js"), "utf8");
+const popup = fs.readFileSync(path.join(__dirname, "..", "extension", "popup.js"), "utf8");
 
 assert(
   popup.includes("Backend not set; Companion and direct downloads still work."),
@@ -15,6 +15,10 @@ assert(
 assert(
   !popup.includes("return;  // skip the refresh loop: nothing to fetch"),
   "popup should keep refreshing detected media without a backend",
+);
+assert(
+  popup.includes("renderTechnicalSources") && popup.includes("Show technical sources"),
+  "popup should expose hidden raw captures behind a technical sources toggle",
 );
 
 console.log("extension popup companion-only tests passed");

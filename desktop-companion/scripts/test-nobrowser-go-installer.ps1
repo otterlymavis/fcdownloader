@@ -68,7 +68,7 @@ $process = Start-Process -FilePath $tray -PassThru -WindowStyle Hidden
 $env:FCDL_HELPER_CACHE_DIR = $oldCache
 try {
   $health = Wait-Health
-  if ($health.version -ne '0.3.0-go') { throw "unexpected helper version: $($health.version)" }
+  if ($health.version -ne '0.4.0-go') { throw "unexpected helper version: $($health.version)" }
 } finally {
   if ($process -and !$process.HasExited) {
     Stop-Process -Id $process.Id -Force

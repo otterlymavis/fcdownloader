@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const backgroundScript = fs.readFileSync(path.join(__dirname, "extension", "background.js"), "utf8")
+const backgroundScript = fs.readFileSync(path.join(__dirname, "..", "extension", "background.js"), "utf8")
   .replace(/import \{ FCDL_DEFAULT_BACKEND \} from "\.\/config\.js";/, 'const FCDL_DEFAULT_BACKEND = "";');
 
 const listeners = [];
