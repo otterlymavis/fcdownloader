@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 import { DetectedMedia, DownloadStatus, DownloadStrategy, DownloadTask } from '../types';
 import { deleteDownload } from '../lib/hlsDownloader';
 import { DRMProtectedError, pickStrategy, runDownload } from '../lib/downloadStrategies';
@@ -167,18 +168,23 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
           }
         }
 
+        const isBrowserHandoff = Platform.OS === 'web';
+        const finalStatus: DownloadStatus = isBrowserHandoff ? 'handed_off' : 'completed';
+        const finishedAt = Date.now();
         const completedTask: DownloadTask = {
           ...task,
-          status: 'completed',
+          status: finalStatus,
           progress: 1,
           localPlaylistPath,
-          completedAt: Date.now(),
+          completedAt: isBrowserHandoff ? undefined : finishedAt,
+          browserHandoffAt: isBrowserHandoff ? finishedAt : undefined,
         };
         update(id, {
-          status: 'completed',
+          status: finalStatus,
           progress: 1,
           localPlaylistPath,
-          completedAt: Date.now(),
+          completedAt: isBrowserHandoff ? undefined : finishedAt,
+          browserHandoffAt: isBrowserHandoff ? finishedAt : undefined,
         });
         optionsRef.current.onComplete?.(completedTask);
       } catch (err) {
@@ -211,7 +217,7 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
   useEffect(() => {
     if (!isHydrated) return;
     for (const task of tasks) {
-      if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') continue;
+      if (task.status === 'completed' || task.status === 'handed_off' || task.status === 'failed' || task.status === 'cancelled') continue;
       if (resumedTaskIds.current.has(task.id)) continue;
 
       const dedupeKey = getDownloadDedupeKey(task.media);
@@ -278,6 +284,7 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
         error: undefined,
         localPlaylistPath: undefined,
         completedAt: undefined,
+        browserHandoffAt: undefined,
       };
       update(taskId, task);
       void _run(task);
@@ -299,10 +306,10 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
   );
 
   const active = tasks.filter(
-    (t) => t.status !== 'completed' && t.status !== 'failed' && t.status !== 'cancelled',
+    (t) => t.status !== 'completed' && t.status !== 'handed_off' && t.status !== 'failed' && t.status !== 'cancelled',
   );
   const history = tasks.filter(
-    (t) => t.status === 'completed' || t.status === 'failed',
+    (t) => t.status === 'completed' || t.status === 'handed_off' || t.status === 'failed',
   );
 
   return { tasks, active, history, enqueue, retry, cancel, remove };

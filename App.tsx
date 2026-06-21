@@ -376,7 +376,12 @@ export default function App() {
 
   // ── Download manager ──────────────────────────────────────
   const { active, history, enqueue, retry, cancel, remove } = useDownloadManager({
-    onComplete: useCallback(() => showToast(translate('downloadComplete', resolvedLangRef.current), 'success'), [showToast]),
+    onComplete: useCallback((task: DownloadTask) => {
+      showToast(
+        translate(task.status === 'handed_off' ? 'downloadStarted' : 'downloadComplete', resolvedLangRef.current),
+        'success',
+      );
+    }, [showToast]),
     onError:    useCallback((task: DownloadTask) => {
       const lang = resolvedLangRef.current;
       if (task.errorCode === 'AUTH_REQUIRED') showToast(translate('authRequired', lang), 'error');
@@ -643,7 +648,7 @@ export default function App() {
 
   const allTasks    = useMemo(() => [...active, ...history], [active, history]);
   const doneTasks   = useMemo(() => history.filter((t) => t.status === 'completed'), [history]);
-  const failedTasks = useMemo(() => history.filter((t) => t.status !== 'completed'), [history]);
+  const failedTasks = useMemo(() => history.filter((t) => t.status === 'failed'), [history]);
 
   const filteredActive = useMemo(() => {
     if (libFilter === 'failed') return [];
@@ -654,8 +659,8 @@ export default function App() {
 
   const filteredHistory = useMemo(() => {
     if (libFilter === 'all') return history;
-    if (libFilter === 'videos') return history.filter(t => getMediaKind(t.media) === 'video' && t.status === 'completed');
-    if (libFilter === 'audio') return history.filter(t => getMediaKind(t.media) === 'audio' && t.status === 'completed');
+    if (libFilter === 'videos') return history.filter(t => getMediaKind(t.media) === 'video' && t.status !== 'failed');
+    if (libFilter === 'audio') return history.filter(t => getMediaKind(t.media) === 'audio' && t.status !== 'failed');
     if (libFilter === 'failed') return history.filter(t => t.status === 'failed');
     return history;
   }, [history, libFilter]);
@@ -1491,6 +1496,7 @@ export default function App() {
                 const resolution  = getMediaResolution(task.media);
                 const size        = fileSizes[task.id];
                 const isDone      = task.status === 'completed';
+                const isHandedOff = task.status === 'handed_off';
                 const isFail      = task.status === 'failed';
                 const canSaveToLibrary = !!task.localPlaylistPath && getMediaKind(task.media) !== 'audio';
                 const isSelected  = libSelected.has(task.id);
@@ -1543,6 +1549,7 @@ export default function App() {
                       <Text style={[s.libraryCardSub,
                         { color: isFail ? t.red : t.ink2, fontSize: fs(12), textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]} numberOfLines={1}>
                         {isDone   ? `${translate('saved', resolvedLanguage)}${size ? `  ·  ${size}` : ''}`
+                         : isHandedOff ? translate('downloadStarted', resolvedLanguage)
                          : isFail ? (
                              task.errorCode === 'AUTH_REQUIRED' ? translate('authRequired', resolvedLanguage) :
                              task.errorCode === 'GEO_BLOCKED'   ? translate('geoBlocked', resolvedLanguage) :
@@ -1599,6 +1606,10 @@ export default function App() {
                         {isDone ? (
                           <View style={[s.statusCircle, { backgroundColor: t.greenBg, borderColor: t.green, borderWidth: 1 }]}>
                             <Icon name="checkmark" size={16} color={t.green} />
+                          </View>
+                        ) : isHandedOff ? (
+                          <View style={[s.statusCircle, { backgroundColor: t.card2, borderColor: t.sep, borderWidth: 1 }]}>
+                            <Icon name="download" size={16} color={t.ink2} />
                           </View>
                         ) : isFail ? (
                           <>

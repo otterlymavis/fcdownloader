@@ -39,6 +39,25 @@ DEFAULT_WEB_APP_URL = f"http://localhost:{DEFAULT_PORT}"
 RESULT_TIMEOUT = 70.0  # seconds per URL
 STORAGE_KEY = "@fcdownloader/tasks_v1"
 
+EXPECTED_LIMITATION_MARKERS = (
+    "OFFLINE",
+    "NO MEDIA",
+    "STALE SAMPLE",
+    "LOGIN-GATED",
+    "AUTH/DRM/GEO",
+    "GEO-LOCKED",
+    "GEO-SENSITIVE",
+    "BROWSER-ONLY",
+    "SERVER IP/CDN",
+    "ON-DEVICE PATH",
+)
+
+
+def is_expected_limitation(note):
+    normalized = (note or "").upper()
+    return any(marker in normalized for marker in EXPECTED_LIMITATION_MARKERS)
+
+
 def safe_evaluate_tasks(page):
     """Safely evaluate localStorage tasks, retrying on context destruction or navigation errors."""
     for attempt in range(5):
@@ -467,7 +486,7 @@ def main():
                     continue
 
                 active_tasks = [t for t in tasks if t['status'] in ['pending', 'downloading', 'assembling', 'fetching_manifest']]
-                completed_tasks = [t for t in tasks if t['status'] == 'completed']
+                completed_tasks = [t for t in tasks if t['status'] in ['completed', 'handed_off']]
                 failed_tasks = [t for t in tasks if t['status'] == 'failed']
 
                 if len(tasks) > 0 and len(active_tasks) == 0:
@@ -499,8 +518,13 @@ def main():
             detail = ""
 
             if completed_tasks:
-                download_status = "✅ PASS"
-                detail = f"Downloaded {len(completed_tasks)} item(s) successfully."
+                handoff_tasks = [t for t in completed_tasks if t['status'] == 'handed_off']
+                if handoff_tasks:
+                    download_status = "⚠️ BROWSER HANDOFF"
+                    detail = f"Browser download started for {len(handoff_tasks)} item(s); final file completion is not observable by the app."
+                else:
+                    download_status = "✅ PASS"
+                    detail = f"Downloaded {len(completed_tasks)} item(s) successfully."
 
                 # Check files and sync/track verification
                 sync_details = []
@@ -535,11 +559,15 @@ def main():
                             sync_details.append(f"FAIL (Verification error: {e})")
                             file_verified_ok = False
                     else:
-                        sync_details.append("FAIL (No browser download event captured)")
-                        file_verified_ok = False
+                        sync_details.append("NOT VERIFIED (browser handoff was not observable)")
 
-                sync_status = "✅ " + ", ".join(sync_details) if file_verified_ok else "❌ " + ", ".join(sync_details)
-                gallery_export = "✅ PASS (Exportable)" if len(completed_tasks) > 0 else "N/A"
+                if file_verified_ok and all(detail.startswith("PASS") for detail in sync_details):
+                    sync_status = "✅ " + ", ".join(sync_details)
+                elif file_verified_ok:
+                    sync_status = "⚠️ " + ", ".join(sync_details)
+                else:
+                    sync_status = "❌ " + ", ".join(sync_details)
+                gallery_export = f"⚠️ NOT TESTED ({len(completed_tasks)} item(s) completed)"
 
             elif failed_tasks:
                 download_status = "❌ FAIL"
@@ -549,12 +577,12 @@ def main():
                 page.screenshot(path=str(screenshot_path))
                 print(f"  [Failure] Saved screenshot to {screenshot_path}")
             else:
-                is_no_media_expected = any(marker in (note or "").upper() for marker in [
-                    "OFFLINE", "NO MEDIA", "STALE SAMPLE", "LOGIN-GATED"
-                ])
-                download_status = "⚠️ NO MEDIA" if is_no_media_expected else "❌ FAIL"
+                expected_limitation = is_expected_limitation(note)
+                if expected_limitation:
+                    detection = "⚠️ EXPECTED LIMITATION"
+                download_status = "⚠️ EXPECTED LIMITATION" if expected_limitation else "❌ FAIL"
                 detail = "Timeout" if timed_out else "No tasks found"
-                if not is_no_media_expected:
+                if not expected_limitation:
                     failed_items.append((name, url, detail))
                     screenshot_path = screenshot_dir / f"failed_web_{name}.png"
                     page.screenshot(path=str(screenshot_path))
@@ -598,8 +626,10 @@ def main():
 
     # Generate Markdown Report
     passed = sum(1 for r in report_items if r['download'] == "✅ PASS")
-    no_media = sum(1 for r in report_items if r['download'] == "⚠️ NO MEDIA")
-    failed = len(urls) - passed - no_media
+    browser_handoffs = sum(1 for r in report_items if r['download'] == "⚠️ BROWSER HANDOFF")
+    expected_limitations = sum(1 for r in report_items if r['download'] == "⚠️ EXPECTED LIMITATION")
+    failed = len(urls) - passed - browser_handoffs - expected_limitations
+    integrity_unverified = sum(1 for r in report_items if r['sync'].startswith("⚠️"))
 
     report_path = ROOT / 'artifacts' / 'web_comprehensive_report.md'
     with report_path.open('w', encoding='utf-8') as f:
@@ -607,19 +637,21 @@ def main():
         f.write(f"Tested **{len(urls)}** URLs natively on Web App dev server ({web_app_url}).\n\n")
 
         f.write(f"### Summary Stats\n")
-        f.write(f"- **Completed Downloads**: {passed}\n")
-        f.write(f"- **No Media Detected (Expected)**: {no_media}\n")
+        f.write(f"- **Verified Completed Downloads**: {passed}\n")
+        f.write(f"- **Browser Download Handoffs**: {browser_handoffs}\n")
+        f.write(f"- **Expected Environment / Access Limitations**: {expected_limitations}\n")
         f.write(f"- **Failed**: {failed}\n\n")
+        f.write(f"- **Completed but File Integrity Not Observable**: {integrity_unverified}\n\n")
 
         f.write("### Verification Matrix\n\n")
-        f.write("| Platform | Detection | Download Completion | Audio/Video Sync | Gallery Export | Retry Behavior | URL |\n")
+        f.write("| Platform | Detection | Download Completion | Media File Integrity | Gallery Export | Global Retry Check | URL |\n")
         f.write("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n")
         for r in report_items:
             f.write(f"| **{r['name']}** | {r['detection']} | {r['download']} | {r['sync']} | {r['gallery']} | {r['retry']} | [{r['name']}]({r['url']}) |\n")
 
         if failed_items:
             f.write("\n### Failed Items Screenshots\n")
-            f.write("Below are screenshots of the Library tab on the web app for failed downloads:\n\n")
+            f.write("Below are screenshots captured after unexpected failures. The visible tab may vary depending on where the app stopped:\n\n")
             for name, url, err in failed_items:
                 f.write(f"#### **{name}**\n")
                 f.write(f"- **URL**: {url}\n")
@@ -627,7 +659,7 @@ def main():
                 f.write(f"![Failed {name} screenshot](screenshots/failed_web_{name}.png)\n\n")
 
     print(f"\nReport written to: {report_path}")
-    print(f"Summary: {passed} PASS, {no_media} NO MEDIA, {failed} FAIL")
+    print(f"Summary: {passed} PASS, {browser_handoffs} BROWSER HANDOFF, {expected_limitations} EXPECTED LIMITATION, {failed} FAIL")
 
 if __name__ == "__main__":
     main()

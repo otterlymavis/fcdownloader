@@ -47,6 +47,26 @@ const BrowserView = forwardRef<WebView, Props>(
     { initialUrl, onMessage, onNavigationChange, onExtractPage, desktopMode = false, style, ...rest },
     ref
   ) => {
+    if (Platform.OS === 'web') {
+      return (
+        <View style={[styles.webRoot, style]}>
+          <Text style={styles.webTitle}>Browsing stays in your browser on web</Text>
+          <Text style={styles.webText} numberOfLines={3}>
+            FCDownloader cannot embed this page, but it can still extract media directly from the URL.
+          </Text>
+          <Text style={styles.webUrl} numberOfLines={2}>{initialUrl}</Text>
+          <View style={styles.errorActions}>
+            <Pressable style={styles.errorButton} onPress={() => onExtractPage?.(initialUrl)}>
+              <Text style={styles.errorButtonText}>Extract media</Text>
+            </Pressable>
+            <Pressable style={styles.webSecondaryButton} onPress={() => Linking.openURL(initialUrl).catch(() => {})}>
+              <Text style={styles.webSecondaryButtonText}>Open page</Text>
+            </Pressable>
+          </View>
+        </View>
+      );
+    }
+
     const handleNavStateChange = (state: WebViewNavigation) => {
       if (onNavigationChange && state.url) onNavigationChange(state.url);
     };
@@ -139,6 +159,52 @@ export default BrowserView;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  webRoot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 28,
+    backgroundColor: '#f8fafc',
+  },
+  webTitle: {
+    color: '#111827',
+    fontSize: 19,
+    fontWeight: '700',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  webText: {
+    color: '#4b5563',
+    fontSize: 14,
+    lineHeight: 20,
+    maxWidth: 520,
+    textAlign: 'center',
+  },
+  webUrl: {
+    color: '#6b7280',
+    fontSize: 12,
+    lineHeight: 17,
+    marginBottom: 20,
+    marginTop: 10,
+    maxWidth: 560,
+    textAlign: 'center',
+  },
+  webSecondaryButton: {
+    minWidth: 96,
+    height: 40,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderColor: '#d1d5db',
+    borderWidth: 1,
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 14,
+  },
+  webSecondaryButtonText: {
+    color: '#111827',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   errorRoot: {
     flex: 1,
     alignItems: 'center',

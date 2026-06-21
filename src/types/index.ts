@@ -6,6 +6,7 @@ export type DownloadStatus =
   | 'fetching_manifest'
   | 'downloading'
   | 'assembling'
+  | 'handed_off'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -119,4 +120,5 @@ export interface DownloadTask {
   errorCode?: string;
   createdAt: number;
   completedAt?: number;
+  browserHandoffAt?: number;
 }
