@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import shutil
+import base64
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -79,7 +80,9 @@ def verify_media_file(filepath, media_kind):
             return True, "Valid HEIC image"
         if header.startswith(b'GIF87a') or header.startswith(b'GIF89a'):
             return True, "Valid GIF image"
-        return True, f"Image file (size: {size} bytes)"
+        if len(header) >= 12 and header[4:8] == b'ftyp' and header[8:12] in (b'avif', b'avis'):
+            return True, "Valid AVIF image"
+        return False, f"Unrecognized image payload (size: {size} bytes)"
 
     elif media_kind == 'audio':
         if header.startswith(b'ID3') or header.startswith(b'\xff\xfb') or header.startswith(b'\xff\xf3'):
@@ -90,7 +93,9 @@ def verify_media_file(filepath, media_kind):
             return True, "Valid WAV audio"
         if b'ftypM4A' in header or b'ftypmp42' in header:
             return True, "Valid M4A/AAC audio"
-        return True, f"Audio file (size: {size} bytes)"
+        if header.startswith(b'fLaC'):
+            return True, "Valid FLAC audio"
+        return False, f"Unrecognized audio payload (size: {size} bytes)"
 
     elif media_kind == 'video':
         has_video, has_audio = check_mp4_tracks(filepath)
@@ -101,9 +106,24 @@ def verify_media_file(filepath, media_kind):
                 return True, "Video-only MP4 (No audio track required/found)"
         if header.startswith(b'#EXTM3U'):
             return True, "Valid HLS master playlist"
-        return True, f"Video file (size: {size} bytes)"
+        if header.startswith(b'\x1a\x45\xdf\xa3'):
+            return True, "Valid WebM/Matroska video"
+        if len(header) > 376 and header[0] == 0x47 and header[188] == 0x47:
+            return True, "Valid MPEG-TS video"
+        return False, f"Unrecognized video payload (size: {size} bytes)"
 
     return True, f"File verified (size: {size} bytes)"
+
+def record_verified_download(result, filepath, media_kind, pass_label, source_label):
+    track_ok, track_msg = verify_media_file(filepath, media_kind)
+    result["detail"] = track_msg
+    if not track_ok:
+        result["error"] = f"{source_label} returned an invalid media payload: {track_msg}"
+        return False
+    result["download"] = pass_label
+    if media_kind == "video":
+        result["sync"] = "✅ PASS" if "Muxed" in track_msg else "⚠️ Video Only"
+    return True
 
 def capture_screenshot(url, name):
     safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', name.lower())
@@ -166,6 +186,37 @@ def download_file(url, target_path, headers=None, timeout=30, max_size=5*1024*10
     except Exception as e:
         return False, str(e)
 
+MEDIA_EXTENSIONS = {
+    ".mp4", ".m4v", ".webm", ".mov", ".avi", ".mkv", ".mp3", ".m4a", ".aac",
+    ".opus", ".ogg", ".wav", ".flac", ".jpg", ".jpeg", ".png", ".gif", ".webp",
+    ".heic", ".m3u8", ".mpd",
+}
+MEDIA_KINDS = {"image", "video", "audio", "hls", "dash", "direct", "paired"}
+REPLAY_HEADERS = {"accept", "accept-language", "origin", "range", "referer", "user-agent"}
+
+def is_valid_media_item(item):
+    item_url = str(item.get("url") or "")
+    if not item_url.startswith(("http://", "https://")):
+        return False
+    path = urllib.parse.urlparse(item_url).path.lower()
+    kind = str(item.get("kind") or "").lower()
+    extractor = str(item.get("extractor") or "").lower()
+    return any(path.endswith(ext) for ext in MEDIA_EXTENSIONS) or kind in MEDIA_KINDS or "ytdl" in extractor
+
+def backend_proxy_url(item, page_url):
+    replay = {
+        str(key): str(value)
+        for key, value in (item.get("headers") or {}).items()
+        if str(key).lower() in REPLAY_HEADERS and value
+    }
+    referer = replay.get("Referer") or replay.get("referer") or item.get("referer") or page_url
+    params = {"url": item.get("url") or "", "referer": referer}
+    if replay:
+        params["headers"] = base64.urlsafe_b64encode(
+            json.dumps(replay, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii").rstrip("=")
+    return f"{BACKEND}/proxy?{urllib.parse.urlencode(params)}"
+
 def test_url(name, url, thread_id):
     print(f"[{thread_id}] Testing {name}: {url}")
     result = {
@@ -180,7 +231,8 @@ def test_url(name, url, thread_id):
         "error": None
     }
 
-    is_video = any(v in name.lower() or v in url.lower() for v in ["video", "bilibili", "twitcasting", "naver", "kakao", "youtube", "tiktok", "vimeo", "dailymotion"])
+    is_manifest = urllib.parse.urlparse(url).path.lower().endswith((".m3u8", ".mpd"))
+    is_video = is_manifest or any(v in name.lower() or v in url.lower() for v in ["video", "bilibili", "twitcasting", "naver", "kakao", "youtube", "tiktok", "vimeo", "dailymotion"])
     extracted_items = []
 
     # 1. Check Detection / Extract Info
@@ -225,19 +277,7 @@ def test_url(name, url, thread_id):
             return result
 
     # 2. Check Download & Tracks
-    valid_media_items = []
-    for item in extracted_items:
-        item_url = item.get("url") or ""
-        parsed_path = urllib.parse.urlparse(item_url).path.lower()
-        has_media_ext = any(parsed_path.endswith(ext) for ext in [
-            ".mp4", ".m4v", ".webm", ".mov", ".avi", ".mkv", ".mp3", ".m4a", ".aac",
-            ".opus", ".ogg", ".wav", ".flac", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic"
-        ])
-        if has_media_ext or item.get("kind") in ["image", "video", "audio"] or "ytdl" in item.get("extractor", ""):
-            # Skip HTML page links
-            if "/articles/" in item_url or item_url.endswith("/normal"):
-                continue
-            valid_media_items.append(item)
+    valid_media_items = [item for item in extracted_items if is_valid_media_item(item)]
 
     if not valid_media_items:
         result["error"] = f"No valid media items found after filtering (original count: {len(extracted_items)})"
@@ -246,6 +286,10 @@ def test_url(name, url, thread_id):
 
     first_item = valid_media_items[0]
     media_kind = first_item.get("kind", "video" if is_video else "image")
+    if media_kind in ("hls", "dash", "paired"):
+        media_kind = "video"
+    elif media_kind == "direct":
+        media_kind = "video" if is_video else "image"
     ext = first_item.get("ext", "mp4" if media_kind == "video" else "jpg")
     temp_file = TEMP_DOWNLOAD_DIR / f"temp_{thread_id}_{re.sub(r'[^a-zA-Z0-9]', '_', name.lower())}.{ext}"
 
@@ -254,20 +298,14 @@ def test_url(name, url, thread_id):
         download_url = f"{LOCAL_HELPER}/download?{urllib.parse.urlencode({'url': url, 'max_height': '1080'})}"
         ok, dl_err = download_file(download_url, temp_file, timeout=120)
         if ok:
-            result["download"] = "✅ PASS"
-            track_ok, track_msg = verify_media_file(temp_file, "video")
-            result["sync"] = "✅ PASS" if "Muxed" in track_msg else "⚠️ Video Only"
-            result["detail"] = track_msg
+            record_verified_download(result, temp_file, "video", "✅ PASS", "Helper")
         else:
             # Fallback direct download
             stream_url = first_item.get("url")
             if stream_url:
                 ok, dl_err2 = download_file(stream_url, temp_file, headers=first_item.get("headers"), timeout=120)
                 if ok:
-                    result["download"] = "✅ PASS (Direct Fallback)"
-                    track_ok, track_msg = verify_media_file(temp_file, "video")
-                    result["sync"] = "✅ PASS" if "Muxed" in track_msg else "⚠️ Video Only"
-                    result["detail"] = track_msg
+                    record_verified_download(result, temp_file, "video", "✅ PASS (Direct Fallback)", "Direct fallback")
                 else:
                     result["error"] = f"Download failed: Helper: {dl_err}, Direct: {dl_err2}"
                     result["screenshot"] = capture_screenshot(url, name)
@@ -280,12 +318,15 @@ def test_url(name, url, thread_id):
         if stream_url:
             ok, dl_err = download_file(stream_url, temp_file, headers=first_item.get("headers"), timeout=60)
             if ok:
-                result["download"] = "✅ PASS"
-                track_ok, track_msg = verify_media_file(temp_file, "image")
-                result["detail"] = track_msg
+                record_verified_download(result, temp_file, media_kind, "✅ PASS", "Direct download")
             else:
-                result["error"] = f"Direct download failed: {dl_err}"
-                result["screenshot"] = capture_screenshot(url, name)
+                ok, proxy_err = download_file(backend_proxy_url(first_item, url), temp_file, timeout=60)
+                if ok:
+                    if record_verified_download(result, temp_file, media_kind, "✅ PASS (Proxy Fallback)", "Proxy"):
+                        result["retry"] = "Backend Proxy"
+                else:
+                    result["error"] = f"Direct download failed: {dl_err}; Proxy: {proxy_err}"
+                    result["screenshot"] = capture_screenshot(url, name)
         else:
             result["error"] = "No direct media URL available for image download"
             result["screenshot"] = capture_screenshot(url, name)
