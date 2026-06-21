@@ -2,7 +2,7 @@ param(
   [string] $HelperExe = "$PSScriptRoot\..\build\nobrowser-go\FCDownloaderNativeHelper.exe",
   [string] $CacheDir = "$PSScriptRoot\..\..\artifacts\nobrowser-go-test-cache",
   [string] $OutDir = "$PSScriptRoot\..\..\artifacts\nobrowser-go-tests",
-  [string] $SampleUrl = "https://samplelib.com/lib/preview/mp4/sample-5s.mp4",
+  [string] $SampleUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
   [string] $YouTubeUrl = $env:FCDL_YOUTUBE_TEST_URL
 )
 
