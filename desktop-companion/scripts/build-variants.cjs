@@ -376,7 +376,7 @@ SectionEnd
   fs.writeFileSync(nsiPath, script.trimStart(), "utf8");
   const makeNsis = findMakeNsis();
   if (makeNsis) {
-    run(makeNsis, ["/V2", nsiPath]);
+    run(makeNsis, [process.platform === "win32" ? "/V2" : "-V2", nsiPath]);
   } else {
     console.warn("[variants] Warning: makensis not found. Skipping NSIS installer generation.");
   }
@@ -572,7 +572,7 @@ SectionEnd
   fs.writeFileSync(nsiPath, script.trimStart(), "utf8");
   const makeNsis = findMakeNsis();
   if (makeNsis) {
-    run(makeNsis, ["/V2", nsiPath]);
+    run(makeNsis, [process.platform === "win32" ? "/V2" : "-V2", nsiPath]);
   } else {
     console.warn("[variants] Warning: makensis not found. Skipping NSIS installer generation.");
   }
