@@ -350,6 +350,25 @@ def _safe_name(value: str) -> str:
     return out[:160] or "fcdownloader-media"
 
 
+_MEDIA_OUTPUT_EXTENSIONS = {
+    ".mp4", ".m4v", ".webm", ".mov", ".mkv", ".avi", ".flv", ".mpeg", ".mpg", ".3gp",
+    ".mp3", ".m4a", ".aac", ".wav", ".ogg", ".opus", ".flac",
+}
+
+
+def _validate_media_file(path: Path) -> Path:
+    """Reject metadata/error documents before they reach the browser download API."""
+    if path.suffix.lower() not in _MEDIA_OUTPUT_EXTENSIONS:
+        raise RuntimeError(f"downloader produced a non-media file ({path.suffix or 'no extension'})")
+    if not path.is_file() or path.stat().st_size == 0:
+        raise RuntimeError("downloader produced an empty media file")
+    with path.open("rb") as fh:
+        prefix = fh.read(512).lstrip().lower()
+    if prefix.startswith((b"{", b"[", b"<html", b"<!doctype html", b"<?xml")):
+        raise RuntimeError("downloader returned a JSON/page response instead of media")
+    return path
+
+
 def _is_allowed_url(url: str) -> bool:
     if not url or len(url) > MAX_URL_LENGTH:
         return False
@@ -423,6 +442,7 @@ def _helper_port() -> int:
 def _extract_formats(url: str, cookies: str | None = None) -> dict[str, Any]:
     cookie_file = _write_cookie_file(cookies, url)
     cmd = _yt_dlp_command([
+        "--ignore-config",
         "--dump-single-json",
         "--skip-download",
         "--no-warnings",
@@ -710,15 +730,20 @@ def _download_bili_api(tmpdir: Path, ffmpeg: str, page_url: str, max_height: str
         )
         if proc.returncode != 0:
             raise RuntimeError(f"ffmpeg Bilibili mux failed: {proc.stdout[-2000:]}")
-        return out_path
+        return _validate_media_file(out_path)
 
     media_url = _bili_pick_durl(play)
     if not media_url:
         raise RuntimeError("Bilibili API returned no downloadable media")
     req = urllib.request.Request(media_url, headers=_bili_api_headers("https://www.bilibili.com/", cookies))
     with urllib.request.urlopen(req, timeout=120) as resp, out_path.open("wb") as fh:
+        content_type = str(resp.headers.get("Content-Type", "")).lower()
+        first = resp.read(512)
+        if "json" in content_type or "html" in content_type or first.lstrip().lower().startswith((b"{", b"[", b"<html", b"<!doctype html")):
+            raise RuntimeError("Bilibili returned a JSON/page response instead of media")
+        fh.write(first)
         shutil.copyfileobj(resp, fh, length=1024 * 1024)
-    return out_path
+    return _validate_media_file(out_path)
 
 
 def _download(
@@ -738,6 +763,7 @@ def _download(
         cookie_file = _write_cookie_file(cookies, url)
         output_template = str(tmpdir / "%(title).120s-%(id)s.%(ext)s")
         cmd = _yt_dlp_command([
+            "--ignore-config",
             "-f",
             fmt,
             "--merge-output-format",
@@ -771,14 +797,14 @@ def _download(
             raise RuntimeError(proc.stdout[-2000:])
 
         files = sorted(
-            [p for p in tmpdir.iterdir() if p.is_file()],
+            [p for p in tmpdir.iterdir() if p.is_file() and p.suffix.lower() in _MEDIA_OUTPUT_EXTENSIONS],
             key=lambda p: p.stat().st_size,
             reverse=True,
         )
-        if not files or files[0].stat().st_size == 0:
+        if not files:
             shutil.rmtree(tmpdir, ignore_errors=True)
             raise RuntimeError("yt-dlp produced no media file")
-        return tmpdir, files[0]
+        return tmpdir, _validate_media_file(files[0])
     except Exception:
         if tmpdir.exists():
             shutil.rmtree(tmpdir, ignore_errors=True)

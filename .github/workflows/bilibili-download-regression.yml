@@ -1,0 +1,39 @@
+name: Bilibili Download Regression
+
+on:
+  workflow_dispatch:
+    inputs:
+      bilibili_url:
+        description: Optional public Bilibili video URL
+        required: false
+        type: string
+  schedule:
+    - cron: "31 4 * * 4"
+
+permissions:
+  contents: read
+
+jobs:
+  live-contract:
+    name: Live media contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Verify Bilibili download is media
+        env:
+          BILIBILI_URL: ${{ inputs.bilibili_url }}
+        run: |
+          if [ -n "$BILIBILI_URL" ]; then
+            python scripts/verify_download_contract.py --url "$BILIBILI_URL"
+          else
+            python scripts/verify_download_contract.py
+          fi

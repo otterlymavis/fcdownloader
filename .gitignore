@@ -119,6 +119,7 @@ test_mockup_pixels.py
 scripts/generate_ios_report.py
 
 # Generated test artifacts
+fcdownloader-web.zip
 fresh_urls.json
 ios_url_report.md
 extension_helper_report.md

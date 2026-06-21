@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import json
+import hashlib
 import os
 import re
 import sys
 import subprocess
 import shutil
-from urllib.parse import urlsplit, urlunsplit, unquote
+import time
+from datetime import datetime, timezone
+from urllib.parse import urlencode, urlsplit, urlunsplit, unquote
 from pathlib import Path
 
 # Add root to path
@@ -16,6 +19,7 @@ from scripts.url_catalog import all_urls
 SIM_UDID = "91DD8048-BB9A-42E8-8790-90D809267A88"
 PHONE_UDID = "00008110-001151CC0CF3801E"
 BUNDLE_ID = "com.otterpia.fcdownloader"
+TASKS_STORAGE_KEY = "@fcdownloader/tasks_v1"
 
 # Define expected media kinds for each platform/URL in the catalog
 EXPECTED_MEDIA_TYPES = {
@@ -287,9 +291,9 @@ def verify_media_file(filepath, expected_kind):
         has_video, has_audio = probed if probed is not None else check_mp4_tracks(filepath)
         if has_video:
             if has_audio:
-                return True, "Muxed MP4 (Audio + Video tracks present, in sync)"
+                return True, "Muxed MP4 (Audio + Video streams present)"
             else:
-                return True, "Video-only MP4 (No audio track found)"
+                return True, "Video-only MP4 (No audio stream found)"
         if header.startswith(b'#EXTM3U'):
             return False, "Expected downloaded video, but file is only an HLS manifest"
         return False, "Expected video, but no video stream could be verified"
@@ -311,6 +315,112 @@ def get_current_container():
             return str(candidates[0].parents[3])
     return None
 
+def get_tasks_db_file(db_dir):
+    """Resolve the exact AsyncStorage file for the download-task key."""
+    manifest_path = db_dir / 'manifest.json'
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"Could not read AsyncStorage manifest: {error}") from error
+
+    if TASKS_STORAGE_KEY not in manifest:
+        raise RuntimeError(f"AsyncStorage key {TASKS_STORAGE_KEY!r} was not found")
+    if manifest[TASKS_STORAGE_KEY] is not None:
+        raise RuntimeError("Task storage is inline in manifest.json; no pollable task file exists")
+
+    filename = hashlib.md5(TASKS_STORAGE_KEY.encode('utf-8')).hexdigest()
+    db_file = db_dir / filename
+    if not db_file.is_file():
+        raise RuntimeError(f"Task storage file is missing: {db_file}")
+    return db_file
+
+def read_tasks(db_file):
+    with open(db_file, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def task_status(tasks, task_id):
+    for task in tasks:
+        if task.get('id') == task_id:
+            return task.get('status'), task
+    return None, None
+
+def exercise_retry(db_file, task, timeout_seconds=90):
+    """Retry the same persisted task and verify that its state changes."""
+    task_id = task.get('id')
+    if not task_id:
+        return "❌ FAIL (task has no ID)"
+
+    previous_error = task.get('error')
+    previous_completed_at = task.get('completedAt')
+    previous_retry_count = task.get('retryCount', 0)
+    deep_link = f"fcdownloader://retry?{urlencode({'taskId': task_id})}"
+    proc = subprocess.run(
+        ['xcrun', 'simctl', 'openurl', SIM_UDID, deep_link],
+        capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "simctl openurl failed").strip()
+        return f"❌ FAIL ({detail[:120]})"
+
+    deadline = time.time() + timeout_seconds
+    observed_transition = False
+    last_status = task.get('status')
+    while time.time() < deadline:
+        time.sleep(1)
+        try:
+            current_tasks = read_tasks(db_file)
+        except (OSError, json.JSONDecodeError):
+            continue
+        status, current = task_status(current_tasks, task_id)
+        if current is None:
+            continue
+        last_status = status
+        if (
+            current.get('retryCount', 0) > previous_retry_count
+            or status != 'failed'
+            or current.get('error') != previous_error
+            or current.get('completedAt') != previous_completed_at
+        ):
+            observed_transition = True
+        if observed_transition and status in {'completed', 'failed', 'cancelled'}:
+            return f"✅ PASS (same task transitioned; final status: {status})"
+
+    if observed_transition:
+        return f"✅ PASS (same task transitioned; status after timeout: {last_status})"
+    return "❌ FAIL (same task never changed persisted state)"
+
+def exercise_gallery_export(container_path, task_id, timeout_seconds=30):
+    """Invoke the real Photos save path and verify its persisted result."""
+    nonce = str(int(time.time() * 1000))
+    result_path = Path(container_path) / 'Documents' / 'automation_gallery_result.json'
+    try:
+        result_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    deep_link = f"fcdownloader://gallery_test?{urlencode({'taskId': task_id, 'nonce': nonce})}"
+    proc = subprocess.run(
+        ['xcrun', 'simctl', 'openurl', SIM_UDID, deep_link],
+        capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "simctl openurl failed").strip()
+        return f"❌ FAIL ({detail[:120]})"
+
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        time.sleep(1)
+        try:
+            result = json.loads(result_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if result.get('nonce') != nonce:
+            continue
+        if result.get('success'):
+            return "✅ PASS (saved through MediaLibrary)"
+        return f"❌ FAIL ({str(result.get('error') or 'unknown error')[:120]})"
+    return "❌ FAIL (no MediaLibrary result was persisted)"
+
 def main():
     print("Reading AsyncStorage database from Simulator...")
     container_path = get_current_container()
@@ -319,20 +429,21 @@ def main():
         sys.exit(1)
 
     db_dir = Path(container_path) / 'Library' / 'Application Support' / BUNDLE_ID / 'RCTAsyncLocalStorage_V1'
-    db_files = list(db_dir.glob('*'))
-    db_file = None
-    for f in db_files:
-        if f.is_file() and f.name != 'manifest.json' and len(f.name) == 32:
-            db_file = f
-            break
-
-    if not db_file:
-        print("Error: AsyncStorage file not found.")
+    try:
+        db_file = get_tasks_db_file(db_dir)
+    except RuntimeError as error:
+        print(f"Error: {error}")
         sys.exit(1)
 
     print(f"Reading tasks from: {db_file}")
-    with open(db_file, 'r', encoding='utf-8') as f:
-        tasks = json.load(f)
+    tasks = read_tasks(db_file)
+    run_started_at_raw = os.environ.get('FCDL_RUN_STARTED_AT_MS')
+    try:
+        run_started_at = int(run_started_at_raw) if run_started_at_raw else None
+    except ValueError:
+        raise SystemExit("FCDL_RUN_STARTED_AT_MS must be an integer epoch timestamp in milliseconds")
+    if run_started_at is not None:
+        tasks = [task for task in tasks if task.get('createdAt', 0) >= run_started_at]
 
     # Group tasks by normalized pageUrl.
     url_tasks = {}
@@ -378,7 +489,7 @@ def main():
         detection = "✅ PASS" if matching else "❌ FAIL"
         download_status = "❌ FAIL"
         sync_status = "N/A"
-        gallery_export = "N/A"
+        gallery_export = "Not exercised"
         retry_behavior = "Not exercised"
         detail = "No tasks found"
 
@@ -415,17 +526,21 @@ def main():
                     sync_status = f"✅ PASS ({msg})"
                 else:
                     sync_status = f"N/A ({expected_kind.capitalize()})"
-                gallery_export = "✅ PASS (Exportable)"
+                gallery_export = (
+                    "N/A (Audio)"
+                    if expected_kind == 'audio'
+                    else "Eligible (not exercised)"
+                )
             else:
                 msg = rejected[0] if rejected else "No completed file could be verified"
-                download_status = "⚠️ EXPECTED LIMIT" if expected_limited else "❌ FAIL"
+                download_status = "⚠️ KNOWN LIMIT" if expected_limited else "❌ FAIL"
                 detail = f"Failed verification: {msg}"
                 sync_status = f"N/A (source limitation: {msg})" if expected_limited else f"❌ FAIL ({msg})"
                 gallery_export = "N/A" if expected_limited else "❌ FAIL"
                 if not expected_limited:
                     failed_items.append((name, url, detail))
         elif failed:
-            download_status = "⚠️ EXPECTED LIMIT" if expected_limited else "❌ FAIL"
+            download_status = "⚠️ KNOWN LIMIT" if expected_limited else "❌ FAIL"
             detail = f"Failed: {failed[0].get('error')}"
             sync_status = "N/A (source limitation)" if expected_limited else "❌ FAIL (No file)"
             gallery_export = "N/A" if expected_limited else "❌ FAIL"
@@ -436,10 +551,10 @@ def main():
                 detection = "✅ PASS (Picker)"
                 download_status = "⚠️ MANUAL PICKER"
             else:
-                download_status = "⚠️ EXPECTED LIMIT" if expected_limited else "❌ FAIL"
+                download_status = "⚠️ KNOWN LIMIT" if expected_limited else "❌ FAIL"
             detail = "No media detected"
             if expected_limited:
-                detection = "⚠️ EXPECTED LIMIT"
+                detection = "⚠️ KNOWN LIMIT"
             elif not manual_selection:
                 failed_items.append((name, url, "No media detected"))
 
@@ -453,44 +568,82 @@ def main():
             "sync": sync_status,
             "gallery": gallery_export,
             "retry": retry_behavior,
-            "detail": detail
+            "detail": detail,
+            "verified_task_id": verified[0][0].get('id') if completed and verified else None,
         })
 
-    # Switch simulator tab to Library and capture a screenshot
+    # Switch simulator tab to Library and capture a screenshot.
     print("Navigating simulator to Library tab...")
-    subprocess.run(['xcrun', 'simctl', 'openurl', SIM_UDID, 'fcdownloader://library'], check=False)
-    # Wait for UI to switch
-    import time
+    library_proc = subprocess.run(
+        ['xcrun', 'simctl', 'openurl', SIM_UDID, 'fcdownloader://library'],
+        capture_output=True, text=True, check=False,
+    )
     time.sleep(2)
 
     screenshot_dir = ROOT / 'artifacts' / 'screenshots'
     screenshot_dir.mkdir(parents=True, exist_ok=True)
     screenshot_path = screenshot_dir / 'library_tab.png'
     print(f"Capturing simulator screenshot to {screenshot_path}...")
-    subprocess.run(['xcrun', 'simctl', 'io', SIM_UDID, 'screenshot', str(screenshot_path)], check=False)
+    screenshot_proc = subprocess.run(
+        ['xcrun', 'simctl', 'io', SIM_UDID, 'screenshot', str(screenshot_path)],
+        capture_output=True, text=True, check=False,
+    )
 
-    # Run a demonstrative retry test on one of the failed simulator tasks
-    sim_failures = [r for r in report_items if r['download'] == "❌ FAIL" and r['detail'] != "No media detected"]
-    if sim_failures and os.environ.get('FCDL_EXERCISE_RETRY') == '1':
-        target_retry = sim_failures[0]
-        print(f"\nDemonstrating retry behavior for: {target_retry['name']}")
-        # We re-inject the deep link to trigger redownload
-        deep_link = f"fcdownloader://share?url={target_retry['url']}"
-        subprocess.run(['xcrun', 'simctl', 'openurl', SIM_UDID, deep_link], check=False)
-        print(f"Retry deep-link sent to simulator. Monitoring status change...")
-        # Give it a few seconds to register retry state
-        time.sleep(3)
-        # Note the retry test in report
-        retry_behavior_msg = f"Triggered for {target_retry['name']} (outcome unverified)"
-    else:
-        retry_behavior_msg = "Not exercised"
+    # Exercise the app's real retry path on one existing failed task. This
+    # deliberately retries the same task ID rather than creating a new share.
+    if os.environ.get('FCDL_EXERCISE_RETRY') == '1':
+        retry_target = next(
+            (
+                (report, task)
+                for report in report_items
+                for task in sorted(
+                    url_tasks.get(normalize_page_url(report['url']), []),
+                    key=lambda value: value.get('createdAt', 0),
+                    reverse=True,
+                )
+                if task.get('status') == 'failed'
+            ),
+            None,
+        )
+        if retry_target:
+            target_report, target_task = retry_target
+            print(f"\nExercising same-task retry for: {target_report['name']}")
+            target_report['retry'] = exercise_retry(db_file, target_task)
+        else:
+            print("\nRetry requested, but no persisted failed task was available.")
+
+    if os.environ.get('FCDL_EXERCISE_GALLERY') == '1':
+        gallery_targets = []
+        for media_kind in ('image', 'video'):
+            target = next(
+                (
+                    report
+                    for report in report_items
+                    if report['download'] == "✅ PASS"
+                    and report['expected_kind'] == media_kind
+                    and report.get('verified_task_id')
+                ),
+                None,
+            )
+            if target:
+                gallery_targets.append(target)
+
+        if gallery_targets:
+            for gallery_target in gallery_targets:
+                print(f"\nExercising Gallery export for: {gallery_target['name']}")
+                gallery_target['gallery'] = exercise_gallery_export(
+                    container_path,
+                    gallery_target['verified_task_id'],
+                )
+        else:
+            print("\nGallery export requested, but no completed photo/video task was available.")
 
     # Also test injection on physical device for the failed items
     if failed_items and os.environ.get('FCDL_INJECT_PHYSICAL_FAILURES') == '1':
         print("\nInjecting failed items into physical device for manual inspection...")
         for name, url, error in failed_items:
             print(f"Injecting to physical device: {name} ({url})")
-            deep_link = f"fcdownloader://share?url={url}"
+            deep_link = f"fcdownloader://share?{urlencode({'url': url})}"
             subprocess.run([
                 'xcrun', 'devicectl', 'device', 'process', 'launch',
                 '--device', PHONE_UDID, '--payload-url', deep_link, BUNDLE_ID
@@ -500,39 +653,47 @@ def main():
     report_path = ROOT / 'artifacts' / 'ios_comprehensive_report.md'
     with report_path.open('w', encoding='utf-8') as f:
         f.write("# iOS Comprehensive URL & Strategy Test Report (Strict Type-Safe Edition)\n\n")
-        f.write(f"Tested **{len(catalog)}** URLs natively on iOS Simulator ({SIM_UDID}).\n\n")
+        generated_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
+        f.write(f"Evaluated persisted iOS results for **{len(catalog)}** catalog URLs on Simulator `{SIM_UDID}`.\n\n")
+        f.write(f"Generated at `{generated_at}` from **{len(tasks)}** persisted task records.\n\n")
 
         # Summary stats
         passed = sum(1 for r in report_items if r['download'] == "✅ PASS")
-        expected_limits = sum(1 for r in report_items if r['download'] == "⚠️ EXPECTED LIMIT")
+        expected_limits = sum(1 for r in report_items if r['download'] == "⚠️ KNOWN LIMIT")
         manual_picker = sum(1 for r in report_items if r['download'] == "⚠️ MANUAL PICKER")
         failed = len(catalog) - passed - expected_limits - manual_picker
 
         f.write(f"### Summary Stats (Strict Media Type Verification)\n")
         f.write(f"- **Full Passes (Downloaded intended Video/Image/Audio)**: **{passed}**\n")
-        f.write(f"- **Expected source limitations (auth/DRM/geo/offline/browser session)**: **{expected_limits}**\n")
+        f.write(f"- **Known-limited unsuccessful cases (auth/DRM/geo/offline/browser session)**: **{expected_limits}**\n")
         f.write(f"- **Manual media-picker confirmation required**: **{manual_picker}**\n")
-        f.write(f"- **Failed (Thumbnail-only download, missing files, or extraction failure)**: **{failed}**\n\n")
+        f.write(f"- **Unexpected failures**: **{failed}**\n\n")
 
         f.write("> [!WARNING]\n")
-        f.write("> **Strict Media Type Verification Enabled**: A pass is now ONLY recorded if the downloaded file matches the expected media type (e.g. video files must have video tracks, not just JPEG thumbnails). Video URLs falling back to thumbnail image downloads are marked as **FAIL**.\n\n")
+        f.write("> **Strict Media Type Verification Enabled**: A pass is recorded only when the downloaded file matches the expected media type. Wrong-type thumbnail fallbacks remain unsuccessful even when classified as a known source limitation; they are never counted as passes.\n\n")
 
         f.write("> [!NOTE]\n")
-        f.write("> **Run provenance**: Results were verified from a clean simulator app install and its sandbox files. No fresh physical-iPhone file-integrity run was included in this report. Source-limited items require a suitable logged-in, subscribed, or region-eligible device session.\n\n")
+        if run_started_at is not None:
+            f.write(f"> **Run provenance**: Only tasks created at or after epoch `{run_started_at}` ms were included. ")
+        else:
+            f.write("> **Run provenance**: This is a snapshot of persisted simulator tasks and may include earlier runs. ")
+        f.write("The script does not erase or reinstall the app. No fresh physical-iPhone file-integrity run was included. Source-limited items require a suitable logged-in, subscribed, or region-eligible device session.\n\n")
 
         f.write("### Verification Matrix\n\n")
-        f.write("| Platform | Expected Kind | Detection | Download Completion | Audio/Video Sync | Gallery Export | Retry Behavior | URL |\n")
+        f.write("| Platform | Expected Kind | Detection | Download Completion | Media Structure | Gallery Export | Retry Behavior | URL |\n")
         f.write("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n")
         for r in report_items:
-            retry_col = retry_behavior_msg if r['download'] == "❌ FAIL" else r['retry']
-            f.write(f"| **{r['name']}** | *{r['expected_kind']}* | {r['detection']} | {r['download']} | {r['sync']} | {r['gallery']} | {retry_col} | [{r['name']}]({r['url']}) |\n")
+            f.write(f"| **{r['name']}** | *{r['expected_kind']}* | {r['detection']} | {r['download']} | {r['sync']} | {r['gallery']} | {r['retry']} | [{r['name']}]({r['url']}) |\n")
 
         f.write("\n### Library Screenshot (Simulator)\n")
         f.write("Below is the screenshot of the Library tab on the iOS simulator, displaying download status.\n\n")
-        f.write(f"![Library Tab screenshot](screenshots/library_tab.png)\n")
+        if library_proc.returncode == 0 and screenshot_proc.returncode == 0:
+            f.write(f"![Library Tab screenshot](screenshots/library_tab.png)\n")
+        else:
+            f.write("Screenshot capture was attempted but did not complete successfully.\n")
 
     print(f"\nReport written to: {report_path}")
-    print(f"Summary: {passed} PASS, {expected_limits} EXPECTED LIMIT, {failed} FAIL")
+    print(f"Summary: {passed} PASS, {expected_limits} KNOWN LIMIT, {failed} UNEXPECTED FAIL")
 
 if __name__ == '__main__':
     main()

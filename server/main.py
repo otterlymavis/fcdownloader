@@ -1420,6 +1420,37 @@ def _response_header(upstream: Any, name: str, default: str | None = None) -> st
     return default
 
 
+_NON_MEDIA_UPSTREAM_TYPE_RE = re.compile(
+    r"^(?:text/html|application/(?:json|ld\+json|problem\+json|xhtml\+xml|xml|javascript|x-javascript))\b",
+    re.I,
+)
+
+
+def _validated_media_prefix(upstream: Any, content_type: str | None) -> bytes:
+    """Read and validate a small prefix before committing a successful response."""
+    try:
+        prefix = upstream.read(512)
+    except Exception as exc:  # noqa: BLE001
+        try:
+            upstream.close()
+        except Exception:
+            pass
+        raise HTTPException(502, f"upstream media read failed: {str(exc)[:200]}")
+
+    sample = prefix.lstrip().lower()
+    document_body = sample.startswith((b"{", b"[", b"<html", b"<!doctype html", b"<?xml"))
+    declared_document = bool(_NON_MEDIA_UPSTREAM_TYPE_RE.match((content_type or "").strip()))
+    if not prefix or document_body or declared_document:
+        preview = prefix[:200].decode("utf-8", errors="replace").replace("\n", " ").strip()
+        try:
+            upstream.close()
+        except Exception:
+            pass
+        detail = preview or (content_type or "empty body")
+        raise HTTPException(502, f"upstream returned non-media content: {detail[:200]}")
+    return prefix
+
+
 def _direct_media_stream(
     media_url: str,
     request_headers: dict[str, str],
@@ -1440,12 +1471,14 @@ def _direct_media_stream(
         raise HTTPException(502, f"upstream: {str(exc)[:240]}")
 
     content_type = _response_header(upstream, "Content-Type", "video/mp4")
+    prefix = _validated_media_prefix(upstream, content_type)
     out_headers = {**response_headers}
     if cl := _response_header(upstream, "Content-Length"):
         out_headers["Content-Length"] = cl
 
     def stream() -> Iterator[bytes]:
         try:
+            yield prefix
             while True:
                 chunk = upstream.read(64 * 1024)
                 if not chunk:
@@ -1500,15 +1533,23 @@ def _buffered_direct_media_stream(
 
     content_type = _response_header(upstream, "Content-Type", "video/mp4")
     content_length = _response_header(upstream, "Content-Length")
+    try:
+        prefix = _validated_media_prefix(upstream, content_type)
+        with open(filepath, "wb") as initial:
+            initial.write(prefix)
+            initial.flush()
+    except Exception:
+        _cleanup()
+        raise
 
     # Shared producer state. The producer thread writes to disk; the generator
     # reads behind it. A lock guards the counters/flags.
-    state: dict[str, Any] = {"written": 0, "done": False, "error": None}
+    state: dict[str, Any] = {"written": len(prefix), "done": False, "error": None}
     lock = threading.Lock()
 
     def _producer() -> None:
         try:
-            with open(filepath, "wb") as f:
+            with open(filepath, "ab") as f:
                 while True:
                     chunk = upstream.read(256 * 1024)
                     if not chunk:

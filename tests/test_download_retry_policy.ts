@@ -1,6 +1,6 @@
 import './test_setup.js';
 import assert from 'node:assert/strict';
-import { isRetryableDownloadError } from '../src/hooks/useDownloadManager';
+import { isRetryableDownloadError, rebasePersistedDownloadPath } from '../src/hooks/useDownloadManager';
 import { DRMProtectedError } from '../src/lib/downloadStrategies';
 import { ServerExtractionError } from '../src/lib/serverExtractor';
 
@@ -17,5 +17,18 @@ assert.equal(isRetryableDownloadError(new ServerExtractionError('Please sign in'
 assert.equal(isRetryableDownloadError(new ServerExtractionError('Not available here', 'GEO_BLOCKED')), false);
 assert.equal(isRetryableDownloadError(new ServerExtractionError('Too many requests', 'RATE_LIMITED')), false);
 assert.equal(isRetryableDownloadError(new ServerExtractionError('Temporary upstream reset')), true);
+
+assert.equal(
+  rebasePersistedDownloadPath(
+    'file:///old/container/Documents/downloads/task/video.mp4',
+    'ios',
+  ),
+  '/tmp/fcdl-test/downloads/task/video.mp4',
+);
+assert.equal(rebasePersistedDownloadPath('/tmp/external/video.mp4'), '/tmp/external/video.mp4');
+assert.equal(
+  rebasePersistedDownloadPath('/storage/emulated/0/Documents/video.mp4', 'android'),
+  '/storage/emulated/0/Documents/video.mp4',
+);
 
 console.log('download retry policy ok');

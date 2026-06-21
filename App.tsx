@@ -328,6 +328,7 @@ export default function App() {
   const [fileSizes, setFileSizes]       = useState<Record<string, string>>({});
   const [libSelectMode, setLibSelectMode] = useState(false);
   const [libSelected, setLibSelected]     = useState<Set<string>>(new Set());
+  const [libGallerySaving, setLibGallerySaving] = useState(false);
   const [libFilter, setLibFilter]         = useState<'all' | 'videos' | 'audio' | 'failed'>('all');
   const [bmEditMode, setBmEditMode]       = useState(false);
 
@@ -388,16 +389,27 @@ export default function App() {
       else if (task.errorCode === 'GEO_BLOCKED') showToast(translate('geoBlocked', lang), 'error');
       else if (task.errorCode === 'RATE_LIMITED') showToast(translate('rateLimited', lang), 'error');
       else showToast(translate('failedError', lang, { error: task.error ?? 'unknown error' }), 'error');
+      const fallbackUrl = task.media.browserFallbackUrl;
+      if (fallbackUrl) {
+        setLoadedUrl(fallbackUrl);
+        setCurrentBrowserUrl(fallbackUrl);
+        setBrowserInput(fallbackUrl);
+        setTab('browser');
+      }
     }, [showToast]),
   });
 
-  const [extractionQueue, setExtractionQueue] = useState<string[]>([]);
+  const [extractionQueue, setExtractionQueue] = useState<Array<{
+    url: string;
+    browserFallbackUrl?: string;
+  }>>([]);
   const [extractionRunnerTick, setExtractionRunnerTick] = useState(0);
   const handledSharedUrlsRef = useRef<Map<string, number>>(new Map());
   const queuedExtractionUrlsRef = useRef(new Set<string>());
   const extractionRunnerActiveRef = useRef(false);
+  const handleIncomingUrlRef = useRef<(raw: string) => void>(() => {});
 
-  const runExtractionAndDownload = useCallback(async (url: string) => {
+  const runExtractionAndDownload = useCallback(async (url: string, browserFallbackUrl?: string) => {
     let targetUrl = url.trim();
     if (!targetUrl) return;
     if (!targetUrl.startsWith('http')) targetUrl = `https://${targetUrl}`;
@@ -415,6 +427,7 @@ export default function App() {
         mediaType: guessMediaType(targetUrl),
         mediaKind: getMediaKind({ url: targetUrl }),
         confidence: 0.75, provenance: 'manual',
+        browserFallbackUrl,
       };
       setPasteUrl('');
       setTab('library');
@@ -428,7 +441,10 @@ export default function App() {
     try {
       const result = await extractionManager.extract(targetUrl);
       const inspected = await inspectUniversalManifestCandidates(result.strategy, result.media ?? []);
-      const items = await verifyUniversalDirectCandidates(result.strategy, inspected);
+      const verifiedItems = await verifyUniversalDirectCandidates(result.strategy, inspected);
+      const items = browserFallbackUrl
+        ? verifiedItems.map((item) => ({ ...item, browserFallbackUrl }))
+        : verifiedItems;
       const decision = decideUniversalResultHandling(result.strategy, items, targetUrl);
       if (decision.action === 'enqueue') {
         const enqueueItems = shouldPickThreadsCandidates(targetUrl, decision.items)
@@ -507,11 +523,11 @@ export default function App() {
 
   useEffect(() => {
     if (extracting || extractionRunnerActiveRef.current || extractionQueue.length === 0) return;
-    const nextUrl = extractionQueue[0];
+    const next = extractionQueue[0];
     extractionRunnerActiveRef.current = true;
     setExtractionQueue((prev) => prev.slice(1));
-    void runExtractionAndDownload(nextUrl).finally(() => {
-      queuedExtractionUrlsRef.current.delete(extractionDedupeKey(nextUrl));
+    void runExtractionAndDownload(next.url, next.browserFallbackUrl).finally(() => {
+      queuedExtractionUrlsRef.current.delete(extractionDedupeKey(next.url));
       extractionRunnerActiveRef.current = false;
       // The queue owns the Home extraction lifecycle. Clear the visible busy
       // state here as a final guard against stale batched updates from an early
@@ -522,13 +538,13 @@ export default function App() {
   }, [extracting, extractionQueue, extractionRunnerTick, runExtractionAndDownload]);
 
   // ── Start download and extraction ───────────────────────
-  const startDownloadAndExtraction = useCallback((url: string) => {
+  const startDownloadAndExtraction = useCallback((url: string, browserFallbackUrl?: string) => {
     const targetUrl = url.trim();
     if (!targetUrl) return;
     const dedupeKey = extractionDedupeKey(targetUrl);
     if (queuedExtractionUrlsRef.current.has(dedupeKey)) return;
     queuedExtractionUrlsRef.current.add(dedupeKey);
-    setExtractionQueue((prev) => [...prev, targetUrl]);
+    setExtractionQueue((prev) => [...prev, { url: targetUrl, browserFallbackUrl }]);
   }, []);
 
   const handleSharedMediaUrl = useCallback((url: string) => {
@@ -552,7 +568,7 @@ export default function App() {
     setPasteUrl(mediaUrl);
     setTab('home');
     showToast(translate('linkReceived', resolvedLangRef.current), 'success');
-    startDownloadAndExtraction(mediaUrl);
+    startDownloadAndExtraction(mediaUrl, mediaUrl);
   }, [showToast, startDownloadAndExtraction, setPasteUrl, setTab]);
 
   const handleIncomingUrl = useCallback((raw: string) => {
@@ -571,6 +587,42 @@ export default function App() {
         }
         return;
       }
+      if (parsed.path === 'retry' || parsed.path === '/retry' || parsed.hostname === 'retry') {
+        const taskId = parsed.queryParams?.taskId ? String(parsed.queryParams.taskId) : null;
+        if (taskId) {
+          void retry(taskId);
+        }
+        return;
+      }
+      if (parsed.path === 'gallery_test' || parsed.path === '/gallery_test' || parsed.hostname === 'gallery_test') {
+        const taskId = parsed.queryParams?.taskId ? String(parsed.queryParams.taskId) : null;
+        const nonce = parsed.queryParams?.nonce ? String(parsed.queryParams.nonce) : '';
+        const resultPath = `${FileSystem.documentDirectory}automation_gallery_result.json`;
+        const task = history.find((candidate) => candidate.id === taskId);
+        void (async () => {
+          try {
+            if (!task?.localPlaylistPath) throw new Error('Completed task file was not found');
+            const { status } = await MediaLibrary.requestPermissionsAsync(true, ['photo', 'video']);
+            if (status !== 'granted') throw new Error(`Photos permission is ${status}`);
+            await MediaLibrary.saveToLibraryAsync(task.localPlaylistPath);
+            await FileSystem.writeAsStringAsync(resultPath, JSON.stringify({
+              nonce,
+              taskId,
+              success: true,
+              savedAt: Date.now(),
+            }));
+          } catch (error) {
+            await FileSystem.writeAsStringAsync(resultPath, JSON.stringify({
+              nonce,
+              taskId,
+              success: false,
+              error: (error as Error).message,
+              savedAt: Date.now(),
+            }));
+          }
+        })();
+        return;
+      }
       if (parsed.path === 'share' || parsed.hostname === 'share') {
         const mediaUrl = extractSharedUrlFromDeepLink(raw, parsed.queryParams);
         if (mediaUrl) {
@@ -580,7 +632,8 @@ export default function App() {
         }
       }
     } catch {}
-  }, [handleSharedMediaUrl, showToast]);
+  }, [handleSharedMediaUrl, history, retry, showToast]);
+  handleIncomingUrlRef.current = handleIncomingUrl;
 
   useEffect(() => {
     let cancelled = false;
@@ -593,9 +646,9 @@ export default function App() {
     };
 
     Linking.getInitialURL()
-      .then((url) => { if (url) handleIncomingUrl(url); })
+      .then((url) => { if (url) handleIncomingUrlRef.current(url); })
       .finally(() => { consumePendingShareUrl(); });
-    const sub = Linking.addEventListener('url', ({ url }) => handleIncomingUrl(url));
+    const sub = Linking.addEventListener('url', ({ url }) => handleIncomingUrlRef.current(url));
     const appStateSub = AppState.addEventListener('change', (state) => {
       if (state === 'active') consumePendingShareUrl();
     });
@@ -604,7 +657,7 @@ export default function App() {
       sub.remove();
       appStateSub.remove();
     };
-  }, [handleIncomingUrl, handleSharedMediaUrl]);
+  }, [handleSharedMediaUrl]);
 
   // ── Detected videos ───────────────────────────────────────
   const allVideos = useMemo<DetectedMedia[]>(() => {
@@ -664,6 +717,21 @@ export default function App() {
     if (libFilter === 'failed') return history.filter(t => t.status === 'failed');
     return history;
   }, [history, libFilter]);
+
+  const selectedLibraryTasks = useMemo(
+    () => history.filter((task) => libSelected.has(task.id)),
+    [history, libSelected],
+  );
+  const selectedGalleryTasks = useMemo(
+    () => selectedLibraryTasks.filter((task) =>
+      task.status === 'completed' &&
+      !!task.localPlaylistPath &&
+      getMediaKind(task.media) !== 'audio'
+    ),
+    [selectedLibraryTasks],
+  );
+  const allVisibleLibraryTasksSelected = filteredHistory.length > 0 &&
+    filteredHistory.every((task) => libSelected.has(task.id));
 
   useEffect(() => {
     history.forEach(async (task) => {
@@ -932,31 +1000,29 @@ export default function App() {
     }
   }, [allVideos, closeVideosSheet, enqueue, showToast]);
 
-  // ── Export / Gallery ──────────────────────────────────────
-  const handleExport = useCallback(async (task: DownloadTask) => {
-    if (!task.localPlaylistPath) return;
-    try {
-      if (!(await Sharing.isAvailableAsync())) { showToast(translate('sharingNotAvailable', resolvedLangRef.current), 'error'); return; }
-      const path = task.localPlaylistPath;
-      const mime = getMimeFromPath(path);
-      await Sharing.shareAsync(path, { mimeType: mime, dialogTitle: translate('exportMedia', resolvedLangRef.current) });
-    } catch (e) { showToast(translate('exportFailed', resolvedLangRef.current, { error: (e as Error).message }), 'error'); }
-  }, [showToast]);
-
-  const handleGallery = useCallback(async (task: DownloadTask) => {
-    if (!task.localPlaylistPath) return;
-    const { status } = await MediaLibrary.requestPermissionsAsync(true, ['photo', 'video']);
-    if (status !== 'granted') { showToast(translate('galleryPermissionDenied', resolvedLangRef.current), 'error'); return; }
-    try {
-      await MediaLibrary.saveToLibraryAsync(task.localPlaylistPath);
-      showToast(translate('savedToGallery', resolvedLangRef.current), 'success');
-    } catch (e) { showToast(translate('gallerySaveFailed', resolvedLangRef.current, { error: (e as Error).message }), 'error'); }
-  }, [showToast]);
-
   const handleRetry = useCallback((task: DownloadTask) => {
     retry(task.id, task.strategy);
     showToast(translate('retrying', resolvedLangRef.current), 'info');
   }, [retry, showToast]);
+
+  const handleExport = useCallback(async (task: DownloadTask) => {
+    if (!task.localPlaylistPath) return;
+    try {
+      if (!(await Sharing.isAvailableAsync())) {
+        showToast(translate('sharingNotAvailable', resolvedLangRef.current), 'error');
+        return;
+      }
+      await Sharing.shareAsync(task.localPlaylistPath, {
+        mimeType: getMimeFromPath(task.localPlaylistPath),
+        dialogTitle: translate('exportMedia', resolvedLangRef.current),
+      });
+    } catch (error) {
+      showToast(
+        translate('exportFailed', resolvedLangRef.current, { error: (error as Error).message }),
+        'error',
+      );
+    }
+  }, [showToast]);
 
   const toggleLibSelect = useCallback((id: string) => {
     setLibSelected(prev => {
@@ -972,12 +1038,59 @@ export default function App() {
   }, []);
 
   const selectAllLib = useCallback(() => {
-    if (libSelected.size === history.length) {
-      setLibSelected(new Set());
-    } else {
-      setLibSelected(new Set(history.map((t) => t.id)));
+    setLibSelected((previous) => {
+      const next = new Set(previous);
+      const allVisibleSelected = filteredHistory.length > 0 &&
+        filteredHistory.every((task) => next.has(task.id));
+      filteredHistory.forEach((task) => {
+        if (allVisibleSelected) next.delete(task.id);
+        else next.add(task.id);
+      });
+      return next;
+    });
+  }, [filteredHistory]);
+
+  const saveLibSelectedToGallery = useCallback(async () => {
+    if (selectedGalleryTasks.length === 0 || libGallerySaving) return;
+    setLibGallerySaving(true);
+    try {
+      const { status } = await MediaLibrary.requestPermissionsAsync(true, ['photo', 'video']);
+      if (status !== 'granted') {
+        showToast(translate('galleryPermissionDenied', resolvedLangRef.current), 'error');
+        return;
+      }
+
+      let saved = 0;
+      let firstError = '';
+      for (const task of selectedGalleryTasks) {
+        try {
+          await MediaLibrary.saveToLibraryAsync(task.localPlaylistPath!);
+          saved += 1;
+        } catch (error) {
+          if (!firstError) firstError = (error as Error).message;
+        }
+      }
+
+      if (saved === selectedGalleryTasks.length) {
+        showToast(`${translate('savedToGallery', resolvedLangRef.current)} (${saved})`, 'success');
+        exitLibSelectMode();
+      } else {
+        showToast(
+          translate('gallerySaveFailed', resolvedLangRef.current, {
+            error: firstError || `${selectedGalleryTasks.length - saved} item(s)`,
+          }),
+          'error',
+        );
+      }
+    } catch (error) {
+      showToast(
+        translate('gallerySaveFailed', resolvedLangRef.current, { error: (error as Error).message }),
+        'error',
+      );
+    } finally {
+      setLibGallerySaving(false);
     }
-  }, [libSelected.size, history]);
+  }, [exitLibSelectMode, libGallerySaving, selectedGalleryTasks, showToast]);
 
   const deleteLibSelected = useCallback(() => {
     const ids = Array.from(libSelected);
@@ -1346,20 +1459,14 @@ export default function App() {
                   android_ripple={RIPPLE_BL}
                   style={s.librarySelectCenter}>
                   <Text style={[{ color: t.btn, fontSize: fs(15), fontWeight: '500' }]}>
-                    {libSelected.size === history.length && history.length > 0 ? translate('deselectAll', resolvedLanguage) : translate('selectAll', resolvedLanguage)}
+                    {allVisibleLibraryTasksSelected ? translate('deselectAll', resolvedLanguage) : translate('selectAll', resolvedLanguage)}
                   </Text>
                 </Pressable>
-                <Pressable
-                  onPress={deleteLibSelected}
-                  hitSlop={S.sm}
-                  android_ripple={RIPPLE_BL}
-                  disabled={libSelected.size === 0}
-                  style={[s.librarySelectEdge, { alignItems: 'flex-end' }]}>
-                  <Text style={[{ fontSize: fs(15), fontWeight: '500',
-                    color: libSelected.size > 0 ? t.red : t.ink3 }]}>
-                    {translate('delete', resolvedLanguage)}
+                <View style={[s.librarySelectEdge, { alignItems: 'flex-end' }]}>
+                  <Text style={{ color: t.ink2, fontSize: fs(14), fontWeight: '500' }}>
+                    {libSelected.size} · {translate('selected', resolvedLanguage)}
                   </Text>
-                </Pressable>
+                </View>
               </>
             ) : (
               <>
@@ -1376,6 +1483,33 @@ export default function App() {
               </>
             )}
           </View>
+
+          {libSelectMode && (
+            <View style={[s.libraryBulkActions, { backgroundColor: t.card, borderBottomColor: t.sep }]}>
+              <Pressable
+                onPress={saveLibSelectedToGallery}
+                disabled={selectedGalleryTasks.length === 0 || libGallerySaving}
+                android_ripple={RIPPLE_BL}
+                style={[s.libraryBulkAction, { opacity: selectedGalleryTasks.length > 0 && !libGallerySaving ? 1 : 0.4 }]}>
+                <Icon name="download" size={18} color={t.btn} />
+                <Text style={{ color: t.btn, fontSize: fs(14), fontWeight: '600' }}>
+                  {translate('gallery', resolvedLanguage)}
+                  {selectedGalleryTasks.length > 0 ? ` (${selectedGalleryTasks.length})` : ''}
+                </Text>
+              </Pressable>
+              <View style={[s.libraryBulkDivider, { backgroundColor: t.sep }]} />
+              <Pressable
+                onPress={deleteLibSelected}
+                disabled={libSelected.size === 0}
+                android_ripple={RIPPLE_BL}
+                style={[s.libraryBulkAction, { opacity: libSelected.size > 0 ? 1 : 0.4 }]}>
+                <Icon name="trash-outline" size={18} color={t.red} />
+                <Text style={{ color: t.red, fontSize: fs(14), fontWeight: '600' }}>
+                  {translate('delete', resolvedLanguage)}
+                </Text>
+              </Pressable>
+            </View>
+          )}
 
           {/* Scrolling category filter chips */}
           {allTasks.length > 0 && (
@@ -1498,7 +1632,6 @@ export default function App() {
                 const isDone      = task.status === 'completed';
                 const isHandedOff = task.status === 'handed_off';
                 const isFail      = task.status === 'failed';
-                const canSaveToLibrary = !!task.localPlaylistPath && getMediaKind(task.media) !== 'audio';
                 const isSelected  = libSelected.has(task.id);
                 const showThumbnail = getMediaKind(task.media) === 'video' || getMediaKind(task.media) === 'image';
                 const isVideo = getMediaKind(task.media) === 'video';
@@ -1563,42 +1696,6 @@ export default function App() {
                           {resolution}
                         </Text>
                       )}
-
-                      {!libSelectMode && (
-                        <View style={[s.libraryActions, resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' }]}>
-                          {isDone && task.localPlaylistPath && (
-                            <>
-                              <Pressable android_ripple={RIPPLE_BL}
-                                style={[s.outlineBtn, { borderColor: t.sep }]}
-                                onPress={() => handleExport(task)}>
-                                <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>{translate('share', resolvedLanguage)}</Text>
-                              </Pressable>
-                              {canSaveToLibrary && (
-                                <Pressable android_ripple={RIPPLE_BL}
-                                  style={[s.outlineBtn, { borderColor: t.sep }]}
-                                  onPress={() => handleGallery(task)}>
-                                  <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>{translate('gallery', resolvedLanguage)}</Text>
-                                </Pressable>
-                              )}
-                            </>
-                          )}
-                          {isFail && (
-                            <Pressable android_ripple={RIPPLE_BL}
-                              style={[s.outlineBtn, { borderColor: t.sep }]}
-                              onPress={() => handleRetry(task)}>
-                              <Text style={[s.outlineBtnLabel, { color: t.ink, fontSize: fs(12) }]}>{translate('retry', resolvedLanguage)}</Text>
-                            </Pressable>
-                          )}
-                          <Pressable android_ripple={RIPPLE_BL}
-                            style={[s.outlineBtn, { borderColor: t.redBg }]}
-                            onPress={() => Alert.alert(translate('delete', resolvedLangRef.current), translate('removeBookmarkConfirm', resolvedLangRef.current, { title: source }), [
-                              { text: translate('cancel', resolvedLangRef.current), style: 'cancel' },
-                              { text: translate('delete', resolvedLangRef.current), style: 'destructive', onPress: () => remove(task.id) },
-                            ])}>
-                            <Text style={[s.outlineBtnLabel, { color: t.red, fontSize: fs(12) }]}>{translate('delete', resolvedLanguage)}</Text>
-                          </Pressable>
-                        </View>
-                      )}
                     </View>
 
                     {!libSelectMode && (
@@ -1637,6 +1734,14 @@ export default function App() {
                     onPress={() => toggleLibSelect(task.id)}
                     style={[s.libraryCard, subtleShadow,
                       { backgroundColor: isSelected ? t.card2 : t.card }]}>
+                    {cardContent}
+                  </Pressable>
+                ) : isDone && task.localPlaylistPath ? (
+                  <Pressable key={task.id} android_ripple={RIPPLE}
+                    accessibilityRole="button"
+                    accessibilityLabel={translate('share', resolvedLanguage)}
+                    onPress={() => handleExport(task)}
+                    style={[s.libraryCard, { backgroundColor: t.card }, subtleShadow]}>
                     {cardContent}
                   </Pressable>
                 ) : (
@@ -2439,7 +2544,6 @@ const s = StyleSheet.create({
   libraryCardTitle: { flex: 1, fontWeight: '600' },
   libraryCardPct:   { fontWeight: '400' },
   libraryCardSub:   { fontWeight: '400' },
-  libraryActions: { flexDirection: 'row', flexWrap: 'wrap', gap: S.sm, marginTop: S.xs },
   libraryCardRight: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -2467,6 +2571,25 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  libraryBulkActions: {
+    minHeight: 52,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    paddingHorizontal: S.md,
+  },
+  libraryBulkAction: {
+    flex: 1,
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: S.sm,
+  },
+  libraryBulkDivider: {
+    width: StyleSheet.hairlineWidth,
+    marginVertical: S.sm,
+  },
 
   selectCircle: {
     width: 24,
@@ -2484,16 +2607,6 @@ const s = StyleSheet.create({
     borderRadius: S.xs,
   },
   badgeLabel: { fontWeight: '600', letterSpacing: 0.2 },
-
-  outlineBtn: {
-    height: 30,
-    paddingHorizontal: S.sm + 2,
-    borderRadius: R.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  outlineBtnLabel: { fontWeight: '500' },
 
   // ── Tab bar ───────────────────────────────────────────────
   tabBar: {

@@ -164,9 +164,10 @@ class ShareViewController: UIViewController {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if !opened {
-                    self.openViaResponderChain(deepLink)
+                    let openedViaResponder = self.openViaResponderChain(deepLink)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        self.showQueuedAlert()
+                        if openedViaResponder { self.done() }
+                        else { self.showQueuedAlert() }
                     }
                     return
                 }

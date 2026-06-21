@@ -50,4 +50,29 @@ jobs:
         run: python -m pip install -r server/requirements-dev.txt
 
       - name: Run server tests
+        env:
+          PYTHONPATH: tests
         run: python -m pytest server/tests
+
+      - name: Run download boundary contract tests
+        run: python -m pytest tests/test_local_helper_media_validation.py tests/test_download_contract_probe.py
+
+  companion-helper-tests:
+    name: Companion helper tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+
+      - name: Test lightweight companion
+        working-directory: desktop-companion/nobrowser-go-helper
+        env:
+          GO111MODULE: "off"
+        run: go test

@@ -170,6 +170,7 @@ func TestBilibiliDownloadArgsCarryHeadersAndCookies(t *testing.T) {
 	args := ytDlpDownloadArgs("best", "/tmp/ffmpeg", "/tmp/out", "https://www.bilibili.com/video/BV1xx411c7mD/", "/tmp/cookies.txt", true)
 	joined := strings.Join(args, "\x00")
 	for _, want := range []string{
+		"--ignore-config",
 		"--referer\x00https://www.bilibili.com/",
 		"--add-header\x00Origin:https://www.bilibili.com",
 		"--cookies\x00/tmp/cookies.txt",
@@ -177,6 +178,26 @@ func TestBilibiliDownloadArgsCarryHeadersAndCookies(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("Bilibili args missing %q: %#v", want, args)
 		}
+	}
+}
+
+func TestMediaFileCandidatesRejectJSONDisguisedAsMP4(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "metadata.mp4")
+	good := filepath.Join(dir, "video.mp4")
+	if err := os.WriteFile(bad, []byte(`{"code":-403,"message":"forbidden"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(good, append([]byte{0, 0, 0, 24}, []byte("ftypmp42")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates := mediaFileCandidates(dir, files)
+	if len(candidates) != 1 || candidates[0] != good {
+		t.Fatalf("expected only real media candidate, got %#v", candidates)
 	}
 }
 

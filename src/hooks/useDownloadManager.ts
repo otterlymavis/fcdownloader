@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 import { DetectedMedia, DownloadStatus, DownloadStrategy, DownloadTask } from '../types';
 import { deleteDownload } from '../lib/hlsDownloader';
@@ -12,6 +13,18 @@ const STORAGE_KEY = '@fcdownloader/tasks_v1';
 const MAX_AUTO_RETRIES = 2;
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export function rebasePersistedDownloadPath(
+  path?: string,
+  platform: typeof Platform.OS = Platform.OS,
+): string | undefined {
+  if (platform !== 'ios' || !path || !FileSystem.documentDirectory) return path;
+  const marker = '/Documents/';
+  const markerIndex = path.indexOf(marker);
+  if (markerIndex < 0) return path;
+  const relativePath = path.slice(markerIndex + marker.length);
+  return `${FileSystem.documentDirectory}${relativePath}`;
+}
 
 export function isRetryableDownloadError(err: unknown): boolean {
   if (err instanceof DRMProtectedError) return false;
@@ -72,7 +85,24 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
         const saved: DownloadTask[] = JSON.parse(raw);
         dispatch({
           type: 'HYDRATE',
-          tasks: saved.filter((t) => t.status !== 'cancelled'),
+          tasks: saved
+            .filter((t) => t.status !== 'cancelled')
+            .map((task) => {
+              const localPlaylistPath = rebasePersistedDownloadPath(task.localPlaylistPath);
+              const legacyBrowserCompletion =
+                Platform.OS === 'web' &&
+                task.status === 'completed' &&
+                /^https?:\/\//i.test(localPlaylistPath ?? '');
+              return {
+                ...task,
+                status: legacyBrowserCompletion ? 'handed_off' as const : task.status,
+                localPlaylistPath,
+                completedAt: legacyBrowserCompletion ? undefined : task.completedAt,
+                browserHandoffAt: legacyBrowserCompletion
+                  ? task.completedAt ?? task.createdAt
+                  : task.browserHandoffAt,
+              };
+            }),
         });
       })
       .catch(() => {})
@@ -281,6 +311,7 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
         progress: 0,
         totalSegments: 0,
         downloadedSegments: 0,
+        retryCount: (existing.retryCount ?? 0) + 1,
         error: undefined,
         localPlaylistPath: undefined,
         completedAt: undefined,

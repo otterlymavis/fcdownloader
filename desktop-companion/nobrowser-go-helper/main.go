@@ -386,6 +386,7 @@ func runYtDlpJSON(ctx context.Context, rawURL, cookies string) (map[string]inter
 
 func runYtDlpJSONWithPath(ctx context.Context, ytDlp, rawURL, cookieFile string) (map[string]interface{}, error) {
 	args := []string{
+		"--ignore-config",
 		"--dump-single-json",
 		"--skip-download",
 		"--no-warnings",
@@ -622,7 +623,7 @@ func mediaFileCandidates(dir string, files []os.DirEntry) []string {
 			continue
 		}
 		path := filepath.Join(dir, file.Name())
-		if !isMediaOutputFile(path) {
+		if !isMediaOutputFile(path) || validateMediaOutputFile(path) != nil {
 			continue
 		}
 		candidates = append(candidates, path)
@@ -633,6 +634,33 @@ func mediaFileCandidates(dir string, files []os.DirEntry) []string {
 		return ai.Size() > aj.Size()
 	})
 	return candidates
+}
+
+func validateMediaOutputFile(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() == 0 {
+		return errors.New("downloader produced an empty media file")
+	}
+	prefix := make([]byte, 512)
+	n, err := file.Read(prefix)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	sample := strings.ToLower(strings.TrimSpace(string(prefix[:n])))
+	for _, marker := range []string{"{", "[", "<html", "<!doctype html", "<?xml"} {
+		if strings.HasPrefix(sample, marker) {
+			return errors.New("downloader returned a JSON/page response instead of media")
+		}
+	}
+	return nil
 }
 
 func isMediaOutputFile(path string) bool {
@@ -650,6 +678,7 @@ func ytDlpDownloadArgs(format, ffmpeg, tmp, rawURL, cookieFile string, removeWat
 		concurrentFragments = "4"
 	}
 	args := []string{
+		"--ignore-config",
 		"-f", format,
 		"--newline",
 		"--continue",
@@ -1887,6 +1916,10 @@ func downloadBilibiliFile(ctx context.Context, mediaURL, outPath, cookies string
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("Bilibili media HTTP %d", resp.StatusCode)
 	}
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(contentType, "json") || strings.Contains(contentType, "html") || strings.Contains(contentType, "xml") {
+		return fmt.Errorf("Bilibili returned %s instead of media", contentType)
+	}
 	out, err := os.Create(outPath)
 	if err != nil {
 		return err
@@ -1895,7 +1928,10 @@ func downloadBilibiliFile(ctx context.Context, mediaURL, outPath, cookies string
 		_ = out.Close()
 		return err
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return validateMediaOutputFile(outPath)
 }
 
 func bilibiliFFmpegHeaders(cookies string) string {

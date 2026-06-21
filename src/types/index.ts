@@ -103,6 +103,8 @@ export interface DetectedMedia {
   audioOnly?: boolean;
   subtitles?: boolean;
   subLangs?: string;
+  /** Page to open automatically if a download launched from another app fails. */
+  browserFallbackUrl?: string;
   /** Exact HTTP headers to replay for all download requests (set by extractors). When present, downloaders must use these verbatim instead of building their own. */
   httpHeaders?: Record<string, string>;
 }
@@ -121,4 +123,5 @@ export interface DownloadTask {
   createdAt: number;
   completedAt?: number;
   browserHandoffAt?: number;
+  retryCount?: number;
 }
