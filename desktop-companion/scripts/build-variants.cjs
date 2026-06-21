@@ -119,6 +119,17 @@ function macBundleId(arch) {
   return `com.fcdownloader.nativehelper.${arch}`;
 }
 
+function copyMacIcon(resourcesDir) {
+  const icnsPath = path.join(COMPANION_ROOT, "assets", "icon.icns");
+  if (fs.existsSync(icnsPath)) {
+    fs.copyFileSync(icnsPath, path.join(resourcesDir, "icon.icns"));
+    return "icon.icns";
+  }
+  const pngPath = path.join(COMPANION_ROOT, "assets", "icon.png");
+  if (fs.existsSync(pngPath)) fs.copyFileSync(pngPath, path.join(resourcesDir, "icon.png"));
+  return "icon.png";
+}
+
 function writeMacAppBundle(appDir, helperBin, arch) {
   const contentsDir = path.join(appDir, "Contents");
   const macosDir = path.join(contentsDir, "MacOS");
@@ -126,6 +137,7 @@ function writeMacAppBundle(appDir, helperBin, arch) {
   fs.mkdirSync(macosDir, { recursive: true });
   fs.mkdirSync(resourcesDir, { recursive: true });
   fs.copyFileSync(helperBin, path.join(macosDir, "FCDownloaderNativeHelper"));
+  const iconFile = copyMacIcon(resourcesDir);
   fs.writeFileSync(path.join(contentsDir, "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -138,6 +150,8 @@ function writeMacAppBundle(appDir, helperBin, arch) {
   <string>${plistEscape(macBundleId(arch))}</string>
   <key>CFBundleName</key>
   <string>FCDownloader Native Helper</string>
+  <key>CFBundleIconFile</key>
+  <string>${iconFile}</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleURLTypes</key>
@@ -220,6 +234,82 @@ function archiveMacPackage(sourceDir, outPath) {
     "-Command",
     `Compress-Archive -Path '${sourceDir}\\*' -DestinationPath '${outPath}' -Force`,
   ]);
+}
+
+function writeExecutableText(filePath, text) {
+  fs.writeFileSync(filePath, text, "utf8");
+  fs.chmodSync(filePath, 0o755);
+}
+
+function writeMacActionApp(outDir, name, script, bundleSuffix) {
+  const appDir = path.join(outDir, `${name}.app`);
+  const contentsDir = path.join(appDir, "Contents");
+  const macosDir = path.join(contentsDir, "MacOS");
+  const resourcesDir = path.join(contentsDir, "Resources");
+  const executable = "action";
+  fs.mkdirSync(macosDir, { recursive: true });
+  fs.mkdirSync(resourcesDir, { recursive: true });
+  writeExecutableText(path.join(macosDir, executable), script);
+  const iconFile = copyMacIcon(resourcesDir);
+  fs.writeFileSync(path.join(contentsDir, "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDisplayName</key>
+  <string>${plistEscape(name)}</string>
+  <key>CFBundleExecutable</key>
+  <string>${executable}</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.fcdownloader.nativehelper.action.${plistEscape(bundleSuffix)}</string>
+  <key>CFBundleName</key>
+  <string>${plistEscape(name)}</string>
+  <key>CFBundleIconFile</key>
+  <string>${iconFile}</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>
+`, "utf8");
+}
+
+function writeMacUserScripts(outDir) {
+  writeMacActionApp(outDir, "Start FCDownloader Helper", `#!/bin/bash
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+open "$ROOT/FCDownloader Native Helper.app"
+osascript -e 'display notification "FCDownloader Helper is starting." with title "FCDownloader"'
+`, "start");
+
+  writeMacActionApp(outDir, "Stop FCDownloader Helper", `#!/bin/bash
+pkill -f "FCDownloaderNativeHelper" 2>/dev/null || true
+pkill -f "fcdownloader-local-helper" 2>/dev/null || true
+pkill -f "local-youtube-helper.py" 2>/dev/null || true
+osascript -e 'display notification "FCDownloader Helper has stopped." with title "FCDownloader"'
+`, "stop");
+
+  writeMacActionApp(outDir, "Check Helper Status", `#!/bin/bash
+if curl -fsS --max-time 3 "http://127.0.0.1:8765/health"; then
+  osascript -e 'display dialog "FCDownloader Helper is ready." buttons {"OK"} default button "OK" with title "FCDownloader"'
+else
+  osascript -e 'display dialog "FCDownloader Helper is not running." buttons {"OK"} default button "OK" with title "FCDownloader"'
+fi
+`, "status");
+
+  writeMacActionApp(outDir, "Open Helper Log", `#!/bin/bash
+LOG="$HOME/Library/Caches/FCDownloader/logs/native-helper.log"
+mkdir -p "$(dirname "$LOG")"
+touch "$LOG"
+open "$LOG"
+`, "log");
+
+  writeMacActionApp(outDir, "Open Helper Cache", `#!/bin/bash
+DIR="$HOME/Library/Caches/FCDownloader"
+mkdir -p "$DIR"
+open "$DIR"
+`, "cache");
 }
 
 function buildNoBrowser() {
@@ -365,12 +455,23 @@ function buildNoBrowserGo() {
     });
     writeMacAppBundle(appDir, outBin, arch);
     maybeSignAndNotarizeMacApp(appDir);
+    writeMacUserScripts(outDir);
     fs.writeFileSync(path.join(outDir, "README.txt"), [
       "FCDownloader Native Helper for macOS",
       "",
-      "Preferred: open FCDownloader Native Helper.app.",
+      "For most people:",
+      "  1. Double-click Start FCDownloader Helper.app.",
+      "  2. Use the FCDownloader browser extension.",
+      "  3. Double-click Stop FCDownloader Helper.app only when you want to turn it off.",
       "",
-      "Terminal fallback:",
+      "Useful icon apps in this folder:",
+      "  Start FCDownloader Helper.app - starts the background helper.",
+      "  Stop FCDownloader Helper.app - stops the helper.",
+      "  Check Helper Status.app - tells you whether it is ready.",
+      "  Open Helper Log.app - opens the troubleshooting log.",
+      "  Open Helper Cache.app - opens downloaded video tool files.",
+      "",
+      "Advanced Terminal fallback:",
       "  chmod +x ./FCDownloaderNativeHelper",
       "  ./FCDownloaderNativeHelper",
       "",

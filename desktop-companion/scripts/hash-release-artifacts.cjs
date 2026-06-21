@@ -10,6 +10,7 @@ const OUTPUT_SHA = path.join(BUILD_ROOT, "companion-artifacts.sha256");
 const roots = [
   path.join(COMPANION_ROOT, "dist"),
   path.join(COMPANION_ROOT, "dist-nobrowser-go-ver"),
+  path.join(COMPANION_ROOT, "dist-nobrowser-go-mac"),
   path.join(COMPANION_ROOT, "dist-lite-ver-fresh"),
 ];
 const wanted = /\.(exe|dmg|zip|blockmap|ya?ml)$/i;

@@ -7,6 +7,7 @@ const settingsBtn = $("settings-btn");
 const pageInfo    = $("page-info");
 const helperEl    = $("helper-status");
 const helperText  = $("helper-text");
+const helperStateIcon = $("helper-state-icon");
 const helperOpen  = $("helper-open");
 const helperTools = $("helper-tools");
 const primaryEl   = $("primary");
@@ -529,9 +530,18 @@ async function renderHelperStatus(show) {
   helperNeedsSetup = effectiveReady && needsSetup;
   helperEl.classList.toggle("ready", effectiveReady);
   helperEl.classList.toggle("missing", !effectiveReady);
-  helperText.textContent = helperStatusText(effectiveReady, health);
+  const statusLabel = helperStatusText(effectiveReady, health);
+  helperText.textContent = statusLabel;
+  if (helperStateIcon) {
+    helperStateIcon.title = statusLabel;
+    helperStateIcon.setAttribute("aria-label", statusLabel);
+  }
   helperOpen.hidden = effectiveReady;
-  if (helperTools) helperTools.hidden = false;
+  if (helperTools) {
+    helperTools.hidden = false;
+    helperTools.title = health?.needsSetup ? "Install Video Tools" : "Update Video Tools";
+    helperTools.setAttribute("aria-label", helperTools.title);
+  }
   if (changed && currentTabId != null) {
     lastItemsKey = "";
     refresh();
@@ -745,6 +755,10 @@ if (helperOpen) {
   helperOpen.addEventListener("click", async () => {
     helperOpen.disabled = true;
     helperText.textContent = "Opening companion...";
+    if (helperStateIcon) {
+      helperStateIcon.title = "Opening Companion";
+      helperStateIcon.setAttribute("aria-label", "Opening Companion");
+    }
     await launchCompanionFromPopup();
     const resp = await sendMessage({ type: "fcdl:helper_start" }, HELPER_START_TIMEOUT_MS);
     helperOpen.disabled = false;
@@ -759,6 +773,10 @@ if (helperTools) {
   helperTools.addEventListener("click", async () => {
     helperTools.disabled = true;
     helperText.textContent = "Installing video tools...";
+    if (helperStateIcon) {
+      helperStateIcon.title = "Installing Video Tools";
+      helperStateIcon.setAttribute("aria-label", "Installing Video Tools");
+    }
     startToolProgressPolling();
     try {
       const resp = await sendMessage({ type: "fcdl:helper_ensure_tools" }, 10 * 60 * 1000);

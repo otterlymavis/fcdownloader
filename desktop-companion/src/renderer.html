@@ -7,9 +7,9 @@
   <style>
     :root {
       color-scheme: light dark;
-      font-family: "Segoe UI", system-ui, sans-serif;
-      background: #0f1215;
-      color: #f3f5f7;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #101418;
+      color: #f4f7fa;
     }
 
     * {
@@ -19,89 +19,141 @@
     body {
       margin: 0;
       min-height: 100vh;
-      display: grid;
-      place-items: center;
-      background: #0f1215;
+      background: #101418;
     }
 
     main {
-      width: min(360px, calc(100vw - 32px));
+      width: min(100%, 520px);
+      min-height: 100vh;
       display: grid;
-      gap: 16px;
-      padding: 24px;
-      border: 1px solid #252d35;
-      border-radius: 18px;
-      background: #161b20;
-      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+      align-content: start;
+      gap: 18px;
+      padding: 26px;
+      margin: 0 auto;
     }
 
-    .brand {
+    header {
       display: grid;
-      gap: 8px;
-      text-align: center;
+      gap: 10px;
     }
 
     h1 {
       margin: 0;
-      font-size: 20px;
-      font-weight: 650;
-      letter-spacing: -0.02em;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: 0;
     }
 
-    .status {
-      display: inline-flex;
+    p {
+      margin: 0;
+      color: #aeb8c4;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .status-card,
+    .panel {
+      border: 1px solid #27313b;
+      border-radius: 8px;
+      background: #171d23;
+    }
+
+    .status-card {
+      display: grid;
+      gap: 14px;
+      padding: 18px;
+    }
+
+    .status-row {
+      display: flex;
       align-items: center;
-      justify-content: center;
-      gap: 8px;
-      min-height: 24px;
-      color: #aeb8c2;
-      font-size: 13px;
+      gap: 12px;
     }
 
     .dot {
-      width: 9px;
-      height: 9px;
+      width: 14px;
+      height: 14px;
+      flex: 0 0 auto;
       border-radius: 50%;
-      background: #d15d5d;
-      box-shadow: 0 0 0 4px rgba(209, 93, 93, 0.12);
+      background: #d65c5c;
+      box-shadow: 0 0 0 5px rgba(214, 92, 92, 0.13);
     }
 
     .dot.ready {
-      background: #57bd7e;
-      box-shadow: 0 0 0 4px rgba(87, 189, 126, 0.14);
+      background: #56c27c;
+      box-shadow: 0 0 0 5px rgba(86, 194, 124, 0.14);
     }
 
-    .actions {
+    .dot.starting {
+      background: #d7a642;
+      box-shadow: 0 0 0 5px rgba(215, 166, 66, 0.14);
+    }
+
+    .status-copy {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
+      gap: 3px;
+    }
+
+    #statusText {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    #statusDetail {
+      color: #aeb8c4;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .actions,
+    .utility-actions {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
     }
 
     button {
-      min-height: 40px;
-      border: 1px solid #303943;
-      border-radius: 10px;
-      background: #202832;
-      color: #f3f5f7;
+      min-height: 42px;
+      border: 1px solid #33404d;
+      border-radius: 8px;
+      background: #212a33;
+      color: #f4f7fa;
       font: inherit;
       font-size: 14px;
-      font-weight: 600;
+      font-weight: 650;
       cursor: pointer;
-      transition: transform 0.08s, border-color 0.12s, background 0.12s;
+    }
+
+    .icon-button {
+      display: inline-grid;
+      place-items: center;
+      min-height: 48px;
+      padding: 0;
+    }
+
+    .icon-button svg {
+      width: 22px;
+      height: 22px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
 
     button:hover {
-      border-color: #465566;
-      background: #27313b;
+      border-color: #4a5b6b;
+      background: #28333d;
     }
 
-    button:active {
-      transform: scale(0.98);
+    button:disabled {
+      cursor: default;
+      opacity: 0.55;
     }
 
     button.primary {
-      background: #f3f5f7;
-      border-color: #f3f5f7;
+      background: #f4f7fa;
+      border-color: #f4f7fa;
       color: #11161b;
     }
 
@@ -110,43 +162,103 @@
     }
 
     button.danger {
-      border-color: #552727;
-      background: #2c1a1a;
-      color: #fca5a5;
+      border-color: #653030;
+      background: #321d1d;
+      color: #ffc4c4;
     }
 
-    button.danger:hover {
-      border-color: #883a3a;
-      background: #3d2222;
+    button.text {
+      min-height: 34px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: #8fc4ff;
+      text-align: left;
+      font-weight: 600;
     }
 
-    button.active {
-      border-color: #243e56;
-      background: #142535;
-      color: #93c5fd;
+    .panel {
+      display: grid;
+      gap: 12px;
+      padding: 16px;
     }
 
-    button.active:hover {
-      border-color: #3b6285;
-      background: #1a3248;
+    .panel h2 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
     }
 
-    .log-panel {
-      display: none;
-      overflow: hidden;
-      border: 1px solid #252d35;
-      border-radius: 12px;
-      background: #0b0e11;
+    .icon-flow {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
     }
 
-    .log-panel.open {
-      display: block;
+    .icon-flow li {
+      display: grid;
+      min-height: 76px;
+      place-items: center;
+      border: 1px solid #27313b;
+      border-radius: 8px;
+      background: #12171c;
+      color: #d7dee6;
+    }
+
+    .icon-flow svg {
+      width: 30px;
+      height: 30px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .toggle-row,
+    label {
+      display: grid;
+      gap: 3px;
+      color: #f4f7fa;
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    label span {
+      color: #aeb8c4;
+      font-size: 13px;
+      font-weight: 400;
+      line-height: 1.35;
+    }
+
+    input[type="checkbox"] {
+      width: 42px;
+      height: 24px;
+      flex: 0 0 auto;
+      accent-color: #56c27c;
+    }
+
+    details {
+      border: 1px solid #27313b;
+      border-radius: 8px;
+      background: #12171c;
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 13px 16px;
+      color: #d7dee6;
+      font-size: 14px;
+      font-weight: 650;
     }
 
     pre {
       margin: 0;
-      height: 160px;
-      padding: 12px;
+      max-height: 150px;
+      padding: 0 16px 14px;
       overflow: auto;
       color: #cbd4dc;
       font-size: 12px;
@@ -157,37 +269,101 @@
 </head>
 <body>
   <main>
-    <section class="brand" aria-label="Companion status">
+    <header>
       <h1>FCDownloader Companion</h1>
-      <div class="status">
+      <p>Keep this running so the browser extension can download HD YouTube videos and merge video plus audio for you.</p>
+    </header>
+
+    <section class="status-card" aria-label="Companion status">
+      <div class="status-row">
         <span id="dot" class="dot"></span>
-        <span id="statusText">Stopped</span>
+        <div class="status-copy">
+          <span id="statusText">Checking...</span>
+          <span id="statusDetail">Looking for the local helper.</span>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="startBtn" class="primary icon-button" type="button" title="Start Companion" aria-label="Start Companion">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m10 8 6 4-6 4Z"/></svg>
+        </button>
+        <button id="stopBtn" class="danger icon-button" type="button" title="Stop Companion" aria-label="Stop Companion">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/><circle cx="12" cy="12" r="10"/></svg>
+        </button>
       </div>
     </section>
 
-    <div class="actions">
-      <button id="startBtn" class="primary" type="button">Start</button>
-      <button id="stopBtn" class="danger" type="button">Stop</button>
-      <button id="logBtn" type="button">Log</button>
-    </div>
-
-    <section id="logPanel" class="log-panel" aria-label="Helper log">
-      <pre id="log"></pre>
+    <section class="panel" aria-label="Recommended setup">
+      <h2>Recommended Setup</h2>
+      <div class="toggle-row">
+        <label for="loginToggle">
+          Start automatically
+          <span>Recommended, so downloads work after you restart your Mac.</span>
+        </label>
+        <input id="loginToggle" type="checkbox">
+      </div>
     </section>
+
+    <section class="panel" aria-label="How to use">
+      <h2>Flow</h2>
+      <ol class="icon-flow" aria-label="Start companion, use browser extension, download file">
+        <li title="Start Companion" aria-label="Start Companion">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12a7 7 0 0 1 14 0"/><path d="M12 5v7l4 2"/><path d="M4 19h16"/></svg>
+        </li>
+        <li title="Open Browser Extension" aria-label="Open Browser Extension">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M8 15h4"/><path d="m15 14 3 3"/><path d="m18 14-3 3"/></svg>
+        </li>
+        <li title="Download" aria-label="Download">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+        </li>
+      </ol>
+    </section>
+
+    <section class="panel" aria-label="Troubleshooting">
+      <h2>Troubleshooting</h2>
+      <div class="utility-actions">
+        <button id="showAppBtn" class="icon-button" type="button" title="Show App in Finder" aria-label="Show App in Finder">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h7l2 2h9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M3 10h18"/></svg>
+        </button>
+        <button id="cacheBtn" class="icon-button" type="button" title="Open Cache Folder" aria-label="Open Cache Folder">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+        </button>
+        <button id="logFileBtn" class="icon-button" type="button" title="Open Log File" aria-label="Open Log File">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/><path d="M9 13h6"/><path d="M9 17h6"/></svg>
+        </button>
+        <button id="logToggleBtn" class="icon-button" type="button" title="Show Live Log" aria-label="Show Live Log">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9-4 3 4 3"/><path d="m16 9 4 3-4 3"/><path d="m14 5-4 14"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <details id="logPanel" hidden>
+      <summary>Show live technical log</summary>
+      <pre id="log"></pre>
+    </details>
   </main>
 
   <script>
     const dot = document.getElementById("dot");
     const statusText = document.getElementById("statusText");
-    const logButton = document.getElementById("logBtn");
-    const logPanel = document.getElementById("logPanel");
+    const statusDetail = document.getElementById("statusDetail");
+    const startButton = document.getElementById("startBtn");
+    const stopButton = document.getElementById("stopBtn");
+    const loginToggle = document.getElementById("loginToggle");
     const logBox = document.getElementById("log");
 
     function renderStatus(state) {
       const healthy = Boolean(state && state.healthy);
       const running = Boolean(state && state.running);
       dot.classList.toggle("ready", healthy);
-      statusText.textContent = healthy ? "Ready" : running ? "Starting" : "Stopped";
+      dot.classList.toggle("starting", running && !healthy);
+      statusText.textContent = healthy ? "Ready" : running ? "Starting..." : "Stopped";
+      statusDetail.textContent = healthy
+        ? "Downloads are ready. You can close this window; the companion keeps running."
+        : running
+          ? (state && state.message) || "Starting the local helper..."
+          : "Click Start Companion before downloading HD videos.";
+      startButton.disabled = running || healthy;
+      stopButton.disabled = !running && !healthy;
     }
 
     function appendLog(line) {
@@ -195,23 +371,39 @@
       logBox.scrollTop = logBox.scrollHeight;
     }
 
-    document.getElementById("startBtn").addEventListener("click", async () => {
-      renderStatus({ running: true, healthy: false });
+    async function refreshLogin() {
+      const login = await window.fcdl.getLogin();
+      loginToggle.checked = Boolean(login.openAtLogin);
+      loginToggle.disabled = !login.supported;
+    }
+
+    startButton.addEventListener("click", async () => {
+      renderStatus({ running: true, healthy: false, message: "Starting the companion..." });
       renderStatus(await window.fcdl.start());
     });
 
-    document.getElementById("stopBtn").addEventListener("click", async () => {
+    stopButton.addEventListener("click", async () => {
       renderStatus(await window.fcdl.stop());
     });
 
-    logButton.addEventListener("click", () => {
-      logPanel.classList.toggle("open");
-      logButton.classList.toggle("active");
+    loginToggle.addEventListener("change", async () => {
+      const login = await window.fcdl.setLogin(loginToggle.checked);
+      loginToggle.checked = Boolean(login.openAtLogin);
+    });
+
+    document.getElementById("showAppBtn").addEventListener("click", () => window.fcdl.show("app"));
+    document.getElementById("cacheBtn").addEventListener("click", () => window.fcdl.show("cache"));
+    document.getElementById("logFileBtn").addEventListener("click", () => window.fcdl.show("log"));
+    document.getElementById("logToggleBtn").addEventListener("click", () => {
+      const panel = document.getElementById("logPanel");
+      panel.hidden = false;
+      panel.open = !panel.open;
     });
 
     window.fcdl.onStatus(renderStatus);
     window.fcdl.onLog(appendLog);
     window.fcdl.status().then(renderStatus);
+    refreshLogin();
   </script>
 </body>
 </html>

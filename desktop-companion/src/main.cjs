@@ -1,5 +1,5 @@
-const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage } = require("electron");
-const { spawn } = require("node:child_process");
+const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, shell } = require("electron");
+const { execFile, spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
@@ -141,6 +141,37 @@ function spawnWithCandidate(candidate) {
   });
 }
 
+function getLoginSettings() {
+  if (!app.isPackaged) return { openAtLogin: false, supported: false };
+  return { ...app.getLoginItemSettings(), supported: true };
+}
+
+function setOpenAtLogin(openAtLogin) {
+  if (!app.isPackaged) return getLoginSettings();
+  app.setLoginItemSettings({
+    openAtLogin: Boolean(openAtLogin),
+    openAsHidden: true,
+  });
+  return getLoginSettings();
+}
+
+function runQuiet(command, args) {
+  return new Promise((resolve) => {
+    execFile(command, args, { windowsHide: true }, () => resolve());
+  });
+}
+
+async function stopExternalLocalHelpers() {
+  if (process.platform === "win32") {
+    await runQuiet("taskkill", ["/IM", "FCDownloaderNativeHelper.exe", "/F"]);
+    await runQuiet("taskkill", ["/IM", "fcdownloader-local-helper.exe", "/F"]);
+    return;
+  }
+  await runQuiet("pkill", ["-f", "FCDownloaderNativeHelper"]);
+  await runQuiet("pkill", ["-f", "fcdownloader-local-helper"]);
+  await runQuiet("pkill", ["-f", "local-youtube-helper.py"]);
+}
+
 async function startHelper() {
   if (await checkHealth()) {
     setState({ running: true, healthy: true, pid: helperProcess?.pid ?? null, message: "Ready on 127.0.0.1:8765", runtime: helperState.runtime || "external helper" });
@@ -201,6 +232,18 @@ async function stopHelper() {
     helperProcess.kill();
   }
   helperProcess = null;
+  await stopExternalLocalHelpers();
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  if (await checkHealth()) {
+    setState({
+      running: true,
+      healthy: true,
+      pid: null,
+      runtime: "external helper",
+      message: "Still running. Quit FCDownloader Native Helper from Activity Monitor.",
+    });
+    return helperState;
+  }
   setState({ running: false, healthy: false, pid: null, runtime: null, message: "Stopped" });
   return helperState;
 }
@@ -213,8 +256,8 @@ function updateTray() {
     { label: `Status: ${label}`, enabled: false },
     { type: "separator" },
     { label: "Show", click: () => showWindow() },
-    { label: "Start Helper", click: () => startHelper() },
-    { label: "Stop Helper", click: () => stopHelper() },
+    { label: "Start Companion", click: () => startHelper() },
+    { label: "Stop Companion", click: () => stopHelper() },
     { type: "separator" },
     { label: "Quit", click: () => app.quit() },
   ]));
@@ -235,10 +278,10 @@ function showWindow() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 420,
-    height: 360,
-    minWidth: 380,
-    minHeight: 300,
+    width: 520,
+    height: 560,
+    minWidth: 440,
+    minHeight: 480,
     title: "FCDownloader Companion",
     icon: appIconPath(),
     webPreferences: {
@@ -259,7 +302,30 @@ ipcMain.handle("helper:start", () => startHelper());
 ipcMain.handle("helper:stop", () => stopHelper());
 ipcMain.handle("helper:status", async () => {
   await pollHealth();
-  return helperState;
+  return { ...helperState, login: getLoginSettings() };
+});
+ipcMain.handle("app:login:get", () => getLoginSettings());
+ipcMain.handle("app:login:set", (_event, openAtLogin) => setOpenAtLogin(openAtLogin));
+ipcMain.handle("app:show", async (_event, target) => {
+  const cacheDir = path.join(app.getPath("cache"), "FCDownloader");
+  const logFile = path.join(cacheDir, "logs", "native-helper.log");
+  if (target === "cache") {
+    fs.mkdirSync(cacheDir, { recursive: true });
+    return shell.openPath(cacheDir);
+  }
+  if (target === "log") {
+    fs.mkdirSync(path.dirname(logFile), { recursive: true });
+    fs.closeSync(fs.openSync(logFile, "a"));
+    return shell.openPath(logFile);
+  }
+  if (target === "app") {
+    if (app.isPackaged) {
+      shell.showItemInFolder(app.getPath("exe"));
+      return "";
+    }
+    return shell.openPath(repoRoot());
+  }
+  return "";
 });
 
 const gotLock = app.requestSingleInstanceLock();
