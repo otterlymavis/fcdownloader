@@ -252,6 +252,11 @@ class TestRegistry:
         cap = registry.lookup("https://weibo.com/status/123")
         assert cap.has_platform_extractor
         assert cap.requires_referer
+        assert cap.extraction_order[:2] == ("platform", "yt_dlp")
+
+    def test_extraction_order_ids_are_valid(self):
+        for cap in registry._REGISTRY:
+            assert set(cap.extraction_order) <= registry.SERVER_STRATEGY_IDS
 
     def test_japanese_platform_lookup(self):
         samples = [

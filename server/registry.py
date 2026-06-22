@@ -11,6 +11,22 @@ from dataclasses import dataclass, field
 from typing import Sequence
 
 
+# Stable server-side extraction strategy IDs.
+# These map to callables in run_extraction's strategy list.
+SERVER_STRATEGY_IDS = frozenset({
+    "platform",       # custom platform extractor (_strategy_platform_extractors)
+    "yt_dlp",         # yt-dlp skip_download (_strategy_ydl)
+    "ytdl_stream",    # yt-dlp actual download proxy (_strategy_ytdl_stream_url)
+    "structured_data",# JSON-LD / hydration data scanner
+    "html_scan",      # HLS → DASH → OG → generic HTML scan
+    "embedded_player",# Brightcove / JW / iframe embed scanner
+    "og_image",       # og:image fallback
+    "generic_yt_dlp", # force_generic_extractor=True
+    "watermark_source",  # watermark-free source URL
+    "watermark_proxy",   # snapwc watermark-removal proxy
+})
+
+
 @dataclass(frozen=True)
 class ExtractorCapabilities:
     """Capability profile for a site or group of sites."""
@@ -48,6 +64,17 @@ class ExtractorCapabilities:
     # Approximate maximum content duration (seconds).  Used to tune timeouts.
     max_duration_hint: int | None = None
 
+    # Explicit extraction strategy order using stable IDs from SERVER_STRATEGY_IDS.
+    # Empty tuple = use the default pipeline logic (platform_first heuristic).
+    # When set, these strategies run first in the given order; any remaining
+    # strategies from the default pipeline still append as fallback.
+    extraction_order: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        unknown = tuple(sid for sid in self.extraction_order if sid not in SERVER_STRATEGY_IDS)
+        if unknown:
+            raise ValueError(f"unknown extraction_order ids for {self.hosts}: {unknown}")
+
 
 # ── Registry entries ──────────────────────────────────────────────────────────
 
@@ -70,19 +97,25 @@ _REGISTRY: list[ExtractorCapabilities] = [
         hosts=("weibo.com", "weibo.cn", "video.weibo.com", "weibocdn.com", "sinaimg.cn"),
         has_platform_extractor=True,
         requires_referer=True,
+        # yt-dlp lacks Weibo image-post support; platform extractor runs first.
+        extraction_order=("platform", "yt_dlp", "html_scan", "embedded_player", "generic_yt_dlp"),
     ),
     ExtractorCapabilities(
         hosts=("instagram.com",),
         has_platform_extractor=True,
+        extraction_order=("platform", "yt_dlp", "structured_data", "html_scan", "embedded_player"),
     ),
     ExtractorCapabilities(
         hosts=("threads.net", "threads.com"),
         has_platform_extractor=True,
+        extraction_order=("platform", "yt_dlp", "structured_data", "html_scan"),
     ),
     ExtractorCapabilities(
         hosts=("xiaohongshu.com", "rednote.com", "xhslink.com", "xhscdn.com"),
         requires_referer=True,
         has_platform_extractor=True,
+        # Server cannot authenticate XHS; platform extractor reads __INITIAL_STATE__ directly.
+        extraction_order=("platform", "yt_dlp", "html_scan", "generic_yt_dlp"),
     ),
     ExtractorCapabilities(
         hosts=("nicovideo.jp", "nico.ms", "niconico.com", "nicochannel.jp"),
@@ -227,14 +260,20 @@ _REGISTRY: list[ExtractorCapabilities] = [
         hosts=("reddit.com", "redd.it"),
         hls_common=True,
         has_platform_extractor=True,
+        # Server IPs are blocked by Reddit; platform extractor uses .json endpoint.
+        extraction_order=("platform", "yt_dlp", "html_scan", "generic_yt_dlp"),
     ),
     ExtractorCapabilities(
         hosts=("twitter.com", "x.com", "t.co"),
+        has_platform_extractor=True,
+        extraction_order=("platform", "yt_dlp", "html_scan", "generic_yt_dlp"),
     ),
     ExtractorCapabilities(
         hosts=("tiktok.com", "tiktokv.com", "douyin.com", "iesdouyin.com"),
         requires_auth_on_datacenter=True,
         has_platform_extractor=True,
+        # yt-dlp skips photo/slideshow posts; platform extractor handles them.
+        extraction_order=("platform", "yt_dlp", "html_scan", "generic_yt_dlp"),
     ),
     ExtractorCapabilities(
         hosts=("facebook.com", "fb.com", "fb.watch", "fbcdn.net"),

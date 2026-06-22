@@ -1766,24 +1766,8 @@ def run_extraction(
         ]
     else:
         # Non-YouTube pipeline — full strategy sweep.
-        # Platforms where our custom extractor is more reliable than yt-dlp:
-        # - Weibo: yt-dlp lacks an image-post extractor and returns "No video formats"
-        # - XHS: yt-dlp picks up profile avatars from related sections in __INITIAL_STATE__
-        # - TikTok: yt-dlp doesn't handle photo/slideshow posts (no /video/ in URL)
-        # - Reddit: yt-dlp doesn't follow /s/<id> share redirects to the canonical post
-        platform_first = any(h in page_url for h in (
-            "weibo.com", "weibo.cn", "video.weibo.com",
-            "xiaohongshu.com", "rednote.com", "xhslink.com", "xhscdn.com",
-            "tiktok.com", "vm.tiktok.com",
-            "reddit.com", "redd.it",
-            "twitter.com", "x.com", "t.co",
-            "redgifs.com",
-            "bsky.app",
-            "tumblr.com",
-            "dailymotion.com",
-        ))
         platform_strategy = ("platform-specific extractor", lambda: _strategy_platform_extractors(page_url, cookies))
-        ytdlp_strategy = ("yt-dlp", lambda: _strategy_ydl(page_url, ydl_opts, False))
+        ytdlp_strategy    = ("yt-dlp",                      lambda: _strategy_ydl(page_url, ydl_opts, False))
 
         # When remove_watermark is enabled, try source-specific clean media
         # first, then fall back to the slower snapwc proxy.
@@ -1795,9 +1779,9 @@ def run_extraction(
             if remove_watermark else []
         )
 
-        strategies: list[tuple[str, Callable[[], dict[str, Any]]]] = [
-            *watermark_proxy_strategy,
-            *([platform_strategy, ytdlp_strategy] if platform_first else [ytdlp_strategy, platform_strategy]),
+        # Full default tail — everything after the platform/yt-dlp pair.
+        # Always appended after the leading pair so nothing is ever dropped.
+        _tail: list[tuple[str, Callable[[], dict[str, Any]]]] = [
             *(
                 [("ytdl-stream", lambda: _strategy_ytdl_stream_url(page_url, ydl_opts, cookies))]
                 if _server_stream_supported(page_url) else []
@@ -1824,6 +1808,65 @@ def run_extraction(
                 "browser playback fallback must run in the app WebView",
             )),
         ]
+
+        # ── Per-site extraction order ──────────────────────────────────────────
+        # Map stable IDs → (name, callable) pairs so profiles can reorder them.
+        _id_to_strategy: dict[str, tuple[str, Callable[[], dict[str, Any]]]] = {
+            "platform":        platform_strategy,
+            "yt_dlp":          ytdlp_strategy,
+            "ytdl_stream":     ("ytdl-stream",             lambda: _strategy_ytdl_stream_url(page_url, ydl_opts, cookies)),
+            "structured_data": ("structured media data",   lambda: _strategy_structured_media_data(page_url, http_headers, cookies, _html_cache)),
+            "html_scan":       ("HTML media scanner",      lambda: _strategy_html_scan_combined(page_url, http_headers, cookies, _html_cache)),
+            "embedded_player": ("embedded player detector",lambda: _strategy_page_embeds(page_url, http_headers, cookies, ydl_opts, _html_cache)),
+            "og_image":        ("og:image fallback",       lambda: _strategy_og_image_fallback(page_url, http_headers, cookies, _html_cache)),
+            "generic_yt_dlp":  ("generic yt-dlp extractor",lambda: _strategy_ydl(page_url, ydl_opts, True)),
+            "watermark_source":("watermark-free source",   lambda: _strategy_watermark_free_source(page_url, cookies)),
+            "watermark_proxy": ("watermark-removal proxy", lambda: _strategy_snapwc(page_url)),
+        }
+
+        site_caps = registry.lookup(page_url)
+        _configured_order = site_caps.extraction_order  # empty tuple = not configured
+
+        if _configured_order:
+            # Build leading list from the profile, skipping unknown IDs silently.
+            _leading: list[tuple[str, Callable[[], dict[str, Any]]]] = []
+            _configured_names: set[str] = set()
+            for sid in _configured_order:
+                entry = _id_to_strategy.get(sid)
+                if entry is None:
+                    print(f"[extract] unknown extraction_order id {sid!r} for {page_url} — skipping")
+                    continue
+                _leading.append(entry)
+                _configured_names.add(entry[0])  # track by display name
+
+            # Append the tail minus anything already in the configured set.
+            _remaining_tail = [s for s in _tail if s[0] not in _configured_names]
+            strategies: list[tuple[str, Callable[[], dict[str, Any]]]] = [
+                *watermark_proxy_strategy,
+                *_leading,
+                *_remaining_tail,
+            ]
+            print(f"[extract] using configured extraction_order for {page_url}: "
+                  f"{[s[0] for s in _leading]}")
+        else:
+            # Legacy heuristic: platform_first list determines pair order.
+            # Kept exactly as before so unregistered sites are unchanged.
+            platform_first = any(h in page_url for h in (
+                "weibo.com", "weibo.cn", "video.weibo.com",
+                "xiaohongshu.com", "rednote.com", "xhslink.com", "xhscdn.com",
+                "tiktok.com", "vm.tiktok.com",
+                "reddit.com", "redd.it",
+                "twitter.com", "x.com", "t.co",
+                "redgifs.com",
+                "bsky.app",
+                "tumblr.com",
+                "dailymotion.com",
+            ))
+            strategies: list[tuple[str, Callable[[], dict[str, Any]]]] = [
+                *watermark_proxy_strategy,
+                *([platform_strategy, ytdlp_strategy] if platform_first else [ytdlp_strategy, platform_strategy]),
+                *_tail,
+            ]
 
     # ── Pipeline execution ────────────────────────────────────────────────────
     diagnostics: list[dict[str, Any]] = []

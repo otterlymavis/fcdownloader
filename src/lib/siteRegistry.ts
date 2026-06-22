@@ -15,6 +15,25 @@
 import { DownloadStrategy } from '../types';
 import { acceptLanguageForUrl } from './languageProfiles';
 
+/**
+ * Ordered list of client-side extraction tiers to try for a site.
+ *
+ * - 'server'            → call the Fly.io /extract backend
+ * - 'platform'          → on-device platformExtractors (extractFromSocialUrl)
+ * - 'browser-probe'     → probeUniversalMediaFromSession (page HTML / mediaHints)
+ * - 'browser-embed'     → extractUniversalEmbedUrls / extractUniversalOEmbedUrls
+ * - 'universal-probe'   → probeUniversalMediaFromUrl (fetch + parse)
+ *
+ * When absent or empty the default tier order in extractionManager.ts applies.
+ * If every configured tier fails the remaining default tiers still run as fallback.
+ */
+export type ClientExtractionStrategy =
+  | 'server'
+  | 'platform'
+  | 'browser-probe'
+  | 'browser-embed'
+  | 'universal-probe';
+
 export interface SiteCapabilities {
   /** Preferred download strategy order (first = highest priority). */
   preferredStrategies: DownloadStrategy[];
@@ -29,6 +48,12 @@ export interface SiteCapabilities {
    * directly — e.g. Xiaohongshu.
    */
   preferOnDevice?: boolean;
+  /**
+   * Explicit client-side extraction tier order. When set, these tiers run
+   * first in the listed order; any unconfigured tiers from the default pipeline
+   * still append afterward as fallback. Leave absent to use the default order.
+   */
+  extractionOrder?: ClientExtractionStrategy[];
   /** Human-readable notes about extraction quirks. */
   notes?: string;
 }
@@ -46,6 +71,8 @@ const REGISTRY: SiteEntry[] = [
     caps: {
       preferredStrategies: ['yt-dlp', 'server-download', 'hls-segments'],
       preferOnDevice: true,
+      // On-device InnerTube avoids SABR binding; server is the reliable fallback.
+      extractionOrder: ['platform', 'server', 'browser-probe'],
       notes: 'Requires nsig transform; on-device extraction uses InnerTube iOS/Android clients',
     },
   },
@@ -71,6 +98,8 @@ const REGISTRY: SiteEntry[] = [
     pattern: /tiktok\.com\//i,
     caps: {
       preferredStrategies: ['server-download', 'direct', 'hls-segments'],
+      // Platform extractor handles photo/slideshow posts yt-dlp skips.
+      extractionOrder: ['platform', 'server', 'browser-probe'],
       notes: 'Signed CDN URLs expire quickly; server-side yt-dlp or direct CDN scan preferred',
     },
   },
@@ -80,6 +109,8 @@ const REGISTRY: SiteEntry[] = [
     caps: {
       preferredStrategies: ['server-download', 'direct'],
       requiresAuth: true,
+      // Server uses mobile UA scrape; platform extractor as on-device fallback.
+      extractionOrder: ['server', 'platform', 'browser-probe'],
       notes: 'CDN URLs embedded in page JSON; carousel posts need gallery extraction',
     },
   },
@@ -88,6 +119,7 @@ const REGISTRY: SiteEntry[] = [
     pattern: /(?:twitter\.com\/|x\.com\/).*\/status\//i,
     caps: {
       preferredStrategies: ['server-download', 'direct'],
+      extractionOrder: ['platform', 'server', 'browser-probe'],
       notes: 'video.twimg.com signed URLs; HLS manifest or direct mp4 depending on quality',
     },
   },
@@ -97,6 +129,8 @@ const REGISTRY: SiteEntry[] = [
     caps: {
       preferredStrategies: ['hls-segments', 'direct', 'server-download'],
       preferOnDevice: true,
+      // Server IPs get 403; platform extractor uses .json endpoint from device IP.
+      extractionOrder: ['platform', 'server', 'browser-probe'],
       notes: 'Anonymous JSON is often gated and server IPs are blocked; device RSS/page extraction should run first',
     },
   },
@@ -124,6 +158,8 @@ const REGISTRY: SiteEntry[] = [
       preferredStrategies: ['server-download', 'direct'],
       requiresAuth: true,
       preferOnDevice: true,
+      // On-device scrape of __INITIAL_STATE__ is fast; server is gated without a session.
+      extractionOrder: ['platform', 'server', 'browser-probe'],
       notes: 'Most content requires login; mobile UA required; on-device scrape of __INITIAL_STATE__ is fast, server extraction is gated',
     },
   },

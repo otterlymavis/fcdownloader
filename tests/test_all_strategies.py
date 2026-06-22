@@ -1611,6 +1611,8 @@ def read_backend_strategies_from_source():
         "platform_strategy",
         "ytdlp_strategy",
         "watermark_proxy_strategy",
+        "_tail",
+        "_id_to_strategy",
     }
     names = set()
     for node in ast.walk(tree):

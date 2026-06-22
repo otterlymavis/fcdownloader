@@ -57,6 +57,66 @@ async function testKnownSiteServerWins() {
   assert.equal(urlProbeCalls, 0);
 }
 
+async function testExtractionOrderCanPreferPlatformBeforeServer() {
+  const calls: string[] = [];
+  const manager = new ExtractionManager(deps({
+    extractFromSocialUrl: async () => {
+      calls.push('platform');
+      return [media('https://cdn.example.com/tiktok-platform.mp4')];
+    },
+    extractViaServer: async () => {
+      calls.push('server');
+      return [media('https://cdn.example.com/tiktok-server.mp4')];
+    },
+  }));
+
+  const result = await manager.extract('https://www.tiktok.com/@example/video/123');
+
+  assert.equal(result.success, true);
+  assert.equal(result.strategy, 'platform-extractors');
+  assert.equal(result.media?.[0]?.url, 'https://cdn.example.com/tiktok-platform.mp4');
+  assert.deepEqual(calls, ['platform']);
+}
+
+async function testExtractionOrderCanPreferServerBeforePlatform() {
+  const calls: string[] = [];
+  const manager = new ExtractionManager(deps({
+    extractViaServer: async () => {
+      calls.push('server');
+      return [media('https://cdn.example.com/instagram-server.mp4')];
+    },
+    extractFromSocialUrl: async () => {
+      calls.push('platform');
+      return [media('https://cdn.example.com/instagram-platform.mp4')];
+    },
+  }));
+
+  const result = await manager.extract('https://www.instagram.com/reel/ABC123/');
+
+  assert.equal(result.success, true);
+  assert.equal(result.strategy, 'server-extraction');
+  assert.equal(result.media?.[0]?.url, 'https://cdn.example.com/instagram-server.mp4');
+  assert.deepEqual(calls, ['server']);
+}
+
+async function testOrderedUniversalProbeDoesNotRunTwice() {
+  let urlProbeCalls = 0;
+  const manager = new ExtractionManager(deps({
+    extractViaServer: async () => [],
+    extractFromSocialUrl: async () => [],
+    probeUniversalMediaFromUrl: async () => {
+      urlProbeCalls += 1;
+      return [];
+    },
+  }));
+
+  const result = await manager.extract('https://www.tiktok.com/@example/video/123');
+
+  assert.equal(result.success, false);
+  assert.equal(urlProbeCalls, 1);
+  assert.match(result.diagnostics?.['universal-media-probe'] ?? '', /no media/i);
+}
+
 async function testUnknownUsesBrowserFedUniversal() {
   let urlProbeCalls = 0;
   const manager = new ExtractionManager(deps({
@@ -282,6 +342,9 @@ async function testBrowserOEmbedFallsBackToEmbedServerExtraction() {
 
 async function main() {
   await testKnownSiteServerWins();
+  await testExtractionOrderCanPreferPlatformBeforeServer();
+  await testExtractionOrderCanPreferServerBeforePlatform();
+  await testOrderedUniversalProbeDoesNotRunTwice();
   await testUnknownUsesBrowserFedUniversal();
   await testLowConfidenceUniversalDoesNotAutoDownload();
   await testBrowserVimeoIframeUsesDerivedConfigJson();
