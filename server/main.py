@@ -1956,11 +1956,13 @@ def extract(request: Request, req: ExtractRequest) -> dict[str, Any]:
     response = _localize_ytdl_stream_urls(response, request)
 
     if response.get("kind") == "paired":
-        rf = info.get("requested_formats", [{}, {}])
+        rf = info.get("requested_formats") or []
+        v_fmt = rf[0] if rf else {}
+        a_fmt = rf[1] if len(rf) > 1 else {}
         print(
-            f"[extract] paired: video={rf[0].get('format_id')} "
-            f"({rf[0].get('height')}p {rf[0].get('vcodec')}) "
-            f"audio={rf[1].get('format_id')} {response.get('label')} "
+            f"[extract] paired: video={v_fmt.get('format_id')} "
+            f"({v_fmt.get('height')}p {v_fmt.get('vcodec')}) "
+            f"audio={a_fmt.get('format_id')} {response.get('label')} "
             f"extractor={info.get('extractor')}"
         )
     else:

@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FORMAT = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/best[ext=mp4]/best"
 YOUTUBE_FORMAT = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/137+140/136+140/18"
 MAX_URL_LENGTH = 4096
-SERVICE_VERSION = "0.2.1"
+SERVICE_VERSION = "0.4.0-python"
 LOCAL_HELPER_API_VERSION = "v1"
 YTDLP_DELEGATE_FLAG = "--fcdl-run-yt-dlp"
 COOKIE_MAX_BYTES = 32 * 1024
@@ -835,6 +835,8 @@ class Handler(BaseHTTPRequestHandler):
         _send_cors_headers(self)
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, X-FCDL-Cookies")
+        if (self.headers.get("Access-Control-Request-Private-Network") or "").lower() == "true":
+            self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
 
     def do_GET(self) -> None:

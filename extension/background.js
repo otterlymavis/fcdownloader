@@ -21,6 +21,11 @@ const DEBUG_LOGS = false;
 const LOCAL_HELPER_MIN_VERSION = "0.4.0-go";
 const LOCAL_HELPER_STATUS_TIMEOUT_MS = 3500;
 const LOCAL_HELPER_START_TIMEOUT_MS = 20000;
+const LOCAL_HELPER_BASE_URLS = [
+  "http://127.0.0.1:8765",
+  "http://localhost:8765",
+];
+let localHelperBaseUrl = LOCAL_HELPER_BASE_URLS[0];
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|avif|heic)(?:[?#]|$)/i;
 const AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac)(?:[?#]|$)/i;
 const VIMEO_CONFIG_RE = /player\.vimeo\.com\/video\/\d+\/config\/?(?:[?#]|$)/i;
@@ -832,7 +837,7 @@ function localHelperDownloadUrl(pageUrl, youtubeOnly = false, options = {}) {
   const params = new URLSearchParams({ url: pageUrl });
   if (!youtubeOnly) params.set("max_height", "1080");
   if (options.removeWatermark) params.set("remove_watermark", "1");
-  return `http://127.0.0.1:8765/${youtubeOnly ? "youtube-hd" : "download"}?${params.toString()}`;
+  return `${localHelperBaseUrl}/${youtubeOnly ? "youtube-hd" : "download"}?${params.toString()}`;
 }
 
 function isPageLikeDownloadUrl(url) {
@@ -1187,7 +1192,7 @@ async function preflightLocalHelperUrl(url, headers = []) {
   try {
     const parsed = new URL(url);
     const mediaUrl = parsed.searchParams.get("url") || "";
-    const checkUrl = `http://127.0.0.1:8765/formats?${new URLSearchParams({ url: mediaUrl }).toString()}`;
+    const checkUrl = `${localHelperBaseUrl}/formats?${new URLSearchParams({ url: mediaUrl }).toString()}`;
     const r = await fetch(checkUrl, {
       method: "GET",
       headers: fetchHeadersFromChromeHeaders(headers),
@@ -1211,21 +1216,29 @@ async function fetchLocalHelperHealth(timeoutMs = LOCAL_HELPER_STATUS_TIMEOUT_MS
 }
 
 async function fetchLocalHelperInfo(timeoutMs = LOCAL_HELPER_STATUS_TIMEOUT_MS) {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const health = await fetch("http://127.0.0.1:8765/health", {
-      method: "GET",
-      signal: ac.signal,
-    });
-    const data = await health.json().catch(() => ({}));
-    if (!health.ok || data?.ok === false) return null;
-    return data;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
+  const startedAt = Date.now();
+  for (const baseUrl of LOCAL_HELPER_BASE_URLS) {
+    const remainingMs = Math.max(250, timeoutMs - (Date.now() - startedAt));
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), remainingMs);
+    try {
+      const health = await fetch(`${baseUrl}/health`, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "omit",
+        signal: ac.signal,
+      });
+      const data = await health.json().catch(() => ({}));
+      if (!health.ok || data?.ok === false) continue;
+      localHelperBaseUrl = baseUrl;
+      return { ...data, helperBaseUrl: baseUrl };
+    } catch {
+      // Some systems resolve localhost and 127.0.0.1 differently.
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  return null;
 }
 
 function parseHelperVersion(version) {
@@ -1260,7 +1273,7 @@ async function ensureLocalHelperTools(timeoutMs = 10 * 60 * 1000) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
-    const response = await fetch("http://127.0.0.1:8765/tools/ensure", {
+    const response = await fetch(`${localHelperBaseUrl}/tools/ensure`, {
       method: "GET",
       signal: ac.signal,
     });
@@ -1803,6 +1816,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
     if (msg.type === "fcdl:helper_start") {
+      await launchLocalCompanion();
       const ready = await waitForLocalHelper(LOCAL_HELPER_START_TIMEOUT_MS);
       const health = await fetchLocalHelperInfo(LOCAL_HELPER_STATUS_TIMEOUT_MS);
       sendResponse({ ok: true, ready: ready && localHelperReady(health), health, problem: localHelperProblem(health) });

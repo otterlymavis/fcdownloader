@@ -144,11 +144,19 @@ function checkHelperVersion() {
 }
 
 async function pollHealth() {
-  const healthy = await checkHealth();
+  const reachable = await checkHealth();
+  const version = reachable ? await checkHelperVersion() : null;
+  const healthy = reachable && versionAtLeast(version, MIN_HELPER_VERSION);
   setState({
     healthy,
-    running: healthy || Boolean(helperProcess),
-    message: healthy ? "Ready on 127.0.0.1:8765" : helperProcess ? "Starting..." : "Stopped",
+    running: reachable || Boolean(helperProcess),
+    message: healthy
+      ? "Ready on 127.0.0.1:8765"
+      : reachable
+        ? `Outdated helper v${version ? version.join(".") : "unknown"}`
+        : helperProcess
+          ? "Starting..."
+          : "Stopped",
   });
 }
 
@@ -241,8 +249,13 @@ async function startHelper() {
       for (let i = 0; i < 12; i += 1) {
         await new Promise((resolve) => setTimeout(resolve, 750));
         if (await checkHealth()) {
-          setState({ running: true, healthy: true, pid: child.pid, message: "Ready on 127.0.0.1:8765", runtime: candidate.label });
-          return helperState;
+          const version = await checkHelperVersion();
+          if (versionAtLeast(version, MIN_HELPER_VERSION)) {
+            setState({ running: true, healthy: true, pid: child.pid, message: "Ready on 127.0.0.1:8765", runtime: candidate.label });
+            return helperState;
+          }
+          lastError = new Error(`Helper ${version ? version.join(".") : "unknown"} is outdated`);
+          break;
         }
         if (child.exitCode !== null) break;
       }

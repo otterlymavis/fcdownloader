@@ -149,6 +149,9 @@ func cors(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin(r.Header.Get("Origin")))
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-FCDL-Helper-Token, X-FCDL-Cookies")
+		if strings.EqualFold(r.Header.Get("Access-Control-Request-Private-Network"), "true") {
+			w.Header().Set("Access-Control-Allow-Private-Network", "true")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

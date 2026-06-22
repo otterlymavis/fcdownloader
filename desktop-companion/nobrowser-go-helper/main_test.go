@@ -506,6 +506,23 @@ func TestLocalHostAndOptionalTokenGuards(t *testing.T) {
 	}
 }
 
+func TestCorsAllowsPrivateNetworkPreflight(t *testing.T) {
+	req := httptest.NewRequest(http.MethodOptions, "http://127.0.0.1:8765/health", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Origin", "chrome-extension://test-extension")
+	req.Header.Set("Access-Control-Request-Private-Network", "true")
+	rec := httptest.NewRecorder()
+
+	cors(http.HandlerFunc(handleHealth)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected preflight status %d, got %d", http.StatusNoContent, rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Private-Network"); got != "true" {
+		t.Fatalf("expected private-network permission header, got %q", got)
+	}
+}
+
 func TestRateLimit(t *testing.T) {
 	limitMu.Lock()
 	limitHits = map[string][]time.Time{}

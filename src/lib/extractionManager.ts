@@ -206,7 +206,7 @@ export class ExtractionManager {
           success: true,
           fatal: false,
           strategy: 'server-extraction',
-          confidence: Math.max(...attempt.media.map(m => m.confidence ?? 0.9)),
+          confidence: attempt.media.length ? Math.max(...attempt.media.map(m => m.confidence ?? 0.9)) : 0.9,
           media: attempt.media,
         };
       }

@@ -317,7 +317,7 @@ def _strategy_platform_extractors(
         # Guard against known non-Mastodon sites that use similar URL patterns.
         _NON_MASTODON = ("twitter.com", "x.com", "bsky.app", "github.com", "instagram.com")
         if (
-            not any(h in page_url for h in _NON_MASTODON)
+            not _host_matches(page_url, _NON_MASTODON)
             and re.search(
                 r"/(?:@[^/?#]+|users/[^/?#]+/statuses)/\d{17,20}(?:[/?#]|$)",
                 page_url,

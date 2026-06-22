@@ -8,6 +8,7 @@ const backgroundScript = fs.readFileSync(path.join(__dirname, "..", "extension",
 
 const listeners = [];
 let helperHealth = { ok: true, version: "0.4.0-go" };
+let failPrimaryHelperHost = false;
 let lastDownload = null;
 const fetchedUrls = [];
 let currentTab = { id: 1, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", title: "Test YouTube" };
@@ -99,6 +100,9 @@ vm.runInNewContext(backgroundScript, {
   fetch: async (url) => {
     fetchedUrls.push(String(url));
     if (String(url).includes("/health")) {
+      if (failPrimaryHelperHost && String(url).startsWith("http://127.0.0.1:8765")) {
+        throw new Error("primary loopback unavailable");
+      }
       return { ok: true, json: async () => helperHealth };
     }
     return { ok: true, json: async () => ({ ok: true }) };
@@ -128,6 +132,19 @@ function send(msg) {
   const currentHelper = await send({ type: "fcdl:helper_status" });
   assert.strictEqual(currentHelper.ready, true);
   assert.strictEqual(currentHelper.problem, "");
+  assert.strictEqual(currentHelper.health.helperBaseUrl, "http://127.0.0.1:8765");
+
+  failPrimaryHelperHost = true;
+  const fallbackHelper = await send({ type: "fcdl:helper_status" });
+  assert.strictEqual(fallbackHelper.ready, true);
+  assert.strictEqual(fallbackHelper.health.helperBaseUrl, "http://localhost:8765");
+  const ensuredFallbackTools = await send({ type: "fcdl:helper_ensure_tools" });
+  assert.strictEqual(ensuredFallbackTools.ok, true);
+  assert(
+    fetchedUrls.some((url) => url === "http://localhost:8765/tools/ensure"),
+    "helper operations should keep using the detected loopback hostname"
+  );
+  failPrimaryHelperHost = false;
 
   currentTab = { id: 1, url: "https://publisher.example.com/post", title: "Publisher Post" };
   assert(webRequestCompletedListeners.length > 0, "background should register webRequest completion listener");

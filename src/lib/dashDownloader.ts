@@ -59,12 +59,12 @@ export interface SelectedDashRepresentations {
   audio?: Representation;
 }
 
-function expandTemplate(tpl: string, repId: string, num: number, time: number): string {
+function expandTemplate(tpl: string, repId: string, num: number, time: number, bandwidth: number = 0): string {
   return tpl
     .replace(/\$RepresentationID\$/g, repId)
     .replace(/\$Number(?:%0?(\d+)d)?\$/g, (_, w) => w ? String(num).padStart(parseInt(w), '0') : String(num))
     .replace(/\$Time(?:%0?(\d+)d)?\$/g, (_, w) => w ? String(time).padStart(parseInt(w), '0') : String(time))
-    .replace(/\$Bandwidth\$/g, '0');
+    .replace(/\$Bandwidth\$/g, String(bandwidth));
 }
 
 function parseIsoDuration(s: string): number {
@@ -80,13 +80,14 @@ function resolveSegmentsFromTemplate(
   mediaDurationSec: number = 3600,
 ): { initUrl?: string; segmentUrls: string[] } {
   const repId = String(rep['@_id'] ?? '');
+  const bandwidth = parseInt(String(rep['@_bandwidth'] ?? '0'), 10);
   const mediaTpl = String(segTemplate['@_media'] ?? '');
   const initTpl = String(segTemplate['@_initialization'] ?? '');
   const startNumber = parseInt(String(segTemplate['@_startNumber'] ?? '1'), 10);
   const timescale = parseInt(String(segTemplate['@_timescale'] ?? '1'), 10);
   const durationAttr = parseInt(String(segTemplate['@_duration'] ?? '0'), 10);
 
-  const initUrl = initTpl ? resolveUrl(expandTemplate(initTpl, repId, 0, 0), baseUrl) : undefined;
+  const initUrl = initTpl ? resolveUrl(expandTemplate(initTpl, repId, 0, 0, bandwidth), baseUrl) : undefined;
   const segments: string[] = [];
   const timeline = segTemplate.SegmentTimeline;
 
@@ -99,7 +100,7 @@ function resolveSegmentsFromTemplate(
       const r = parseInt(String(s['@_r'] ?? '0'), 10);
       t = segT;
       for (let i = 0; i <= r; i++) {
-        segments.push(resolveUrl(expandTemplate(mediaTpl, repId, segNum, t), baseUrl));
+        segments.push(resolveUrl(expandTemplate(mediaTpl, repId, segNum, t, bandwidth), baseUrl));
         t += d;
         segNum++;
       }
@@ -107,7 +108,7 @@ function resolveSegmentsFromTemplate(
   } else if (durationAttr > 0) {
     const maxSegs = Math.ceil((mediaDurationSec * timescale) / durationAttr);
     for (let i = 0; i < maxSegs; i++) {
-      segments.push(resolveUrl(expandTemplate(mediaTpl, repId, startNumber + i, 0), baseUrl));
+      segments.push(resolveUrl(expandTemplate(mediaTpl, repId, startNumber + i, 0, bandwidth), baseUrl));
     }
   }
 

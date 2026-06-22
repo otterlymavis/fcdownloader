@@ -650,26 +650,6 @@ def extract_modelpress(page_url: str, cookies: str | None) -> dict[str, Any] | N
         if not any(re.sub(r"\?.*$", "", thumb) == re.sub(r"\?.*$", "", u) for u, _ in found):
             found.insert(0, (thumb, title))
 
-    if not found and profile["label"] == "Naver Article":
-        linked_articles: list[str] = []
-        for m in re.finditer(
-            r'["\']((?:https?:)?//(?:n\.news|m\.news|news|m\.entertain|entertain|m\.sports|sports\.news)\.naver\.com/[^"\']*?(?:article|mnews/article|sports/index|entertain/article)[^"\']*)["\']',
-            html_text,
-            re.I,
-        ):
-            article_url = _decode(m.group(1))
-            if article_url.startswith("//"):
-                article_url = "https:" + article_url
-            article_url = html.unescape(article_url)
-            if article_url not in linked_articles:
-                linked_articles.append(article_url)
-            if len(linked_articles) >= 8:
-                break
-        for article_url in linked_articles:
-            nested = extract_curated_site(article_url, cookies)
-            if nested and nested.get("entries"):
-                return nested
-
     if not found:
         return None
 
