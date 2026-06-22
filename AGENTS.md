@@ -181,3 +181,9 @@ If this task introduced a change outside the target boundary:
 
 In the final response, name the target changed and explicitly confirm which
 other targets were left untouched.
+
+
+
+# Branch naming
+Use conventional branch names: feat/<description>, fix/<description>, chore/<description>.
+Do NOT prefix branches with "codex/".
