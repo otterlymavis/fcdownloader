@@ -521,6 +521,9 @@ func TestCorsAllowsPrivateNetworkPreflight(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Private-Network"); got != "true" {
 		t.Fatalf("expected private-network permission header, got %q", got)
 	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "chrome-extension://test-extension" {
+		t.Fatalf("expected explicit extension origin, got %q", got)
+	}
 }
 
 func TestRateLimit(t *testing.T) {

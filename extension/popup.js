@@ -33,6 +33,11 @@ const MIN_HELPER_VERSION = "0.4.0-go";
 const HELPER_STATUS_TIMEOUT_MS = 6000;
 const HELPER_START_TIMEOUT_MS = 26000;
 const HELPER_READY_GRACE_MS = 10000;
+const LOCAL_HELPER_BASE_URLS = [
+  "http://127.0.0.1:8765",
+  "http://localhost:8765",
+];
+let localHelperBaseUrl = LOCAL_HELPER_BASE_URLS[0];
 
 let currentTabId   = null;
 let currentPageUrl = "";
@@ -72,6 +77,47 @@ function sendMessage(message, timeoutMs = 30000) {
       resolve(response);
     });
   });
+}
+
+async function fetchLocalHelperFromPopup(timeoutMs = HELPER_STATUS_TIMEOUT_MS) {
+  const startedAt = Date.now();
+  for (const baseUrl of LOCAL_HELPER_BASE_URLS) {
+    const remainingMs = Math.max(250, timeoutMs - (Date.now() - startedAt));
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), remainingMs);
+    try {
+      // Chrome's Local Network Access permission cannot be initiated by an
+      // MV3 service worker. A visible extension document must make the first
+      // request so Chrome can grant localhost access to the extension origin.
+      const response = await fetch(`${baseUrl}/health`, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "omit",
+        targetAddressSpace: "local",
+        signal: ac.signal,
+      });
+      const health = await response.json().catch(() => ({}));
+      if (response.ok && health?.ok !== false) {
+        localHelperBaseUrl = baseUrl;
+        return { ...health, helperBaseUrl: baseUrl };
+      }
+    } catch {
+      // Try the other loopback hostname.
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return null;
+}
+
+async function waitForLocalHelperFromPopup(timeoutMs = HELPER_START_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const health = await fetchLocalHelperFromPopup(Math.min(3000, deadline - Date.now()));
+    if (health?.ok) return health;
+    await new Promise((resolve) => setTimeout(resolve, 750));
+  }
+  return null;
 }
 
 function setStatus(text, kind = "info", detail = "") {
@@ -148,7 +194,11 @@ function toolProgressLabel(progress) {
 }
 
 async function updateToolProgressDisplay() {
-  const r = await fetch("http://127.0.0.1:8765/tools/progress");
+  const r = await fetch(`${localHelperBaseUrl}/tools/progress`, {
+    cache: "no-store",
+    credentials: "omit",
+    targetAddressSpace: "local",
+  });
   if (!r.ok) return false;
   const data = await r.json();
   const progress = data?.progress;
@@ -185,8 +235,12 @@ function startProgressPolling(mediaUrl) {
 
   progressPollInterval = setInterval(async () => {
     try {
-      const checkUrl = `http://127.0.0.1:8765/download/progress?${new URLSearchParams({ url: mediaUrl }).toString()}`;
-      const r = await fetch(checkUrl);
+      const checkUrl = `${localHelperBaseUrl}/download/progress?${new URLSearchParams({ url: mediaUrl }).toString()}`;
+      const r = await fetch(checkUrl, {
+        cache: "no-store",
+        credentials: "omit",
+        targetAddressSpace: "local",
+      });
       if (!r.ok) {
         await updateToolProgressDisplay();
         return;
@@ -519,6 +573,9 @@ async function renderHelperStatus(show) {
   }
   helperEl.hidden = false;
   const wasReadyForOrdering = helperReadyForOrdering();
+  // Prime Chrome's Local Network Access permission from the visible popup
+  // before asking the background service worker to perform its own probe.
+  await fetchLocalHelperFromPopup();
   const resp = await sendMessage({ type: "fcdl:helper_status" }, HELPER_STATUS_TIMEOUT_MS);
   const ready = Boolean(resp?.ok && resp.ready);
   const health = resp?.health || null;
@@ -557,6 +614,18 @@ function helperStatusText(ready, health) {
     ? health.tools.filter((tool) => tool.installed).length + "/" + health.tools.length
     : "";
   return toolBits ? `Companion ready: HD enabled (${toolBits} tools)` : "Companion ready: HD enabled";
+}
+
+async function launchCompanionFromPopup() {
+  try {
+    await chrome.tabs.create({
+      url: "fcdownloader-companion://start",
+      active: false,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -751,6 +820,8 @@ if (helperOpen) {
       helperStateIcon.title = "Opening Companion";
       helperStateIcon.setAttribute("aria-label", "Opening Companion");
     }
+    await launchCompanionFromPopup();
+    await waitForLocalHelperFromPopup();
     const resp = await sendMessage({ type: "fcdl:helper_start" }, HELPER_START_TIMEOUT_MS);
     helperOpen.disabled = false;
     renderHelperStatus(true);

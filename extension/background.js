@@ -1196,6 +1196,9 @@ async function preflightLocalHelperUrl(url, headers = []) {
     const r = await fetch(checkUrl, {
       method: "GET",
       headers: fetchHeadersFromChromeHeaders(headers),
+      cache: "no-store",
+      credentials: "omit",
+      targetAddressSpace: "local",
       signal: ac.signal,
     });
     const data = await r.json().catch(() => ({}));
@@ -1226,6 +1229,7 @@ async function fetchLocalHelperInfo(timeoutMs = LOCAL_HELPER_STATUS_TIMEOUT_MS) 
         method: "GET",
         cache: "no-store",
         credentials: "omit",
+        targetAddressSpace: "local",
         signal: ac.signal,
       });
       const data = await health.json().catch(() => ({}));
@@ -1275,6 +1279,9 @@ async function ensureLocalHelperTools(timeoutMs = 10 * 60 * 1000) {
   try {
     const response = await fetch(`${localHelperBaseUrl}/tools/ensure`, {
       method: "GET",
+      cache: "no-store",
+      credentials: "omit",
+      targetAddressSpace: "local",
       signal: ac.signal,
     });
     const data = await response.json().catch(() => ({}));

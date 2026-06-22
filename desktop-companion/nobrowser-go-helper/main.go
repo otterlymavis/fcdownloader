@@ -1256,7 +1256,15 @@ func allowedOrigin(origin string) string {
 	}
 	allowed := strings.TrimSpace(os.Getenv("FCDL_ALLOWED_ORIGINS"))
 	if allowed == "" {
-		return "*"
+		lower := strings.ToLower(strings.TrimSpace(origin))
+		if strings.HasPrefix(lower, "chrome-extension://") ||
+			strings.HasPrefix(lower, "moz-extension://") ||
+			strings.HasPrefix(lower, "http://localhost") ||
+			strings.HasPrefix(lower, "http://127.0.0.1") ||
+			strings.HasPrefix(lower, "http://[::1]") {
+			return origin
+		}
+		return "null"
 	}
 	for _, item := range strings.Split(allowed, ",") {
 		if strings.EqualFold(strings.TrimSpace(item), origin) {
