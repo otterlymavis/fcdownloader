@@ -15,6 +15,10 @@ const primaryTitle= $("primary-title");
 const primaryMeta = $("primary-meta");
 const primaryBtn  = $("primary-download");
 const primaryAudioBtn = $("primary-audio-download");
+const downloadOptionsEl = $("download-options");
+const qualitySelect = $("quality-select");
+const watermarkOption = $("watermark-option");
+const watermarkToggle = $("watermark-toggle");
 const emptyEl     = $("empty");
 const extractBtn  = $("extract-btn");
 const statusEl    = $("status");
@@ -54,6 +58,8 @@ let pinnedExtractResult = false;
 let currentGalleryInfo = null;
 let progressPollInterval = null;
 let toolProgressPollInterval = null;
+const helperFormatCache = new Map();
+const helperFormatPending = new Set();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -171,6 +177,124 @@ function formatBytes(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function isBilibiliPageUrl(url) {
+  return /(?:bilibili\.com|b23\.tv|bilibili\.tv)/i.test(String(url || ""));
+}
+
+function videoFormatsForOptions(formats = []) {
+  const bestByKey = new Map();
+  for (const format of formats || []) {
+    if (!format || String(format.vcodec || "").toLowerCase() === "none") continue;
+    const height = Number(format.height || 0) || 0;
+    const formatId = String(format.formatId || format.id || "");
+    if (!height && !formatId) continue;
+    const key = formatId || `${height}-${format.label || ""}`;
+    const current = bestByKey.get(key);
+    if (!current || formatSizeValue(format) > formatSizeValue(current)) {
+      bestByKey.set(key, format);
+    }
+  }
+  return [...bestByKey.values()].sort(compareLocalHelperFormats);
+}
+
+function formatOptionLabel(format = {}, index = 0) {
+  const parts = [];
+  const label = String(format.label || "").trim();
+  const height = Number(format.height || 0) || 0;
+  if (label) parts.push(label);
+  else if (height) parts.push(`${height}p`);
+  else parts.push(`Format ${index + 1}`);
+  const size = Number(format.filesize || format.filesizeApprox || 0) || 0;
+  if (size > 0) parts.push(formatBytes(size));
+  const codec = String(format.vcodec || "").split(".")[0];
+  if (codec && codec !== "none") parts.push(codec.toUpperCase());
+  return parts.filter(Boolean).join(" - ");
+}
+
+function primaryDownloadOptions(item = {}) {
+  if (!downloadOptionsEl || downloadOptionsEl.hidden) return {};
+  const selected = qualitySelect?.selectedOptions?.[0] || null;
+  return {
+    formatId: selected?.value || item.formatId || "",
+    maxHeight: selected?.dataset?.height || "",
+    removeWatermark: Boolean(watermarkToggle?.checked),
+  };
+}
+
+function itemWithPrimaryOptions(item = {}) {
+  return { ...item, ...primaryDownloadOptions(item) };
+}
+
+function helperFormatKey(item = {}) {
+  return item.pageUrl || item.url || currentPageUrl || "";
+}
+
+function itemWithCachedHelperFormats(item = {}) {
+  const cached = helperFormatCache.get(helperFormatKey(item));
+  if (!cached?.formats?.length) return item;
+  return {
+    ...item,
+    title: item.title || cached.title,
+    label: item.label || cached.label,
+    height: item.height || cached.height,
+    formatId: item.formatId || cached.formatId,
+    formats: item.formats?.length ? item.formats : cached.formats,
+    helperExtractor: item.helperExtractor || cached.helperExtractor,
+  };
+}
+
+async function hydrateHelperFormats(item = {}) {
+  const key = helperFormatKey(item);
+  if (!key || helperFormatCache.has(key) || helperFormatPending.has(key)) return;
+  if (!isBilibiliPageUrl(key) || item.formats?.length || !helperReadyForOrdering()) return;
+  helperFormatPending.add(key);
+  try {
+    const resp = await sendMessage({ type: "fcdl:helper_formats", pageUrl: key }, 35000);
+    if (!resp?.ok || !resp.info?.formats?.length) return;
+    helperFormatCache.set(key, {
+      title: resp.info.title,
+      label: resp.info.label,
+      height: resp.info.height,
+      formatId: resp.info.formatId,
+      formats: resp.info.formats,
+      helperExtractor: resp.info.helperExtractor,
+    });
+    if (helperFormatKey(currentVisibleItems[0] || {}) === key) {
+      render(currentVisibleItems);
+    }
+  } finally {
+    helperFormatPending.delete(key);
+  }
+}
+
+function renderDownloadOptions(item = {}) {
+  if (!downloadOptionsEl || !qualitySelect) return;
+  const formats = videoFormatsForOptions(item.formats);
+  const isBilibili = isBilibiliPageUrl(item.pageUrl || item.url || currentPageUrl);
+  if (!formats.length && !isBilibili) {
+    downloadOptionsEl.hidden = true;
+    return;
+  }
+  qualitySelect.innerHTML = "";
+  formats.forEach((format, index) => {
+    const option = document.createElement("option");
+    option.value = String(format.formatId || format.id || "");
+    option.dataset.height = Number(format.height || 0) > 0 ? String(Number(format.height)) : "";
+    option.textContent = formatOptionLabel(format, index);
+    if (String(option.value) === String(item.formatId || "")) option.selected = true;
+    qualitySelect.appendChild(option);
+  });
+  if (!formats.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Best available";
+    qualitySelect.appendChild(option);
+  }
+  if (watermarkOption) watermarkOption.hidden = !isBilibili;
+  if (watermarkToggle) watermarkToggle.checked = Boolean(item.removeWatermark);
+  downloadOptionsEl.hidden = false;
 }
 
 function stopToolProgressPolling() {
@@ -643,6 +767,7 @@ function render(items) {
   if (!items || !items.length) {
     primaryEl.hidden = true;
     if (primaryAudioBtn) primaryAudioBtn.hidden = true;
+    if (downloadOptionsEl) downloadOptionsEl.hidden = true;
     emptyEl.hidden   = false;
     moreEl.hidden    = true;
     if (technicalEl) technicalEl.hidden = currentTechnicalItems.length === 0;
@@ -651,14 +776,17 @@ function render(items) {
     return;
   }
 
-  const [first, ...rest] = items;
+  const [rawFirst, ...rest] = items;
+  const first = itemWithCachedHelperFormats(rawFirst);
 
   // Primary card
   primaryTitle.textContent = titleOf(first, hostname(currentPageUrl));
   primaryMeta.textContent  = itemMeta(first);
   primaryBtn.title         = "Download";
   primaryBtn.disabled      = false;
-  primaryBtn.onclick       = () => downloadItem(first);
+  renderDownloadOptions(first);
+  hydrateHelperFormats(first);
+  primaryBtn.onclick       = () => downloadItem(itemWithPrimaryOptions(first));
   if (primaryAudioBtn) {
     primaryAudioBtn.hidden = !canDownloadAudio(first);
     primaryAudioBtn.onclick = canDownloadAudio(first) ? () => downloadAudioItem(first) : null;
@@ -986,6 +1114,7 @@ function renderGallery(info) {
   primaryTitle.textContent = info.title || `${items.length} items`;
   primaryMeta.textContent  = describeGallery(items);
   primaryBtn.title         = `Save all ${items.length}`;
+  if (downloadOptionsEl) downloadOptionsEl.hidden = true;
   if (primaryAudioBtn) primaryAudioBtn.hidden = true;
   primaryBtn.onclick = async () => {
     primaryBtn.disabled = true;

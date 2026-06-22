@@ -20,5 +20,13 @@ assert(
   popup.includes("renderTechnicalSources") && popup.includes("Show technical sources"),
   "popup should expose hidden raw captures behind a technical sources toggle",
 );
+assert(
+  popup.includes("helperFormatCache") && popup.includes("fcdl:helper_formats"),
+  "popup should hydrate helper quality options without requiring a full extract",
+);
+assert(
+  popup.includes("quality-select") && popup.includes("watermark-toggle"),
+  "popup should expose quality and watermark controls before download",
+);
 
 console.log("extension popup companion-only tests passed");

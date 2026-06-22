@@ -39,8 +39,8 @@ const (
 	maxCookieBytes       = 32 * 1024
 	defaultFormat        = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/best[ext=mp4]/best"
 	youtubeFormat        = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/bestvideo[height<=1080]+bestaudio/best[height>=720][height<=1080]"
-	bilibiliFormat       = "bv*[height<=1080][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080][ext=mp4]/b[height<=1080]/best"
-	bilibiliCleanFormat  = "bv*[height>=720][height<=1080][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/bv*[height>=720][height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height>=720][height<=1080]+ba/b[height>=720][height<=1080][ext=mp4]/b[height>=720][height<=1080]"
+	bilibiliFormat       = "bv*[vcodec^=avc1][ext=mp4]+ba[ext=m4a]/bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b[ext=mp4]/b/best"
+	bilibiliCleanFormat  = "bv*[height>=720][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/bv*[height>=720][ext=mp4]+ba[ext=m4a]/bv*[height>=720]+ba/b[height>=720][ext=mp4]/b[height>=720]"
 	pinnedYtDlpVersion   = "2026.03.17"
 	defaultYtDlpBaseURL  = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17"
 	nightlyYtDlpBaseURL  = "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download"
@@ -479,7 +479,7 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight, cookies strin
 		return path, cleanup, nil
 	}
 	if bilibiliURL(rawURL) {
-		if path, cleanup, err := downloadBilibiliAPI(ctx, ffmpeg, rawURL, maxHeight, cookies, false); err == nil {
+		if path, cleanup, err := downloadBilibiliAPI(ctx, ffmpeg, rawURL, format, maxHeight, cookies, false); err == nil {
 			return path, cleanup, nil
 		} else {
 			logf("Bilibili API download failed; falling back to yt-dlp: %v", err)
@@ -526,7 +526,7 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight, cookies strin
 		cleanup()
 		stableErr := fmt.Errorf("%s", tail(out))
 		if bilibiliURL(rawURL) {
-			if apiPath, apiCleanup, apiErr := downloadBilibiliAPI(ctx, ffmpeg, rawURL, maxHeight, cookies, removeWatermark); apiErr == nil {
+			if apiPath, apiCleanup, apiErr := downloadBilibiliAPI(ctx, ffmpeg, rawURL, format, maxHeight, cookies, removeWatermark); apiErr == nil {
 				return apiPath, apiCleanup, nil
 			}
 			if removeWatermark {
@@ -1443,7 +1443,7 @@ func runBilibiliAPIJSON(ctx context.Context, rawURL, cookies string) (map[string
 	}, nil
 }
 
-func downloadBilibiliAPI(ctx context.Context, ffmpeg, rawURL, maxHeight, cookies string, requireCleanHD bool) (string, func(), error) {
+func downloadBilibiliAPI(ctx context.Context, ffmpeg, rawURL, format, maxHeight, cookies string, requireCleanHD bool) (string, func(), error) {
 	result, err := fetchBilibiliAPI(ctx, rawURL, cookies)
 	if err != nil {
 		return "", nil, err
@@ -1454,22 +1454,44 @@ func downloadBilibiliAPI(ctx context.Context, ffmpeg, rawURL, maxHeight, cookies
 	}
 	cleanup := func() { _ = os.RemoveAll(tmp) }
 
-	if videoURL, audioURL := pickBilibiliDash(result.Play, maxHeight, requireCleanHD); videoURL != "" && audioURL != "" {
-		outPath := filepath.Join(tmp, safeName(firstString(result.Title, result.BVID))+".mp4")
-		if err := muxBilibiliDash(ctx, ffmpeg, videoURL, audioURL, outPath, cookies); err != nil {
+	audio := bestBilibiliAudio(result.Play)
+	if audioURL := firstString(audio["baseUrl"], audio["base_url"]); audioURL != "" {
+		var lastErr error
+		candidates := bilibiliDashVideoCandidates(result.Play, format, maxHeight, requireCleanHD)
+		if len(candidates) == 0 && strings.TrimSpace(format) != "" {
 			cleanup()
-			return "", nil, err
+			return "", nil, fmt.Errorf("Bilibili did not expose selected format %s", format)
 		}
-		if requireCleanHD {
-			cleanPath := filepath.Join(tmp, "fcdownloader-watermark-free.mp4")
-			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 96, Status: "removing-watermark"})
-			if err := removeBilibiliWatermark(ctx, ffmpeg, outPath, cleanPath); err != nil {
-				cleanup()
-				return "", nil, err
+		for index, video := range candidates {
+			videoURL := firstString(video["baseUrl"], video["base_url"])
+			if videoURL == "" {
+				continue
 			}
-			return cleanPath, cleanup, nil
+			outPath := filepath.Join(tmp, safeName(firstString(result.Title, result.BVID))+".mp4")
+			if index > 0 {
+				_ = os.Remove(outPath)
+				setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 20, Status: "retrying"})
+			}
+			if err := muxBilibiliDash(ctx, ffmpeg, videoURL, audioURL, outPath, cookies); err != nil {
+				lastErr = err
+				logf("Bilibili DASH candidate failed height=%v quality=%v: %v", video["height"], firstNonNil(video["id"], video["quality"], video["qn"]), err)
+				continue
+			}
+			if requireCleanHD {
+				cleanPath := filepath.Join(tmp, "fcdownloader-watermark-free.mp4")
+				setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 96, Status: "removing-watermark"})
+				if err := removeBilibiliWatermark(ctx, ffmpeg, outPath, cleanPath); err != nil {
+					cleanup()
+					return "", nil, err
+				}
+				return cleanPath, cleanup, nil
+			}
+			return outPath, cleanup, nil
 		}
-		return outPath, cleanup, nil
+		if requireCleanHD && lastErr != nil {
+			cleanup()
+			return "", nil, lastErr
+		}
 	}
 
 	if !requireCleanHD {
@@ -1789,21 +1811,58 @@ func bilibiliFormatsFromPlay(play map[string]interface{}) []formatInfo {
 			Protocol: "https",
 		})
 	}
+	sort.SliceStable(formats, func(i, j int) bool {
+		return betterBilibiliFormat(formats[i], formats[j])
+	})
 	return formats
 }
 
+func betterBilibiliFormat(candidate, current formatInfo) bool {
+	candidateAudio := strings.EqualFold(firstString(candidate.VCodec), "none")
+	currentAudio := strings.EqualFold(firstString(current.VCodec), "none")
+	if candidateAudio != currentAudio {
+		return !candidateAudio
+	}
+	candidateHeight := numberValue(candidate.Height)
+	currentHeight := numberValue(current.Height)
+	if candidateHeight != currentHeight {
+		return candidateHeight > currentHeight
+	}
+	candidateQuality := numberValue(regexp.MustCompile(`\d+`).FindString(candidate.FormatID))
+	currentQuality := numberValue(regexp.MustCompile(`\d+`).FindString(current.FormatID))
+	if candidateQuality != currentQuality {
+		return candidateQuality > currentQuality
+	}
+	candidateSize := numberValue(candidate.Filesize)
+	currentSize := numberValue(current.Filesize)
+	if candidateSize != currentSize {
+		return candidateSize > currentSize
+	}
+	return false
+}
+
 func pickBilibiliDash(play map[string]interface{}, maxHeight string, requireCleanHD bool) (string, string) {
-	dash, _ := play["dash"].(map[string]interface{})
-	if dash == nil {
+	candidates := bilibiliDashVideoCandidates(play, "", maxHeight, requireCleanHD)
+	audio := bestBilibiliAudio(play)
+	if len(candidates) == 0 || audio == nil {
 		return "", ""
 	}
-	heightLimit := 1080.0
+	return firstString(candidates[0]["baseUrl"], candidates[0]["base_url"]), firstString(audio["baseUrl"], audio["base_url"])
+}
+
+func bilibiliDashVideoCandidates(play map[string]interface{}, format, maxHeight string, requireCleanHD bool) []map[string]interface{} {
+	dash, _ := play["dash"].(map[string]interface{})
+	if dash == nil {
+		return nil
+	}
+	selectedQuality := bilibiliSelectedQuality(format)
+	heightLimit := 100000.0
 	if regexp.MustCompile(`^\d{3,4}$`).MatchString(maxHeight) {
 		if parsed, err := strconv.Atoi(maxHeight); err == nil {
 			heightLimit = float64(parsed)
 		}
 	}
-	var bestVideo map[string]interface{}
+	var candidates []map[string]interface{}
 	for _, item := range interfaceSlice(dash["video"]) {
 		video, _ := item.(map[string]interface{})
 		if video == nil {
@@ -1811,12 +1870,36 @@ func pickBilibiliDash(play map[string]interface{}, maxHeight string, requireClea
 		}
 		mediaURL := firstString(video["baseUrl"], video["base_url"])
 		height := numberValue(video["height"])
-		if mediaURL == "" || height <= 0 || height > heightLimit || (requireCleanHD && height < 720) {
+		qualityID := int(numberValue(firstNonNil(video["id"], video["quality"], video["qn"])))
+		if mediaURL == "" || height <= 0 || height > heightLimit || (requireCleanHD && height < 720) || (selectedQuality > 0 && qualityID != selectedQuality) {
 			continue
 		}
-		if betterBilibiliVideo(video, bestVideo) {
-			bestVideo = video
+		candidates = append(candidates, video)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return betterBilibiliVideo(candidates[i], candidates[j])
+	})
+	return candidates
+}
+
+func bilibiliSelectedQuality(format string) int {
+	format = strings.TrimSpace(format)
+	if format == "" {
+		return 0
+	}
+	match := regexp.MustCompile(`(?i)^bili-dash-v-(\d+)$`).FindStringSubmatch(format)
+	if len(match) == 2 {
+		if value, err := strconv.Atoi(match[1]); err == nil {
+			return value
 		}
+	}
+	return 0
+}
+
+func bestBilibiliAudio(play map[string]interface{}) map[string]interface{} {
+	dash, _ := play["dash"].(map[string]interface{})
+	if dash == nil {
+		return nil
 	}
 	var bestAudio map[string]interface{}
 	for _, item := range interfaceSlice(dash["audio"]) {
@@ -1828,10 +1911,7 @@ func pickBilibiliDash(play map[string]interface{}, maxHeight string, requireClea
 			bestAudio = audio
 		}
 	}
-	if bestVideo == nil || bestAudio == nil {
-		return "", ""
-	}
-	return firstString(bestVideo["baseUrl"], bestVideo["base_url"]), firstString(bestAudio["baseUrl"], bestAudio["base_url"])
+	return bestAudio
 }
 
 func pickBilibiliTVCleanDash(play map[string]interface{}, maxHeight string) (string, string) {
@@ -1854,7 +1934,7 @@ func pickBilibiliTVCleanDash(play map[string]interface{}, maxHeight string) (str
 	if dash == nil {
 		return "", ""
 	}
-	heightLimit := 1080.0
+	heightLimit := 100000.0
 	if regexp.MustCompile(`^\d{3,4}$`).MatchString(maxHeight) {
 		if parsed, err := strconv.Atoi(maxHeight); err == nil {
 			heightLimit = float64(parsed)
@@ -1940,8 +2020,10 @@ func muxBilibiliDash(ctx context.Context, ffmpeg, videoURL, audioURL, outPath, c
 	headers := bilibiliFFmpegHeaders(cookies)
 	cmd := exec.CommandContext(ctx, ffmpeg,
 		"-y",
+		"-rw_timeout", "15000000",
 		"-headers", headers,
 		"-i", videoURL,
+		"-rw_timeout", "15000000",
 		"-headers", headers,
 		"-i", audioURL,
 		"-c", "copy",

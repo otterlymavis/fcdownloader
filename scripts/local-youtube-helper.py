@@ -21,7 +21,6 @@ HOST = "127.0.0.1"
 PORT = 8765
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FORMAT = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/best[ext=mp4]/best"
-YOUTUBE_FORMAT = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/137+140/136+140/18"
 MAX_URL_LENGTH = 4096
 SERVICE_VERSION = "0.4.0-python"
 LOCAL_HELPER_API_VERSION = "v1"
@@ -414,15 +413,27 @@ def _bilibili_headers_args(url: str) -> list[str]:
 def _format_spec(url: str, max_height: str | None, remove_watermark: bool = False) -> str:
     height = max_height if max_height and re.fullmatch(r"\d{3,4}", max_height) else "1080"
     if _is_youtube_url(url):
-        return YOUTUBE_FORMAT
+        return (
+            f"bv*[height>=720][height<={height}][ext=mp4]+ba[ext=m4a]/"
+            f"bv*[height>=720][height<={height}]+ba/"
+            f"bestvideo[height>=720][height<={height}]+bestaudio/"
+            f"best[height>=720][height<={height}]"
+        )
     if _is_bilibili_url(url):
         # Bilibili HD is usually DASH video+audio. Prefer H.264/MP4 where
         # available so the helper can remux into a broadly playable MP4.
+        if max_height and re.fullmatch(r"\d{3,4}", max_height):
+            return (
+                f"bv*[height<={height}][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/"
+                f"bv*[height<={height}][ext=mp4]+ba[ext=m4a]/"
+                f"bv*[height<={height}]+ba/"
+                f"b[height<={height}][ext=mp4]/b[height<={height}]/best"
+            )
         return (
-            f"bv*[height<={height}][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/"
-            f"bv*[height<={height}][ext=mp4]+ba[ext=m4a]/"
-            f"bv*[height<={height}]+ba/"
-            f"b[height<={height}][ext=mp4]/b[height<={height}]/best"
+            "bv*[vcodec^=avc1][ext=mp4]+ba[ext=m4a]/"
+            "bv*[ext=mp4]+ba[ext=m4a]/"
+            "bv*+ba/"
+            "b[ext=mp4]/b/best"
         )
     if max_height and re.fullmatch(r"\d{3,4}", max_height):
         return (
@@ -440,6 +451,12 @@ def _helper_port() -> int:
 
 
 def _extract_formats(url: str, cookies: str | None = None) -> dict[str, Any]:
+    if _is_bilibili_url(url):
+        try:
+            return _bili_api_formats(url, cookies)
+        except Exception:
+            pass
+
     cookie_file = _write_cookie_file(cookies, url)
     cmd = _yt_dlp_command([
         "--ignore-config",
@@ -493,6 +510,9 @@ def _extract_formats(url: str, cookies: str | None = None) -> dict[str, Any]:
             "filesize": filesize,
             "protocol": fmt.get("protocol"),
         })
+
+    if _is_bilibili_url(url):
+        formats = sorted(formats, key=_bili_format_sort_key)
 
     return {
         "ok": True,
@@ -637,7 +657,18 @@ def _bili_formats_from_play(play: dict[str, Any]) -> list[dict[str, Any]]:
             "filesize": item.get("size"),
             "protocol": "https",
         })
-    return out
+    return sorted(out, key=_bili_format_sort_key)
+
+
+def _bili_format_sort_key(fmt: dict[str, Any]) -> tuple[int, float, float, float, float]:
+    is_audio = str(fmt.get("vcodec") or "").lower() == "none"
+    return (
+        0 if is_audio else -1,
+        -_num(fmt.get("height")),
+        -_bili_quality_id(fmt),
+        -_num(fmt.get("filesize") or fmt.get("bandwidth")),
+        -_num(fmt.get("width")),
+    )
 
 
 def _num(value: Any) -> float:
@@ -647,18 +678,54 @@ def _num(value: Any) -> float:
         return 0
 
 
-def _bili_pick_dash(play: dict[str, Any], max_height: str | None) -> tuple[str, str]:
+def _bili_quality_id(value: dict[str, Any]) -> float:
+    for key in ("id", "quality", "qn", "formatId"):
+        raw = value.get(key)
+        if raw is None:
+            continue
+        match = re.search(r"\d+", str(raw))
+        if match:
+            return _num(match.group(0))
+    return 0
+
+
+def _bili_better_video(candidate: dict[str, Any], current: dict[str, Any] | None) -> bool:
+    if not current:
+        return True
+    candidate_height = _num(candidate.get("height"))
+    current_height = _num(current.get("height"))
+    if candidate_height != current_height:
+        return candidate_height > current_height
+    candidate_quality = _bili_quality_id(candidate)
+    current_quality = _bili_quality_id(current)
+    if candidate_quality != current_quality:
+        return candidate_quality > current_quality
+    candidate_size = _num(candidate.get("size") or candidate.get("filesize") or candidate.get("bandwidth"))
+    current_size = _num(current.get("size") or current.get("filesize") or current.get("bandwidth"))
+    if candidate_size != current_size:
+        return candidate_size > current_size
+    candidate_is_avc = "avc1" in str(candidate.get("codecs") or candidate.get("vcodec") or "")
+    current_is_avc = "avc1" in str(current.get("codecs") or current.get("vcodec") or "")
+    return candidate_is_avc and not current_is_avc
+
+
+def _bili_selected_quality(fmt: str | None) -> int:
+    match = re.fullmatch(r"(?i)bili-dash-v-(\d+)", (fmt or "").strip())
+    return int(match.group(1)) if match else 0
+
+
+def _bili_pick_dash(play: dict[str, Any], max_height: str | None, fmt: str | None = None) -> tuple[str, str]:
     dash = play.get("dash") or {}
-    limit = float(max_height) if max_height and re.fullmatch(r"\d{3,4}", max_height) else 1080.0
+    limit = float(max_height) if max_height and re.fullmatch(r"\d{3,4}", max_height) else 100000.0
+    selected_quality = _bili_selected_quality(fmt)
     best_video: dict[str, Any] | None = None
     for video in dash.get("video") or []:
         url = video.get("baseUrl") or video.get("base_url")
         height = _num(video.get("height"))
-        if not url or height <= 0 or height > limit:
+        quality_id = _bili_quality_id(video)
+        if not url or height <= 0 or height > limit or (selected_quality and quality_id != selected_quality):
             continue
-        if not best_video or height > _num(best_video.get("height")):
-            best_video = video
-        elif best_video and height == _num(best_video.get("height")) and "avc1" in str(video.get("codecs") or ""):
+        if _bili_better_video(video, best_video):
             best_video = video
 
     best_audio: dict[str, Any] | None = None
@@ -697,11 +764,13 @@ def _bili_ffmpeg_headers(cookies: str | None = None) -> str:
     return headers
 
 
-def _download_bili_api(tmpdir: Path, ffmpeg: str, page_url: str, max_height: str | None, cookies: str | None) -> Path:
+def _download_bili_api(tmpdir: Path, ffmpeg: str, page_url: str, max_height: str | None, cookies: str | None, fmt: str | None = None) -> Path:
     data = _bili_api_data(page_url, cookies)
     title = _safe_name(str((data["view"] or {}).get("title") or data["bvid"]))
     play = data["play"]
-    video_url, audio_url = _bili_pick_dash(play, max_height)
+    video_url, audio_url = _bili_pick_dash(play, max_height, fmt)
+    if fmt and not video_url:
+        raise RuntimeError(f"Bilibili did not expose selected format {fmt}")
     out_path = tmpdir / f"{title}.mp4"
     if video_url and audio_url:
         headers = _bili_ffmpeg_headers(cookies)
@@ -764,6 +833,21 @@ def _download(
         output_template = str(tmpdir / "%(title).120s-%(id)s.%(ext)s")
         cmd = _yt_dlp_command([
             "--ignore-config",
+            "--continue",
+            "--retries",
+            "infinite",
+            "--fragment-retries",
+            "infinite",
+            "--file-access-retries",
+            "5",
+            "--retry-sleep",
+            "3",
+            "--socket-timeout",
+            "30",
+            "--http-chunk-size",
+            "10M",
+            "--concurrent-fragments",
+            "4",
             "-f",
             fmt,
             "--merge-output-format",
@@ -774,6 +858,7 @@ def _download(
             "node",
             "--remote-components",
             "ejs:github",
+            *(["--extractor-args", "youtube:player_client=default"] if _is_youtube_url(url) else []),
             "--ffmpeg-location",
             ffmpeg,
             *_bilibili_headers_args(url),
@@ -792,7 +877,7 @@ def _download(
         )
         if proc.returncode != 0:
             if _is_bilibili_url(url):
-                return tmpdir, _download_bili_api(tmpdir, ffmpeg, url, max_height, cookies)
+                return tmpdir, _download_bili_api(tmpdir, ffmpeg, url, max_height, cookies, fmt)
             shutil.rmtree(tmpdir, ignore_errors=True)
             raise RuntimeError(proc.stdout[-2000:])
 
@@ -910,7 +995,7 @@ class Handler(BaseHTTPRequestHandler):
             tmpdir, path = _download(
                 url,
                 _query(qs, "format") or None,
-                _query(qs, "max_height") or "1080",
+                _query(qs, "max_height") or (None if _is_bilibili_url(url) else "1080"),
                 self.headers.get("X-FCDL-Cookies"),
                 _query(qs, "remove_watermark") in {"1", "true", "yes"},
             )

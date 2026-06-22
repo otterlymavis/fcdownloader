@@ -176,6 +176,45 @@ main {
   color: var(--ink-2);
   font-size: 12px;
 }
+.download-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 2px 0 6px;
+}
+.download-options[hidden] {
+  display: none;
+}
+.option-field,
+.option-check {
+  display: flex;
+  gap: 8px;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.option-field {
+  flex-direction: column;
+  gap: 4px;
+}
+.option-field select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 6px 8px;
+  font: inherit;
+}
+.option-check {
+  align-items: center;
+}
+.option-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  flex: 0 0 auto;
+}
 .primary-actions {
   display: flex;
   gap: 8px;

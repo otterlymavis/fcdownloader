@@ -14,6 +14,13 @@ let helperHealth = { ok: true, version: "0.4.1-go" };
 let failPrimaryHelperHost = false;
 let lastDownload = null;
 const fetchedUrls = [];
+const bilibiliHelperFormats = [
+  { formatId: "bili-dash-v-64", label: "720p", height: 720, ext: "mp4", vcodec: "avc1.640028", acodec: "none", filesize: 800_000 },
+  { formatId: "bili-dash-a-30280", label: "audio", height: null, ext: "m4a", vcodec: "none", acodec: "mp4a.40.2", filesize: 128_000 },
+  { formatId: "bili-dash-v-80", label: "1080p", height: 1080, ext: "mp4", vcodec: "avc1.640028", acodec: "none", filesize: 200_000 },
+  { formatId: "bili-dash-v-120", label: "4K", height: 2160, ext: "mp4", vcodec: "hev1.2.4.L153", acodec: "none", filesize: 2_400_000 },
+  { formatId: "bili-dash-v-112", label: "1080p+", height: 1080, ext: "mp4", vcodec: "hev1.2.4.L153", acodec: "none", filesize: 1_400_000 },
+];
 let currentTab = { id: 1, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", title: "Test YouTube" };
 const downloadChangeListeners = [];
 const webRequestCompletedListeners = [];
@@ -107,6 +114,22 @@ vm.runInNewContext(backgroundScript, {
         throw new Error("primary loopback unavailable");
       }
       return { ok: true, json: async () => helperHealth };
+    }
+    if (String(url).includes("/formats?")) {
+      const checkedUrl = new URL(String(url)).searchParams.get("url") || "";
+      if (/bilibili\.com|b23\.tv|bilibili\.tv/i.test(checkedUrl)) {
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            service: "fcdownloader-native-helper",
+            extractor: "BiliBiliAPI",
+            title: "Bilibili Video",
+            webpageUrl: checkedUrl,
+            formats: bilibiliHelperFormats,
+          }),
+        };
+      }
     }
     return { ok: true, json: async () => ({ ok: true }) };
   },
@@ -208,6 +231,56 @@ function send(msg) {
     biliList.technicalItems.length >= 3,
     `hidden Bilibili fragments should remain available as technical sources: ${JSON.stringify(biliList.technicalItems)}`
   );
+  const biliExtract = await send({
+    type: "fcdl:extract",
+    tabId: 1,
+    pageUrl: biliPage,
+    referer: biliPage,
+  });
+  assert.strictEqual(biliExtract.ok, true, biliExtract.error);
+  assert.strictEqual(biliExtract.info.source, "local-helper");
+  assert.strictEqual(biliExtract.info.height, 2160);
+  assert.strictEqual(biliExtract.info.formatId, "bili-dash-v-120");
+  assert.match(biliExtract.info.label, /2160p/);
+
+  const biliHelperFormats = await send({
+    type: "fcdl:helper_formats",
+    pageUrl: biliPage,
+  });
+  assert.strictEqual(biliHelperFormats.ok, true, biliHelperFormats.error);
+  assert.strictEqual(biliHelperFormats.info.source, "local-helper");
+  assert.strictEqual(biliHelperFormats.info.formatId, "bili-dash-v-120");
+  assert.strictEqual(biliHelperFormats.info.formats.length, bilibiliHelperFormats.length);
+
+  lastDownload = null;
+  const biliDownload = await send({
+    type: "fcdl:download",
+    tabId: 1,
+    item: biliList.items[0],
+  });
+  assert.strictEqual(biliDownload.ok, true, biliDownload.error);
+  assert.strictEqual(biliDownload.route, "local helper");
+  assert(lastDownload, "Bilibili should download through the local helper");
+  assert.match(lastDownload.url, /^http:\/\/127\.0\.0\.1:8765\/download\?/);
+  assert.match(lastDownload.url, /url=https%3A%2F%2Fwww\.bilibili\.com%2Fvideo%2FBV1QkjC6nEQU%2F/);
+  assert(!/max_height=/.test(lastDownload.url), `Bilibili download should not cap quality: ${lastDownload.url}`);
+
+  lastDownload = null;
+  const selectedBiliDownload = await send({
+    type: "fcdl:download",
+    tabId: 1,
+    item: {
+      ...biliList.items[0],
+      formatId: "bili-dash-v-64",
+      maxHeight: "720",
+      removeWatermark: true,
+    },
+  });
+  assert.strictEqual(selectedBiliDownload.ok, true, selectedBiliDownload.error);
+  assert(lastDownload, "Selected Bilibili options should download through the local helper");
+  assert.match(lastDownload.url, /format=bili-dash-v-64/);
+  assert.match(lastDownload.url, /max_height=720/);
+  assert.match(lastDownload.url, /remove_watermark=1/);
 
   const articlePage = "https://publisher.example.com/watch/123";
   currentTab = { id: 1, url: articlePage, title: "Publisher Video" };

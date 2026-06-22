@@ -842,7 +842,9 @@ function isBilibiliPageUrl(url) {
 
 function localHelperDownloadUrl(pageUrl, youtubeOnly = false, options = {}) {
   const params = new URLSearchParams({ url: pageUrl });
-  if (!youtubeOnly) params.set("max_height", "1080");
+  if (options.formatId) params.set("format", options.formatId);
+  if (options.maxHeight) params.set("max_height", String(options.maxHeight));
+  if (!youtubeOnly && !isBilibiliPageUrl(pageUrl) && !params.has("max_height")) params.set("max_height", "1080");
   if (options.removeWatermark) params.set("remove_watermark", "1");
   return `${localHelperBaseUrl}/${youtubeOnly ? "youtube-hd" : "download"}?${params.toString()}`;
 }
@@ -1591,7 +1593,9 @@ async function downloadItem(tabId, item) {
       if (!setup.ok) throw new Error(setup.error || "Companion video tools are not ready.");
     }
     const localUrl = localHelperDownloadUrl(helperTarget, false, {
-      removeWatermark,
+      formatId: item.formatId,
+      maxHeight: item.maxHeight,
+      removeWatermark: item.removeWatermark ?? removeWatermark,
     });
     const check = await preflightLocalHelperUrl(localUrl, helperHeaders);
     if (!check.ok) throw new Error(check.error);
@@ -1938,6 +1942,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     if (msg.type === "fcdl:helper_ensure_tools") {
       sendResponse(await ensureLocalHelperTools());
+      return;
+    }
+    if (msg.type === "fcdl:helper_formats") {
+      try {
+        const info = await callLocalHelperFormats(msg.pageUrl);
+        sendResponse({ ok: true, info });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e.message || e) });
+      }
       return;
     }
     if (msg.type === "fcdl:detected") {

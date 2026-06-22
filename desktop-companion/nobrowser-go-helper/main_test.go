@@ -263,6 +263,7 @@ func TestBilibiliDashPrefersHighQualitySameHeight(t *testing.T) {
 	play := map[string]interface{}{
 		"dash": map[string]interface{}{
 			"video": []interface{}{
+				map[string]interface{}{"baseUrl": "https://v-2160.m4s", "id": float64(120), "height": float64(2160), "codecs": "hev1.2.4.L153", "bandwidth": float64(2_400_000)},
 				map[string]interface{}{"baseUrl": "https://v-1080-small-avc.m4s", "id": float64(80), "height": float64(1080), "codecs": "avc1.640028", "bandwidth": float64(200_000)},
 				map[string]interface{}{"baseUrl": "https://v-1080-large-hevc.m4s", "id": float64(112), "height": float64(1080), "codecs": "hev1.2.4.L153", "bandwidth": float64(1_400_000)},
 			},
@@ -271,9 +272,39 @@ func TestBilibiliDashPrefersHighQualitySameHeight(t *testing.T) {
 			},
 		},
 	}
-	video, audio := pickBilibiliDash(play, "1080", false)
+	video, audio := pickBilibiliDash(play, "", false)
+	if video != "https://v-2160.m4s" || audio != "https://audio.m4s" {
+		t.Fatalf("expected uncapped best Bilibili stream, got video=%q audio=%q", video, audio)
+	}
+	video, audio = pickBilibiliDash(play, "1080", false)
 	if video != "https://v-1080-large-hevc.m4s" || audio != "https://audio.m4s" {
 		t.Fatalf("expected largest same-height Bilibili stream, got video=%q audio=%q", video, audio)
+	}
+	candidates := bilibiliDashVideoCandidates(play, "bili-dash-v-80", "", false)
+	if len(candidates) != 1 || firstString(candidates[0]["baseUrl"]) != "https://v-1080-small-avc.m4s" {
+		t.Fatalf("expected selected Bilibili quality 80 only, got %+v", candidates)
+	}
+}
+
+func TestBilibiliFormatsAreBestFirst(t *testing.T) {
+	play := map[string]interface{}{
+		"dash": map[string]interface{}{
+			"video": []interface{}{
+				map[string]interface{}{"baseUrl": "https://v-720.m4s", "id": float64(64), "height": float64(720), "codecs": "avc1.640028", "bandwidth": float64(800_000)},
+				map[string]interface{}{"baseUrl": "https://v-1080-small-avc.m4s", "id": float64(80), "height": float64(1080), "codecs": "avc1.640028", "bandwidth": float64(200_000)},
+				map[string]interface{}{"baseUrl": "https://v-1080-large-hevc.m4s", "id": float64(112), "height": float64(1080), "codecs": "hev1.2.4.L153", "bandwidth": float64(1_400_000)},
+			},
+			"audio": []interface{}{
+				map[string]interface{}{"baseUrl": "https://audio.m4s", "id": float64(30280), "bandwidth": float64(128_000)},
+			},
+		},
+	}
+	formats := bilibiliFormatsFromPlay(play)
+	if len(formats) == 0 {
+		t.Fatal("expected Bilibili formats")
+	}
+	if formats[0].FormatID != "bili-dash-v-112" || numberValue(formats[0].Height) != 1080 {
+		t.Fatalf("expected best Bilibili video first, got %+v", formats[0])
 	}
 }
 
