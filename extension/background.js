@@ -15,10 +15,17 @@
 // source has FCDL_DEFAULT_BACKEND = "" in config.js so forks don't inherit
 // anyone's infrastructure; a distribution build replaces that value at
 // packaging time so end users never have to enter the URL manually.
-import { FCDL_DEFAULT_BACKEND } from "./config.js";
+import {
+  FCDL_DEFAULT_BACKEND,
+  FCDL_EXTENSION_BUILD,
+  FCDL_EXTENSION_BUILT_AT,
+  FCDL_MIN_HELPER_VERSION,
+} from "./config.js";
 const DEFAULT_BACKEND = (FCDL_DEFAULT_BACKEND || "").trim().replace(/\/+$/, "");
+const EXTENSION_BUILD = (FCDL_EXTENSION_BUILD || "dev").trim() || "dev";
+const EXTENSION_BUILT_AT = (FCDL_EXTENSION_BUILT_AT || "").trim();
 const DEBUG_LOGS = false;
-const LOCAL_HELPER_MIN_VERSION = "0.4.0-go";
+const LOCAL_HELPER_MIN_VERSION = (FCDL_MIN_HELPER_VERSION || "0.4.0-go").trim() || "0.4.0-go";
 const LOCAL_HELPER_STATUS_TIMEOUT_MS = 3500;
 const LOCAL_HELPER_START_TIMEOUT_MS = 20000;
 const LOCAL_HELPER_BASE_URLS = [
@@ -840,6 +847,74 @@ function localHelperDownloadUrl(pageUrl, youtubeOnly = false, options = {}) {
   return `${localHelperBaseUrl}/${youtubeOnly ? "youtube-hd" : "download"}?${params.toString()}`;
 }
 
+function bestLocalHelperFormat(formats = []) {
+  return [...formats]
+    .filter((format) => format && format.vcodec !== "none")
+    .sort((a, b) =>
+      (Number(b.height || 0) - Number(a.height || 0)) ||
+      (Number(b.filesize || 0) - Number(a.filesize || 0))
+    )[0] || formats[0] || null;
+}
+
+function isYoutubePageUrl(url) {
+  return /(?:youtube\.com|youtu\.be)/i.test(String(url || ""));
+}
+
+async function callLocalHelperFormats(pageUrl) {
+  const health = await fetchLocalHelperInfo();
+  if (!localHelperReady(health)) throw new Error(localHelperProblem(health));
+  if (health.needsSetup) {
+    const setup = await ensureLocalHelperTools();
+    if (!setup.ok) throw new Error(setup.error || "Companion video tools are not ready.");
+  }
+
+  const cookies = await localHelperCookieHeaderFor(pageUrl);
+  const params = new URLSearchParams({ url: pageUrl });
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 25_000);
+  try {
+    const response = await fetch(`${localHelperBaseUrl}/formats?${params.toString()}`, {
+      method: "GET",
+      headers: fetchHeadersFromChromeHeaders(cookieHeaderList(cookies)),
+      cache: "no-store",
+      credentials: "omit",
+      targetAddressSpace: "loopback",
+      signal: ac.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.ok === false) {
+      throw new Error(data?.error || `Companion HTTP ${response.status}`);
+    }
+    const formats = Array.isArray(data.formats) ? data.formats : [];
+    if (!formats.length) throw new Error("Companion did not find downloadable formats.");
+    const best = bestLocalHelperFormat(formats);
+    const height = Number(best?.height || 0) || null;
+    const source = isYoutubePageUrl(pageUrl) ? "youtube-hd-local" : "local-helper";
+    return {
+      kind: "embed",
+      source,
+      backendRouted: false,
+      url: pageUrl,
+      pageUrl,
+      title: data.title || data.webpageUrl || pageUrl,
+      thumbnail: data.thumbnail || "",
+      label: height ? `${height}p (local companion)` : "Local companion",
+      ext: "mp4",
+      height,
+      formatId: best?.formatId || best?.id || "",
+      formats,
+      helperExtractor: data.extractor || "",
+    };
+  } catch (e) {
+    if (e.name === "AbortError") {
+      throw new Error("Companion timed out while checking this page.");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function isPageLikeDownloadUrl(url) {
   const value = String(url || "");
   if (!value) return false;
@@ -1198,7 +1273,7 @@ async function preflightLocalHelperUrl(url, headers = []) {
       headers: fetchHeadersFromChromeHeaders(headers),
       cache: "no-store",
       credentials: "omit",
-      targetAddressSpace: "local",
+      targetAddressSpace: "loopback",
       signal: ac.signal,
     });
     const data = await r.json().catch(() => ({}));
@@ -1229,7 +1304,7 @@ async function fetchLocalHelperInfo(timeoutMs = LOCAL_HELPER_STATUS_TIMEOUT_MS) 
         method: "GET",
         cache: "no-store",
         credentials: "omit",
-        targetAddressSpace: "local",
+        targetAddressSpace: "loopback",
         signal: ac.signal,
       });
       const data = await health.json().catch(() => ({}));
@@ -1281,7 +1356,7 @@ async function ensureLocalHelperTools(timeoutMs = 10 * 60 * 1000) {
       method: "GET",
       cache: "no-store",
       credentials: "omit",
-      targetAddressSpace: "local",
+      targetAddressSpace: "loopback",
       signal: ac.signal,
     });
     const data = await response.json().catch(() => ({}));
@@ -1492,7 +1567,7 @@ async function downloadItem(tabId, item) {
       if (!setup.ok) throw new Error(setup.error || "Companion video tools are not ready.");
     }
     const localUrl = localHelperDownloadUrl(helperTarget, false, {
-      removeWatermark: isBilibiliHelperTarget || removeWatermark,
+      removeWatermark,
     });
     const check = await preflightLocalHelperUrl(localUrl, helperHeaders);
     if (!check.ok) throw new Error(check.error);
@@ -1819,7 +1894,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     if (msg.type === "fcdl:helper_status") {
       const health = await fetchLocalHelperInfo(LOCAL_HELPER_STATUS_TIMEOUT_MS);
-      sendResponse({ ok: true, ready: localHelperReady(health), health, problem: localHelperProblem(health) });
+      sendResponse({
+        ok: true,
+        ready: localHelperReady(health),
+        health,
+        problem: localHelperProblem(health),
+        extensionBuild: EXTENSION_BUILD,
+        extensionBuiltAt: EXTENSION_BUILT_AT,
+        minimumHelperVersion: LOCAL_HELPER_MIN_VERSION,
+      });
       return;
     }
     if (msg.type === "fcdl:helper_start") {
@@ -1883,6 +1966,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const elapsed = Date.now() - t0;
         debugWarn("[fcdl] extract failed in", elapsed, "ms:", e);
         const error = String(e.message || e);
+        try {
+          const localInfo = await callLocalHelperFormats(msg.pageUrl);
+          debugLog("[fcdl] extract local companion fallback ←", Date.now() - t0, "ms, formats=", localInfo.formats?.length || 0);
+          sendResponse({ ok: true, info: localInfo, fallbackFrom: error });
+          return;
+        } catch (localError) {
+          debugWarn("[fcdl] local companion extract fallback failed:", localError);
+        }
         if (/No extractor found for this URL and the page HTML contained no detectable media/i.test(error)) {
           preferRuntimeCapturedMedia(msg.tabId, msg.pageUrl);
         }

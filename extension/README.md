@@ -95,12 +95,15 @@ share the default. Leave blank to use the backend baked into a public build.
 
 ## Building for the Chrome Web Store
 
-For public distribution, use the packaging script so the backend URL is baked
-into `dist/extension/config.js` without committing it to source:
+For public distribution, build the helper and extension as one paired artifact
+set. This deletes/regenerates `dist/extension`, stamps matching build IDs into
+the extension and helper, and writes release manifests under `dist/`:
 
 ```powershell
 $env:EXTENSION_DEFAULT_BACKEND='https://your-instance.fly.dev'
-npm run pack:extension
+npm run build:distribution
+npm run smoke:distribution:static
+npm run smoke:distribution
 ```
 
 Upload `dist/fcdownloader-extension-v<version>.zip` at
@@ -131,11 +134,31 @@ signing.
 
 The committed source has an empty `FCDL_DEFAULT_BACKEND` in `config.js`, so
 building the extension as-is requires the user to enter a backend URL once.
-For a public-facing release, bake in the URL at packaging time:
+For a public-facing release, always build the paired helper + extension
+distribution artifacts from source:
 
 ```bash
-EXTENSION_DEFAULT_BACKEND=https://your-instance.fly.dev npm run pack:extension
+EXTENSION_DEFAULT_BACKEND=https://your-instance.fly.dev npm run build:distribution
+npm run smoke:distribution:static
+npm run smoke:distribution
 ```
 
+`smoke:distribution:static` is suitable for CI because it verifies the generated
+folder, the built helper, and matching build IDs without needing Chrome.
+`smoke:distribution` launches Chrome for Testing and verifies helper detection
+plus Bilibili 1080p extraction. For the heavier end-to-end check that also
+starts a Bilibili download through the extension route, run:
+
+```bash
+npm run smoke:distribution:download
+```
+
+Do not manually edit or ship a previously generated `dist/extension` folder.
+It is a copied build artifact and can go stale. Chrome unpacked-extension
+testing should point to the freshly generated `dist/extension` after
+`npm run build:distribution`.
+
 Automated releases should set the `EXTENSION_DEFAULT_BACKEND` repository
-secret and run the release workflow from a version tag.
+secret, run `npm run build:distribution`, then run static smoke from the
+generated artifacts before publishing. Run the Chrome smoke before publishing
+from a local machine or CI image that has Chrome for Testing available.

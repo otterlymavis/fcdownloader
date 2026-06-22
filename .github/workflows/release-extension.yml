@@ -1,12 +1,12 @@
 name: Release Extension
 
-# Builds the browser extension zip with your backend URL baked in and
-# attaches it to a GitHub Release.
+# Builds paired helper + browser extension distribution artifacts with your
+# backend URL baked in and attaches them to a GitHub Release.
 #
 # Triggers:
 #   - Push of a version tag (e.g. `git tag v1.1.0 && git push origin v1.1.0`)
-#     → packs the extension AND creates a GitHub Release with the zip attached
-#   - Manual `workflow_dispatch` from the Actions tab → packs but does NOT
+#     → builds artifacts AND creates a GitHub Release with the zip attached
+#   - Manual `workflow_dispatch` from the Actions tab → builds but does NOT
 #     create a release (artifact only — handy for testing)
 #
 # Required GitHub secret:
@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   pack:
-    name: Pack extension (${{ github.ref_name }})
+    name: Build distribution (${{ github.ref_name }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -42,6 +42,11 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
+      - name: Set up Go
+        uses: actions/setup-go@v6.0.0
+        with:
+          go-version: '1.26.x'
+
       - name: Install npm deps
         run: npm ci
 
@@ -54,21 +59,25 @@ jobs:
             exit 1
           fi
 
-      - name: Pack extension
+      - name: Build paired helper + extension distribution
         env:
           EXTENSION_DEFAULT_BACKEND: ${{ secrets.EXTENSION_DEFAULT_BACKEND }}
-        run: npm run pack:extension
+        run: npm run build:distribution
 
       - name: Capture pack output paths
         id: pack
         run: |
           VERSION=$(node -p "require('./extension/manifest.json').version")
           ZIP="dist/fcdownloader-extension-v${VERSION}.zip"
+          HELPER="desktop-companion/build/helper/fcdownloader-local-helper"
           test -f "$ZIP" || { echo "::error::Expected packed extension not found at $ZIP"; exit 1; }
+          test -f "$HELPER" || { echo "::error::Expected helper not found at $HELPER"; exit 1; }
           echo "zip=$ZIP"        >> $GITHUB_OUTPUT
+          echo "helper=$HELPER"   >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Packed $ZIP (manifest version $VERSION)"
+          echo "Built $ZIP and $HELPER (manifest version $VERSION)"
           ls -lh "$ZIP"
+          ls -lh "$HELPER"
 
       - name: Verify backend URL was actually baked in
         run: |
@@ -76,11 +85,26 @@ jobs:
             || { echo "::error::FCDL_DEFAULT_BACKEND was not substituted into config.js"; exit 1; }
           echo "FCDL_DEFAULT_BACKEND present in packed config.js ✓"
 
+      - name: Verify generated extension is not stale
+        run: |
+          ! grep -R 'targetAddressSpace: "local"' dist/extension \
+            || { echo "::error::dist/extension contains stale local address-space fetches"; exit 1; }
+          ! grep -R 'FCDL_EXTENSION_BUILD = "dev"' dist/extension/config.js \
+            || { echo "::error::dist/extension has unstamped dev build metadata"; exit 1; }
+          test -f dist/distribution-manifest.json || { echo "::error::missing distribution manifest"; exit 1; }
+
+      - name: Smoke test generated helper + extension metadata
+        run: npm run smoke:distribution:static
+
       - name: Upload zip as workflow artifact
         uses: actions/upload-artifact@v7.0.1
         with:
           name: fcdownloader-extension-v${{ steps.pack.outputs.version }}-${{ github.run_number }}
-          path: ${{ steps.pack.outputs.zip }}
+          path: |
+            ${{ steps.pack.outputs.zip }}
+            ${{ steps.pack.outputs.helper }}
+            dist/extension-release-manifest.json
+            dist/distribution-manifest.json
           retention-days: 90
           if-no-files-found: error
 
@@ -100,4 +124,9 @@ jobs:
           manual configuration needed on first run." || true
           
           echo "Uploading $TAG asset..."
-          gh release upload "$TAG" "${{ steps.pack.outputs.zip }}" --clobber
+          gh release upload "$TAG" \
+            "${{ steps.pack.outputs.zip }}" \
+            "${{ steps.pack.outputs.helper }}" \
+            dist/extension-release-manifest.json \
+            dist/distribution-manifest.json \
+            --clobber

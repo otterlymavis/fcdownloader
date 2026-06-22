@@ -93,7 +93,7 @@ async function fetchLocalHelperFromPopup(timeoutMs = HELPER_STATUS_TIMEOUT_MS) {
         method: "GET",
         cache: "no-store",
         credentials: "omit",
-        targetAddressSpace: "local",
+        targetAddressSpace: "loopback",
         signal: ac.signal,
       });
       const health = await response.json().catch(() => ({}));
@@ -197,7 +197,7 @@ async function updateToolProgressDisplay() {
   const r = await fetch(`${localHelperBaseUrl}/tools/progress`, {
     cache: "no-store",
     credentials: "omit",
-    targetAddressSpace: "local",
+    targetAddressSpace: "loopback",
   });
   if (!r.ok) return false;
   const data = await r.json();
@@ -239,7 +239,7 @@ function startProgressPolling(mediaUrl) {
       const r = await fetch(checkUrl, {
         cache: "no-store",
         credentials: "omit",
-        targetAddressSpace: "local",
+        targetAddressSpace: "loopback",
       });
       if (!r.ok) {
         await updateToolProgressDisplay();
@@ -460,6 +460,10 @@ function helperVersionAtLeast(version, minimum = MIN_HELPER_VERSION) {
   return true;
 }
 
+function helperHealthReady(health) {
+  return Boolean(health?.ok && helperVersionAtLeast(health.version));
+}
+
 function helperReadyForOrdering() {
   return helperIsReady || (helperLastReadyAt && Date.now() - helperLastReadyAt < HELPER_READY_GRACE_MS);
 }
@@ -575,10 +579,10 @@ async function renderHelperStatus(show) {
   const wasReadyForOrdering = helperReadyForOrdering();
   // Prime Chrome's Local Network Access permission from the visible popup
   // before asking the background service worker to perform its own probe.
-  await fetchLocalHelperFromPopup();
+  const popupHealth = await fetchLocalHelperFromPopup();
   const resp = await sendMessage({ type: "fcdl:helper_status" }, HELPER_STATUS_TIMEOUT_MS);
-  const ready = Boolean(resp?.ok && resp.ready);
-  const health = resp?.health || null;
+  const health = resp?.health || popupHealth || null;
+  const ready = Boolean((resp?.ok && resp.ready) || helperHealthReady(popupHealth));
   const needsSetup = Boolean(health?.needsSetup);
   if (ready) helperLastReadyAt = Date.now();
   else if (health?.ok && !helperVersionAtLeast(health.version)) helperLastReadyAt = 0;
@@ -821,11 +825,11 @@ if (helperOpen) {
       helperStateIcon.setAttribute("aria-label", "Opening Companion");
     }
     await launchCompanionFromPopup();
-    await waitForLocalHelperFromPopup();
+    const popupHealth = await waitForLocalHelperFromPopup();
     const resp = await sendMessage({ type: "fcdl:helper_start" }, HELPER_START_TIMEOUT_MS);
     helperOpen.disabled = false;
     renderHelperStatus(true);
-    if (!resp?.ready) {
+    if (!resp?.ready && !helperHealthReady(popupHealth)) {
       setErrorStatus("Install or start FCDownloader Companion, then try again.");
     }
   });
@@ -933,8 +937,8 @@ extractBtn.addEventListener("click", async () => {
       height: info.height,
       ext: "mp4",
       kind: isYtdlStream ? "embed" : info.kind,
-      source: isYtdlStream ? "youtube-hd-local" : "backend",
-      backendRouted: !isYtdlStream,
+      source: info.source || (isYtdlStream ? "youtube-hd-local" : "backend"),
+      backendRouted: info.backendRouted ?? !isYtdlStream,
       pageUrl: currentPageUrl,
       formatId: info.formatId,
       formats: info.formats,

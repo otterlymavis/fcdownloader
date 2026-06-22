@@ -14,3 +14,6 @@
 // options page afterwards.
 
 export const FCDL_DEFAULT_BACKEND = "";
+export const FCDL_EXTENSION_BUILD = "dev";
+export const FCDL_EXTENSION_BUILT_AT = "";
+export const FCDL_MIN_HELPER_VERSION = "0.4.0-go";

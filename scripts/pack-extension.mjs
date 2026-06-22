@@ -14,7 +14,8 @@
  *
  * The committed `extension/config.js` is never modified.
  */
-import { promises as fs, createWriteStream } from "node:fs";
+import { promises as fs } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +24,24 @@ const ROOT = path.resolve(__dirname, "..");
 const SRC  = path.join(ROOT, "extension");
 const OUT  = path.join(ROOT, "dist", "extension");
 const DIST = path.join(ROOT, "dist");
+
+function gitShortSha() {
+  try {
+    const sha = execFileSync("git", ["rev-parse", "--short=12", "HEAD"], {
+      cwd: ROOT,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const dirty = execFileSync("git", ["status", "--short"], {
+      cwd: ROOT,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return dirty ? `${sha}-dirty` : sha;
+  } catch {
+    return "nogit";
+  }
+}
 
 const backend = (process.env.EXTENSION_DEFAULT_BACKEND ?? "").trim().replace(/\/+$/, "");
 if (!backend) {
@@ -53,6 +72,16 @@ await fs.rm(OUT, { recursive: true, force: true });
 console.log(`[pack] copying ${path.relative(ROOT, SRC)} → ${path.relative(ROOT, OUT)}`);
 await copyDir(SRC, OUT);
 
+// Read version from the source manifest for zip/build metadata.
+const manifest = JSON.parse(await fs.readFile(path.join(SRC, "manifest.json"), "utf-8"));
+const version = manifest.version || "0.0.0";
+const builtAt = (process.env.FCDL_EXTENSION_BUILT_AT || new Date().toISOString()).trim();
+const extensionBuild = (
+  process.env.FCDL_EXTENSION_BUILD ||
+  `${version}-${gitShortSha()}-${builtAt.replace(/[-:.TZ]/g, "").slice(0, 14)}`
+).trim();
+const minHelperVersion = (process.env.FCDL_MIN_HELPER_VERSION || "0.4.0-go").trim();
+
 const configPath = path.join(OUT, "config.js");
 let cfg = await fs.readFile(configPath, "utf-8");
 const replaced = cfg.replace(
@@ -66,9 +95,26 @@ if (replaced === cfg) {
 await fs.writeFile(configPath, replaced, "utf-8");
 console.log(`[pack] baked backend URL into ${path.relative(ROOT, configPath)}`);
 
-// Read version from the source manifest for the zip filename.
-const manifest = JSON.parse(await fs.readFile(path.join(SRC, "manifest.json"), "utf-8"));
-const version  = manifest.version || "0.0.0";
+cfg = await fs.readFile(configPath, "utf-8");
+const stamped = cfg
+  .replace(
+    /export const FCDL_EXTENSION_BUILD = "[^"]*";/,
+    `export const FCDL_EXTENSION_BUILD = ${JSON.stringify(extensionBuild)};`,
+  )
+  .replace(
+    /export const FCDL_EXTENSION_BUILT_AT = "[^"]*";/,
+    `export const FCDL_EXTENSION_BUILT_AT = ${JSON.stringify(builtAt)};`,
+  )
+  .replace(
+    /export const FCDL_MIN_HELPER_VERSION = "[^"]*";/,
+    `export const FCDL_MIN_HELPER_VERSION = ${JSON.stringify(minHelperVersion)};`,
+  );
+if (stamped === cfg) {
+  console.error("[pack] FAILED to stamp extension build metadata — has the pattern in config.js changed?");
+  process.exit(1);
+}
+await fs.writeFile(configPath, stamped, "utf-8");
+console.log(`[pack] stamped extension build ${extensionBuild}`);
 
 // Use Node 22+ built-in zip via the `node:zlib` approach — actually there's
 // no built-in zip writer, but the cross-platform path is to spawn `zip`
@@ -78,6 +124,20 @@ const version  = manifest.version || "0.0.0";
 let zipPath = path.join(ROOT, "dist", `fcdownloader-extension-v${version}.zip`);
 try {
   await fs.mkdir(DIST, { recursive: true });
+  await fs.writeFile(
+    path.join(DIST, "extension-release-manifest.json"),
+    JSON.stringify({
+      extensionVersion: version,
+      extensionBuild,
+      extensionBuiltAt: builtAt,
+      minHelperVersion,
+      backend,
+      source: path.relative(ROOT, SRC),
+      unpacked: path.relative(ROOT, OUT),
+      zip: path.relative(ROOT, zipPath),
+    }, null, 2) + "\n",
+    "utf-8",
+  );
   for (const entry of await fs.readdir(DIST, { withFileTypes: true })) {
     if (entry.isFile() && /^fcdownloader-extension-v.*\.zip$/i.test(entry.name)) {
       await fs.rm(path.join(DIST, entry.name), { force: true });

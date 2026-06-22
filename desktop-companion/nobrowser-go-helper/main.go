@@ -48,6 +48,11 @@ const (
 	maxRequestsPerMinute = 90
 )
 
+var (
+	helperBuild           = "dev"
+	minimumExtensionBuild = "1.5.24"
+)
+
 type toolAsset struct {
 	URL      string
 	Filename string
@@ -171,10 +176,11 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"ok":         true,
 		"service":    "fcdownloader-native-helper",
 		"version":    serviceVersion,
+		"helperBuild": strings.TrimSpace(helperBuild),
 		"apiVersion": apiVersion,
 		"compatibility": map[string]interface{}{
 			"helperApi":             apiVersion,
-			"minimumExtensionBuild": "1.4.0",
+			"minimumExtensionBuild": minimumExtensionBuild,
 			"minimumWebBuild":       "1.5.0",
 		},
 		"ytDlpVersion":    toolPins.YtDlp.Version,
@@ -334,6 +340,15 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 }
 
 func runYtDlpJSON(ctx context.Context, rawURL, cookies string) (map[string]interface{}, error) {
+	if bilibiliURL(rawURL) {
+		if data, err := runBilibiliAPIJSON(ctx, rawURL, cookies); err == nil {
+			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 10, Status: "extracted"})
+			return data, nil
+		} else {
+			logf("Bilibili API formats failed; falling back to yt-dlp: %v", err)
+		}
+	}
+
 	ytDlp, channel, err := ytDlpPrimaryPath(ctx, rawURL)
 	if err != nil {
 		return nil, err
@@ -348,12 +363,6 @@ func runYtDlpJSON(ctx context.Context, rawURL, cookies string) (map[string]inter
 	if err == nil {
 		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 10, Status: "extracted"})
 		return data, nil
-	}
-	if bilibiliURL(rawURL) {
-		if data, biliErr := runBilibiliAPIJSON(ctx, rawURL, cookies); biliErr == nil {
-			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 10, Status: "extracted"})
-			return data, nil
-		}
 	}
 	if !youtubeURL(rawURL) {
 		return data, err
@@ -468,6 +477,13 @@ func downloadMedia(ctx context.Context, rawURL, format, maxHeight, cookies strin
 			return "", nil, err
 		}
 		return path, cleanup, nil
+	}
+	if bilibiliURL(rawURL) {
+		if path, cleanup, err := downloadBilibiliAPI(ctx, ffmpeg, rawURL, maxHeight, cookies, false); err == nil {
+			return path, cleanup, nil
+		} else {
+			logf("Bilibili API download failed; falling back to yt-dlp: %v", err)
+		}
 	}
 
 	ytDlp, channel, err := ytDlpPrimaryPath(ctx, rawURL)
