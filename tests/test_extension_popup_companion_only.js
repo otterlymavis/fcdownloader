@@ -28,5 +28,13 @@ assert(
   popup.includes("quality-select") && popup.includes("watermark-toggle"),
   "popup should expose quality and watermark controls before download",
 );
+assert(
+  popup.includes("function likelyUsesCompanion") && popup.includes("startProgressPolling(companionProgressTarget)"),
+  "popup should start companion progress polling before long helper preflight work",
+);
+assert(
+  popup.includes('data.status === "starting"') && popup.includes('setProgressIndeterminate("Companion is starting download...")'),
+  "popup should show an active companion state before numeric download percent is available",
+);
 
 console.log("extension popup companion-only tests passed");

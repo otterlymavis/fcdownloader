@@ -22,6 +22,8 @@ interface ThemeColors {
   ink2: string;
   ink3: string;
   sep: string;
+  btn: string;
+  btnTxt: string;
 }
 
 interface Props {
@@ -43,7 +45,6 @@ interface Props {
 }
 
 const IS_ANDROID = Platform.OS === 'android';
-const BLUE = '#007AFF';
 const S = { xs: 4, sm: 8, md: 16, lg: 24 } as const;
 const R = { md: 12, lg: 14, sheet: 20 } as const;
 
@@ -59,16 +60,12 @@ const FONT_OPTIONS: { value: FontSizePref; labelKey: TranslationKey; preview: st
   { value: 'large',  labelKey: 'large',  preview: 'Aa' },
 ];
 
-const REMOVE_WATERMARK_NOTE =
-  'Tries a clean source link first, then snapwc.com on supported sites. ' +
-  'Leave this off to keep original media. Static image watermarks may remain.';
-
-const QUALITY_OPTIONS: { value: QualityPref; label: string }[] = [
-  { value: 'best',  label: 'Best' },
-  { value: '2160p', label: '4K'   },
-  { value: '1080p', label: '1080p' },
-  { value: '720p',  label: '720p'  },
-  { value: '480p',  label: '480p'  },
+const QUALITY_OPTIONS: { value: QualityPref; label?: string; labelKey?: TranslationKey }[] = [
+  { value: 'best',  labelKey: 'best' },
+  { value: '2160p', label: '4K'     },
+  { value: '1080p', label: '1080p'  },
+  { value: '720p',  label: '720p'   },
+  { value: '480p',  label: '480p'   },
 ];
 
 const LANGUAGE_OPTIONS: { value: LanguagePref; label: string; key?: TranslationKey }[] = [
@@ -133,10 +130,10 @@ export default function SettingsSheet({
                   onPress={() => onThemeChange(value)}
                   style={[
                     styles.segment,
-                    { backgroundColor: active ? BLUE : t.card2 },
+                    { backgroundColor: active ? t.btn : t.card2 },
                   ]}
                 >
-                  <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.ink2 }]}>
+                  <Text style={[styles.segmentLabel, { color: active ? t.btnTxt : t.ink2 }]}>
                     {translate(labelKey, resolvedLanguage)}
                   </Text>
                 </Pressable>
@@ -162,16 +159,16 @@ export default function SettingsSheet({
                   onPress={() => onFontSizeChange(value)}
                   style={[
                     styles.segment,
-                    { backgroundColor: active ? BLUE : t.card2 },
+                    { backgroundColor: active ? t.btn : t.card2 },
                   ]}
                 >
                   <Text style={[
                     styles.fontPreview,
-                    { color: active ? '#fff' : t.ink2, fontSize: 14 * FONT_SCALE[value] },
+                    { color: active ? t.btnTxt : t.ink2, fontSize: 14 * FONT_SCALE[value] },
                   ]}>
                     {preview}
                   </Text>
-                  <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.ink2 }]}>
+                  <Text style={[styles.segmentLabel, { color: active ? t.btnTxt : t.ink2 }]}>
                     {translate(labelKey, resolvedLanguage)}
                   </Text>
                 </Pressable>
@@ -195,10 +192,10 @@ export default function SettingsSheet({
                   onPress={() => onLanguageChange(value)}
                   style={[
                     styles.langChip,
-                    { backgroundColor: active ? BLUE : t.card2 },
+                    { backgroundColor: active ? t.btn : t.card2 },
                   ]}
                 >
-                  <Text style={[styles.langChipLabel, { color: active ? '#fff' : t.ink2 }]}>
+                  <Text style={[styles.langChipLabel, { color: active ? t.btnTxt : t.ink2 }]}>
                     {displayText}
                   </Text>
                 </Pressable>
@@ -209,7 +206,7 @@ export default function SettingsSheet({
 
         {/* ── Downloads ── */}
         <Text style={[styles.sectionLabel, { color: t.ink2, textAlign: isRTL ? 'right' : 'left' }]}>
-          DOWNLOADS
+          {translate('downloads', resolvedLanguage).toUpperCase()}
         </Text>
         <View style={[styles.card, { backgroundColor: t.card }]}>
 
@@ -218,16 +215,16 @@ export default function SettingsSheet({
             {translate('quality', resolvedLanguage)}
           </Text>
           <View style={[styles.segmentRow, isRTL && { flexDirection: 'row-reverse' }]}>
-            {QUALITY_OPTIONS.map(({ value, label }) => {
+            {QUALITY_OPTIONS.map(({ value, label, labelKey }) => {
               const active = preferredQuality === value;
               return (
                 <Pressable
                   key={value}
                   onPress={() => onQualityChange(value)}
-                  style={[styles.segment, { backgroundColor: active ? BLUE : t.card2 }]}
+                  style={[styles.segment, { backgroundColor: active ? t.btn : t.card2 }]}
                 >
-                  <Text style={[styles.segmentLabel, { color: active ? '#fff' : t.ink2 }]}>
-                    {label}
+                  <Text style={[styles.segmentLabel, { color: active ? t.btnTxt : t.ink2 }]}>
+                    {labelKey ? translate(labelKey, resolvedLanguage) : label}
                   </Text>
                 </Pressable>
               );
@@ -240,16 +237,16 @@ export default function SettingsSheet({
           <View style={[styles.toggleRow, isRTL && { flexDirection: 'row-reverse' }]}>
             <View style={styles.toggleText}>
               <Text style={[styles.rowLabel, { color: t.ink }]}>
-                Remove Watermark
+                {translate('removeWatermark', resolvedLanguage)}
               </Text>
               <Text style={[styles.toggleNote, { color: t.ink3 }]}>
-                {REMOVE_WATERMARK_NOTE}
+                {translate('removeWatermarkNote', resolvedLanguage)}
               </Text>
             </View>
             <Switch
               value={removeWatermark}
               onValueChange={onRemoveWatermarkChange}
-              trackColor={{ false: t.card2, true: BLUE }}
+              trackColor={{ false: t.card2, true: t.btn }}
               thumbColor="#fff"
             />
           </View>
@@ -262,7 +259,7 @@ export default function SettingsSheet({
           style={[styles.doneButton, { backgroundColor: t.card2 }]}
           onPress={onClose}
         >
-          <Text style={[styles.doneLabel, { color: BLUE }]}>
+          <Text style={[styles.doneLabel, { color: t.btn }]}>
             {translate('done', resolvedLanguage)}
           </Text>
         </Pressable>
@@ -393,4 +390,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-

@@ -1132,6 +1132,8 @@ export default function App() {
   const mediaCount  = allVideos.length;
   const sheetMediaCount = pickerVideos.length;
   const activeCount = active.length;
+  const browserFabBottom = BOTTOM_PAD + (activeCount > 0 ? 124 : 92);
+  const browserBookmarkFabBottom = browserFabBottom + 68;
 
   // ─────────────────────────────────────────────────────────
   return (
@@ -1182,7 +1184,7 @@ export default function App() {
                     }
                     setPasteUrl(text);
                   }}
-                  placeholder="Paste a link..."
+                  placeholder={translate('pastePlaceholder', resolvedLanguage)}
                   placeholderTextColor={t.ink3}
                   autoCapitalize="none"
                   autoCorrect={false}
@@ -1198,7 +1200,7 @@ export default function App() {
                     onPress={handleHomePaste}
                     disabled={extracting}
                   >
-                    <Text style={[s.pasteBtnLabel, { color: t.ink, fontSize: fs(15) }]}>Paste</Text>
+                    <Text style={[s.pasteBtnLabel, { color: t.ink, fontSize: fs(15) }]}>{translate('paste', resolvedLanguage)}</Text>
                   </Pressable>
                   <Pressable
                     android_ripple={{ color: 'rgba(255,255,255,0.15)', borderless: false }}
@@ -1213,7 +1215,7 @@ export default function App() {
                 </View>
                 <Pressable onPress={() => setTab('browser')} hitSlop={S.xs} style={s.browseLink}>
                   <Text style={[s.browseLinkLabel, { color: t.ink2, fontSize: fs(13), textAlign: 'center' }]}>
-                    or browse the web →
+                    {translate('orBrowse', resolvedLanguage)}
                   </Text>
                 </Pressable>
                 <Text style={[s.browseHint, { color: t.ink3, fontSize: fs(11), textAlign: 'center' }]}>
@@ -1345,6 +1347,7 @@ export default function App() {
                 }}
                 onExtractPage={extractBrowserPage}
                 onLoadEnd={(e) => handleBrowserLoadEnd(e.nativeEvent.url)}
+                resolvedLanguage={resolvedLanguage}
                 style={StyleSheet.absoluteFill} />
             )}
 
@@ -1360,6 +1363,7 @@ export default function App() {
                   {
                     backgroundColor: t.btn,
                     borderColor: isDark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.9)',
+                    bottom: browserFabBottom,
                   },
                   resolvedLanguage === 'ar' && { flexDirection: 'row-reverse' },
                   pressed && s.scanFabPressed,
@@ -1387,6 +1391,7 @@ export default function App() {
                   borderColor: mediaCount > 0
                     ? (isDark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.9)')
                     : t.sep,
+                  bottom: browserFabBottom,
                 },
                 pressed && s.mediaFabPressed,
               ]}
@@ -1422,7 +1427,7 @@ export default function App() {
                 android_ripple={{ color: 'rgba(255,255,255,0.2)', borderless: true }}
                 style={[s.bmFab, {
                   backgroundColor: isSaved(currentBrowserUrl, bookmarks) ? t.btn : t.card,
-                  bottom: 156,
+                  bottom: browserBookmarkFabBottom,
                   ...(IS_IOS
                     ? { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } }
                     : { elevation: 5 }),
@@ -1439,7 +1444,10 @@ export default function App() {
           </View>
 
           {activeCount > 0 && (
-            <Pressable style={[s.activeStrip, { backgroundColor: t.bg, borderTopColor: t.sep }]}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`${translate('inProgress', resolvedLanguage)}: ${activeCount}`}
+              style={[s.activeStrip, { backgroundColor: t.bg, borderTopColor: t.sep }]}
               onPress={() => setTab('library')}>
               <View style={[s.activeStripBar, { backgroundColor: t.card2 }]}>
                 <View style={[s.activeStripFill, { backgroundColor: t.btn,
@@ -1951,6 +1959,9 @@ export default function App() {
             <Pressable
               key={id}
               android_ripple={RIPPLE_BL}
+              accessibilityRole="tab"
+              accessibilityLabel={translate(id === 'browser' ? 'browse' : id, resolvedLanguage)}
+              accessibilityState={{ selected: isActive }}
               style={s.tabItem}
               onPress={() => setTab(id)}
             >

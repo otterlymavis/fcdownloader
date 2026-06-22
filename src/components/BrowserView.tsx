@@ -7,6 +7,8 @@ import WebView, {
 } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 import { INJECTED_SCRIPT } from '../constants/injectedScript';
+import { translate } from '../constants/translations';
+import { CommonLanguageCode } from '../lib/languageProfiles';
 
 // No "wv" tag — Vimeo and other sites block playback when they detect a WebView UA
 const MOBILE_UA =
@@ -31,6 +33,7 @@ interface Props extends Partial<WebViewProps> {
   onNavigationChange?: (url: string) => void;
   onExtractPage?: (url: string) => void;
   desktopMode?: boolean;
+  resolvedLanguage?: CommonLanguageCode;
 }
 
 function isXhsUrl(url: string): boolean {
@@ -44,23 +47,23 @@ function isXhsUrl(url: string): boolean {
 
 const BrowserView = forwardRef<WebView, Props>(
   (
-    { initialUrl, onMessage, onNavigationChange, onExtractPage, desktopMode = false, style, ...rest },
+    { initialUrl, onMessage, onNavigationChange, onExtractPage, desktopMode = false, resolvedLanguage = 'en', style, ...rest },
     ref
   ) => {
     if (Platform.OS === 'web') {
       return (
         <View style={[styles.webRoot, style]}>
-          <Text style={styles.webTitle}>Browsing stays in your browser on web</Text>
+          <Text style={styles.webTitle}>{translate('browserWebTitle', resolvedLanguage)}</Text>
           <Text style={styles.webText} numberOfLines={3}>
-            FCDownloader cannot embed this page, but it can still extract media directly from the URL.
+            {translate('browserWebText', resolvedLanguage)}
           </Text>
           <Text style={styles.webUrl} numberOfLines={2}>{initialUrl}</Text>
           <View style={styles.errorActions}>
             <Pressable style={styles.errorButton} onPress={() => onExtractPage?.(initialUrl)}>
-              <Text style={styles.errorButtonText}>Extract media</Text>
+              <Text style={styles.errorButtonText}>{translate('extractMedia', resolvedLanguage)}</Text>
             </Pressable>
             <Pressable style={styles.webSecondaryButton} onPress={() => Linking.openURL(initialUrl).catch(() => {})}>
-              <Text style={styles.webSecondaryButtonText}>Open page</Text>
+              <Text style={styles.webSecondaryButtonText}>{translate('openPage', resolvedLanguage)}</Text>
             </Pressable>
           </View>
         </View>
@@ -124,24 +127,24 @@ const BrowserView = forwardRef<WebView, Props>(
         onLoadStart={(e) => onNavigationChange?.(e.nativeEvent.url)}
         renderError={(_domain, code, description) => (
           <View style={styles.errorRoot}>
-            <Text style={styles.errorTitle}>Page could not load</Text>
+            <Text style={styles.errorTitle}>{translate('pageLoadFailed', resolvedLanguage)}</Text>
             <Text style={styles.errorText} numberOfLines={3}>
-              {description || `WebView error ${code}`}
+              {description || translate('webViewError', resolvedLanguage, { code })}
             </Text>
             {isXhsUrl(initialUrl) && (
               <Text style={styles.errorHint}>
-                XHS/rednote sometimes blocks Android WebView. You can still extract from the URL or open it in your browser.
+                {translate('xhsWebViewHint', resolvedLanguage)}
               </Text>
             )}
             <View style={styles.errorActions}>
               <Pressable style={styles.errorButton} onPress={reload}>
-                <Text style={styles.errorButtonText}>Retry</Text>
+                <Text style={styles.errorButtonText}>{translate('retry', resolvedLanguage)}</Text>
               </Pressable>
               <Pressable style={styles.errorButton} onPress={() => onExtractPage?.(initialUrl)}>
-                <Text style={styles.errorButtonText}>Extract</Text>
+                <Text style={styles.errorButtonText}>{translate('extract', resolvedLanguage)}</Text>
               </Pressable>
               <Pressable style={styles.errorButton} onPress={() => Linking.openURL(initialUrl).catch(() => {})}>
-                <Text style={styles.errorButtonText}>Open</Text>
+                <Text style={styles.errorButtonText}>{translate('open', resolvedLanguage)}</Text>
               </Pressable>
             </View>
           </View>

@@ -382,9 +382,9 @@ function startProgressPolling(mediaUrl) {
   }
   let progressFloor = 0;
 
-  setProgress(0, "Connecting to companion...");
+  setProgressIndeterminate("Connecting to companion...");
 
-  progressPollInterval = setInterval(async () => {
+  const poll = async () => {
     try {
       const checkUrl = `${localHelperBaseUrl}/download/progress?${new URLSearchParams({ url: mediaUrl }).toString()}`;
       const r = await fetch(checkUrl, {
@@ -393,11 +393,14 @@ function startProgressPolling(mediaUrl) {
         targetAddressSpace: "loopback",
       });
       if (!r.ok) {
-        await updateToolProgressDisplay();
+        const showedToolProgress = await updateToolProgressDisplay();
+        if (!showedToolProgress) setProgressIndeterminate("Waiting for companion to report progress...");
         return;
       }
       const data = await r.json();
-      if (data.status === "extracting") {
+      if (data.status === "starting") {
+        setProgressIndeterminate("Companion is starting download...");
+      } else if (data.status === "extracting") {
         progressFloor = Math.max(progressFloor, Math.min(Number(data.percent) || 5, 20));
         setProgress(progressFloor, "Companion is checking video formats...");
       } else if (data.status === "extracted") {
@@ -405,11 +408,15 @@ function startProgressPolling(mediaUrl) {
         setProgress(progressFloor, "Companion found video formats...");
       } else if (data.status === "downloading") {
         const rawPercent = Number(data.percent) || 0;
-        progressFloor = Math.max(progressFloor, Math.min(rawPercent, 95));
-        let label = `Downloading: ${progressFloor.toFixed(1)}%`;
+        let label = rawPercent > 0 ? `Downloading: ${Math.max(progressFloor, Math.min(rawPercent, 95)).toFixed(1)}%` : "Companion is downloading...";
         if (data.speed) label += ` at ${data.speed}`;
         if (data.eta) label += `, ETA: ${data.eta}`;
-        setProgress(progressFloor, label);
+        if (rawPercent > 0) {
+          progressFloor = Math.max(progressFloor, Math.min(rawPercent, 95));
+          setProgress(progressFloor, label);
+        } else {
+          setProgressIndeterminate(label);
+        }
       } else if (data.status === "merging") {
         progressFloor = Math.max(progressFloor, 98);
         setProgress(progressFloor, "Companion is merging formats...");
@@ -434,15 +441,20 @@ function startProgressPolling(mediaUrl) {
         setStatus("Companion download failed. Check companion logs.", "error");
         clearInterval(progressPollInterval);
         progressPollInterval = null;
+      } else {
+        setProgressIndeterminate("Companion is working...");
       }
     } catch (e) {
       try {
-        await updateToolProgressDisplay();
+        const showedToolProgress = await updateToolProgressDisplay();
+        if (!showedToolProgress) setProgressIndeterminate("Waiting for companion to report progress...");
       } catch {
-        // Ignore network errors while polling
+        setProgressIndeterminate("Waiting for companion to report progress...");
       }
     }
-  }, 1000);
+  };
+  progressPollInterval = setInterval(poll, 1000);
+  poll();
 }
 
 // Track a chrome.downloads download by ID — used for server and direct downloads.
@@ -598,6 +610,20 @@ function capturedVideoScore(item) {
 
 function isCompanionHdItem(item) {
   return item?.source === "youtube-hd-local";
+}
+
+function helperProgressTargetForItem(item = {}) {
+  const target = item.pageUrl || currentPageUrl || item.url || "";
+  return /^https?:\/\//i.test(target) ? target : "";
+}
+
+function likelyUsesCompanion(item = {}) {
+  if (!helperReadyForOrdering() || !item || item.kind === "image" || item.audioOnly) return false;
+  if (isCompanionHdItem(item) || item.source === "local-helper") return true;
+  const target = helperProgressTargetForItem(item);
+  if (!target) return false;
+  if (isBilibiliPageUrl(target)) return true;
+  return item.kind === "embed" || item.source === "iframe" || item.backendRouted;
 }
 
 function helperVersionAtLeast(version, minimum = MIN_HELPER_VERSION) {
@@ -1218,16 +1244,17 @@ function renderGallery(info) {
 async function downloadItem(item) {
   const itemWithDefaults = { pageUrl: currentPageUrl, ...item };
   setStatus("Starting download...");
-  
-  const isCompanion = isCompanionHdItem(item);
-  const helperLikelyReady = helperReadyForOrdering();
-  if (isCompanion && helperLikelyReady) {
-    startProgressPolling(item.url || currentPageUrl);
+
+  const companionProgressTarget = likelyUsesCompanion(itemWithDefaults)
+    ? helperProgressTargetForItem(itemWithDefaults)
+    : "";
+  if (companionProgressTarget) {
+    startProgressPolling(companionProgressTarget);
   }
 
   const resp = await sendMessage(
     { type: "fcdl:download", tabId: currentTabId, item: itemWithDefaults },
-    isCompanion && helperLikelyReady ? 10 * 60 * 1000 : 90000,
+    companionProgressTarget ? 10 * 60 * 1000 : 90000,
   );
   if (!resp?.ok) {
     if (progressPollInterval) {
@@ -1243,10 +1270,14 @@ async function downloadItem(item) {
     startProgressPolling(resp.progressUrl || item.url || currentPageUrl);
   }
 
-  if (!usedCompanion && (!isCompanion || !helperLikelyReady)) {
+  if (!usedCompanion) {
     if (resp.downloadId) {
       startDownloadTracking(resp.downloadId);
     } else {
+      if (progressPollInterval) {
+        clearInterval(progressPollInterval);
+        progressPollInterval = null;
+      }
       setStatus("Download started. Check your browser's Downloads.", "success");
     }
   }
