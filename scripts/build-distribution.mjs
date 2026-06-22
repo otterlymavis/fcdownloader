@@ -95,7 +95,7 @@ run("npm", ["run", "pack:extension"], {
     EXTENSION_DEFAULT_BACKEND: backend,
     FCDL_EXTENSION_BUILD: buildId,
     FCDL_EXTENSION_BUILT_AT: builtAt,
-    FCDL_MIN_HELPER_VERSION: "0.4.0-go",
+    FCDL_MIN_HELPER_VERSION: "0.4.1-go",
   },
 });
 

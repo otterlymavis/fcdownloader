@@ -80,7 +80,7 @@ const extensionBuild = (
   process.env.FCDL_EXTENSION_BUILD ||
   `${version}-${gitShortSha()}-${builtAt.replace(/[-:.TZ]/g, "").slice(0, 14)}`
 ).trim();
-const minHelperVersion = (process.env.FCDL_MIN_HELPER_VERSION || "0.4.0-go").trim();
+const minHelperVersion = (process.env.FCDL_MIN_HELPER_VERSION || "0.4.1-go").trim();
 
 const configPath = path.join(OUT, "config.js");
 let cfg = await fs.readFile(configPath, "utf-8");

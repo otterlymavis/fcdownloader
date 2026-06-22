@@ -4,10 +4,13 @@ const path = require("path");
 const vm = require("vm");
 
 const backgroundScript = fs.readFileSync(path.join(__dirname, "..", "extension", "background.js"), "utf8")
-  .replace(/import \{ FCDL_DEFAULT_BACKEND \} from "\.\/config\.js";/, 'const FCDL_DEFAULT_BACKEND = "";');
+  .replace(
+    /import\s+\{[\s\S]*?\}\s+from "\.\/config\.js";/,
+    'const FCDL_DEFAULT_BACKEND = ""; const FCDL_EXTENSION_BUILD = "test"; const FCDL_EXTENSION_BUILT_AT = ""; const FCDL_MIN_HELPER_VERSION = "0.4.1-go";'
+  );
 
 const listeners = [];
-let helperHealth = { ok: true, version: "0.4.0-go" };
+let helperHealth = { ok: true, version: "0.4.1-go" };
 let failPrimaryHelperHost = false;
 let lastDownload = null;
 const fetchedUrls = [];
@@ -128,7 +131,7 @@ function send(msg) {
   assert.strictEqual(oldHelper.ready, false);
   assert.match(oldHelper.problem, /outdated/i);
 
-  helperHealth = { ok: true, version: "0.4.0-go" };
+  helperHealth = { ok: true, version: "0.4.1-go" };
   const currentHelper = await send({ type: "fcdl:helper_status" });
   assert.strictEqual(currentHelper.ready, true);
   assert.strictEqual(currentHelper.problem, "");

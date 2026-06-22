@@ -17,7 +17,7 @@ fs.mkdirSync(BUILD_DIR, { recursive: true });
 
 const goCmd = process.env.FCDL_GO || "go";
 const helperBuild = (process.env.FCDL_HELPER_BUILD || "dev").trim() || "dev";
-const minimumExtensionBuild = (process.env.FCDL_MIN_EXTENSION_BUILD || "1.5.24").trim() || "1.5.24";
+const minimumExtensionBuild = (process.env.FCDL_MIN_EXTENSION_BUILD || "1.5.25").trim() || "1.5.25";
 const ldflags = [
   "-s",
   "-w",

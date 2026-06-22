@@ -136,6 +136,29 @@ async function importPlaywright() {
   }
 }
 
+function formatQualityValue(format = {}) {
+  for (const value of [format.quality, format.qn, format.id, format.formatId]) {
+    const match = String(value || "").match(/\d+/);
+    if (match) return Number(match[0]) || 0;
+  }
+  return 0;
+}
+
+function formatSizeValue(format = {}) {
+  return Number(format.filesize || format.filesizeApprox || format.bandwidth || format.tbr || 0) || 0;
+}
+
+function bestVideoFormat(formats = []) {
+  return [...formats]
+    .filter((format) => format && format.vcodec !== "none")
+    .sort((a, b) =>
+      (Number(b.height || 0) - Number(a.height || 0)) ||
+      (formatQualityValue(b) - formatQualityValue(a)) ||
+      (formatSizeValue(b) - formatSizeValue(a)) ||
+      (Number(b.width || 0) - Number(a.width || 0))
+    )[0] || null;
+}
+
 async function runChromeSmoke(expectedBuild) {
   const { chromium } = await importPlaywright();
   const executablePath = await findChromeForTesting();
@@ -191,6 +214,7 @@ async function runChromeSmoke(expectedBuild) {
           label: info.label,
           height: info.height,
           formatId: info.formatId,
+          formatsList: Array.isArray(info.formats) ? info.formats : [],
           formats: Array.isArray(info.formats) ? info.formats.length : null,
         },
         download: null,
@@ -240,6 +264,10 @@ async function runChromeSmoke(expectedBuild) {
     }
     if (Number(result.extract.height || 0) < 1080) {
       throw new Error(`Bilibili smoke did not find 1080p: ${JSON.stringify(result.extract)}`);
+    }
+    const bestFormat = bestVideoFormat(result.extract.formatsList || []);
+    if (bestFormat && String(result.extract.formatId || "") !== String(bestFormat.formatId || bestFormat.id || "")) {
+      throw new Error(`Bilibili smoke did not select the highest quality format: selected ${result.extract.formatId}, best ${bestFormat.formatId || bestFormat.id}`);
     }
     if (runDownload && result.download?.state !== "complete") {
       throw new Error(`Bilibili smoke download did not complete: ${JSON.stringify(result.download)}`);

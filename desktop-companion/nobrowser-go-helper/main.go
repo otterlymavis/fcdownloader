@@ -33,7 +33,7 @@ var toolManifestJSON []byte
 const (
 	host                 = "127.0.0.1"
 	port                 = "8765"
-	serviceVersion       = "0.4.0-go"
+	serviceVersion       = "0.4.1-go"
 	apiVersion           = "v1"
 	maxURLLength         = 4096
 	maxCookieBytes       = 32 * 1024
@@ -50,7 +50,7 @@ const (
 
 var (
 	helperBuild           = "dev"
-	minimumExtensionBuild = "1.5.24"
+	minimumExtensionBuild = "1.5.25"
 )
 
 type toolAsset struct {
@@ -173,11 +173,11 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 	ytDlpAsset, _ := platformYtDlpAsset(runtime.GOOS, runtime.GOARCH)
 	ffmpegAsset, _ := platformFFmpegAsset(runtime.GOOS, runtime.GOARCH)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"ok":         true,
-		"service":    "fcdownloader-native-helper",
-		"version":    serviceVersion,
+		"ok":          true,
+		"service":     "fcdownloader-native-helper",
+		"version":     serviceVersion,
 		"helperBuild": strings.TrimSpace(helperBuild),
-		"apiVersion": apiVersion,
+		"apiVersion":  apiVersion,
 		"compatibility": map[string]interface{}{
 			"helperApi":             apiVersion,
 			"minimumExtensionBuild": minimumExtensionBuild,
@@ -1814,7 +1814,7 @@ func pickBilibiliDash(play map[string]interface{}, maxHeight string, requireClea
 		if mediaURL == "" || height <= 0 || height > heightLimit || (requireCleanHD && height < 720) {
 			continue
 		}
-		if bestVideo == nil || height > numberValue(bestVideo["height"]) || (height == numberValue(bestVideo["height"]) && strings.Contains(firstString(video["codecs"]), "avc1") && !strings.Contains(firstString(bestVideo["codecs"]), "avc1")) {
+		if betterBilibiliVideo(video, bestVideo) {
 			bestVideo = video
 		}
 	}
@@ -1872,7 +1872,7 @@ func pickBilibiliTVCleanDash(play map[string]interface{}, maxHeight string) (str
 		if mediaURL == "" || !cleanQualityIDs[qualityID] || height < 720 || height > heightLimit {
 			continue
 		}
-		if bestVideo == nil || height > numberValue(bestVideo["height"]) || (height == numberValue(bestVideo["height"]) && strings.Contains(firstString(video["codecs"]), "avc1") && !strings.Contains(firstString(bestVideo["codecs"]), "avc1")) {
+		if betterBilibiliVideo(video, bestVideo) {
 			bestVideo = video
 		}
 	}
@@ -1890,6 +1890,33 @@ func pickBilibiliTVCleanDash(play map[string]interface{}, maxHeight string) (str
 		return "", ""
 	}
 	return firstString(bestVideo["baseUrl"], bestVideo["base_url"]), firstString(bestAudio["baseUrl"], bestAudio["base_url"])
+}
+
+func betterBilibiliVideo(candidate, current map[string]interface{}) bool {
+	if candidate == nil {
+		return false
+	}
+	if current == nil {
+		return true
+	}
+	candidateHeight := numberValue(candidate["height"])
+	currentHeight := numberValue(current["height"])
+	if candidateHeight != currentHeight {
+		return candidateHeight > currentHeight
+	}
+	candidateQuality := numberValue(firstNonNil(candidate["id"], candidate["quality"], candidate["qn"]))
+	currentQuality := numberValue(firstNonNil(current["id"], current["quality"], current["qn"]))
+	if candidateQuality != currentQuality {
+		return candidateQuality > currentQuality
+	}
+	candidateSize := numberValue(firstNonNil(candidate["size"], candidate["filesize"], candidate["bandwidth"]))
+	currentSize := numberValue(firstNonNil(current["size"], current["filesize"], current["bandwidth"]))
+	if candidateSize != currentSize {
+		return candidateSize > currentSize
+	}
+	candidateIsAVC := strings.Contains(firstString(candidate["codecs"], candidate["vcodec"]), "avc1")
+	currentIsAVC := strings.Contains(firstString(current["codecs"], current["vcodec"]), "avc1")
+	return candidateIsAVC && !currentIsAVC
 }
 
 func pickBilibiliDurl(play map[string]interface{}) string {

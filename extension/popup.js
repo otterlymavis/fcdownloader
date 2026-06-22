@@ -28,7 +28,7 @@ const technicalList = $("technical-list");
 const bulkActions = $("bulk-actions");
 const selectAllBtn = $("select-all");
 const downloadSelectedBtn = $("download-selected");
-const MIN_HELPER_VERSION = "0.4.0-go";
+const MIN_HELPER_VERSION = "0.4.1-go";
 // Exceed the background worker's 3.5 second probe and allow MV3 wake-up time.
 const HELPER_STATUS_TIMEOUT_MS = 6000;
 const HELPER_START_TIMEOUT_MS = 26000;

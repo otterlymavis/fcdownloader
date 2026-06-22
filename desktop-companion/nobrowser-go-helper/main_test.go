@@ -259,6 +259,24 @@ func TestBilibiliAPIHelpersPickDashAndDurl(t *testing.T) {
 	}
 }
 
+func TestBilibiliDashPrefersHighQualitySameHeight(t *testing.T) {
+	play := map[string]interface{}{
+		"dash": map[string]interface{}{
+			"video": []interface{}{
+				map[string]interface{}{"baseUrl": "https://v-1080-small-avc.m4s", "id": float64(80), "height": float64(1080), "codecs": "avc1.640028", "bandwidth": float64(200_000)},
+				map[string]interface{}{"baseUrl": "https://v-1080-large-hevc.m4s", "id": float64(112), "height": float64(1080), "codecs": "hev1.2.4.L153", "bandwidth": float64(1_400_000)},
+			},
+			"audio": []interface{}{
+				map[string]interface{}{"baseUrl": "https://audio.m4s", "bandwidth": float64(128_000)},
+			},
+		},
+	}
+	video, audio := pickBilibiliDash(play, "1080", false)
+	if video != "https://v-1080-large-hevc.m4s" || audio != "https://audio.m4s" {
+		t.Fatalf("expected largest same-height Bilibili stream, got video=%q audio=%q", video, audio)
+	}
+}
+
 func TestBilibiliTVCleanDashRequiresNoWatermarkFlag(t *testing.T) {
 	play := map[string]interface{}{
 		"accept_quality":     []interface{}{float64(80), float64(64)},

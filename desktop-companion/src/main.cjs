@@ -8,7 +8,7 @@ const HELPER_HOST = "127.0.0.1";
 const HELPER_PORT = 8765;
 const HEALTH_URL = `http://${HELPER_HOST}:${HELPER_PORT}/health`;
 const PROTOCOL = "fcdownloader-companion";
-const MIN_HELPER_VERSION = [0, 4, 0];
+const MIN_HELPER_VERSION = [0, 4, 1];
 
 let mainWindow = null;
 let tray = null;

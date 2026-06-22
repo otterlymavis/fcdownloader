@@ -25,7 +25,7 @@ const DEFAULT_BACKEND = (FCDL_DEFAULT_BACKEND || "").trim().replace(/\/+$/, "");
 const EXTENSION_BUILD = (FCDL_EXTENSION_BUILD || "dev").trim() || "dev";
 const EXTENSION_BUILT_AT = (FCDL_EXTENSION_BUILT_AT || "").trim();
 const DEBUG_LOGS = false;
-const LOCAL_HELPER_MIN_VERSION = (FCDL_MIN_HELPER_VERSION || "0.4.0-go").trim() || "0.4.0-go";
+const LOCAL_HELPER_MIN_VERSION = (FCDL_MIN_HELPER_VERSION || "0.4.1-go").trim() || "0.4.1-go";
 const LOCAL_HELPER_STATUS_TIMEOUT_MS = 3500;
 const LOCAL_HELPER_START_TIMEOUT_MS = 20000;
 const LOCAL_HELPER_BASE_URLS = [
@@ -847,13 +847,37 @@ function localHelperDownloadUrl(pageUrl, youtubeOnly = false, options = {}) {
   return `${localHelperBaseUrl}/${youtubeOnly ? "youtube-hd" : "download"}?${params.toString()}`;
 }
 
+function formatQualityValue(format = {}) {
+  const candidates = [
+    format.quality,
+    format.qn,
+    format.id,
+    format.formatId,
+  ];
+  for (const value of candidates) {
+    const match = String(value || "").match(/\d+/);
+    if (match) return Number(match[0]) || 0;
+  }
+  return 0;
+}
+
+function formatSizeValue(format = {}) {
+  return Number(format.filesize || format.filesizeApprox || format.bandwidth || format.tbr || 0) || 0;
+}
+
+function compareLocalHelperFormats(a = {}, b = {}) {
+  return (
+    (Number(b.height || 0) - Number(a.height || 0)) ||
+    (formatQualityValue(b) - formatQualityValue(a)) ||
+    (formatSizeValue(b) - formatSizeValue(a)) ||
+    (Number(b.width || 0) - Number(a.width || 0))
+  );
+}
+
 function bestLocalHelperFormat(formats = []) {
   return [...formats]
     .filter((format) => format && format.vcodec !== "none")
-    .sort((a, b) =>
-      (Number(b.height || 0) - Number(a.height || 0)) ||
-      (Number(b.filesize || 0) - Number(a.filesize || 0))
-    )[0] || formats[0] || null;
+    .sort(compareLocalHelperFormats)[0] || formats[0] || null;
 }
 
 function isYoutubePageUrl(url) {
