@@ -72,3 +72,9 @@ server/cookies.b64
 
 #  Code local settings
 ./
+
+# AI Agent files
+AGENT.md
+AGENTS.md
+CLAUDE.md
+.agents/
