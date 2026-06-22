@@ -2,6 +2,11 @@
 // "Show other media" section. Matches the simpler "one obvious action"
 // UX of the web app.
 
+import {
+  FCDL_LOCAL_HELPER_API,
+  FCDL_MIN_HELPER_VERSION,
+} from "./config.js";
+
 const $ = (id) => document.getElementById(id);
 const settingsBtn = $("settings-btn");
 const pageInfo    = $("page-info");
@@ -32,11 +37,14 @@ const technicalList = $("technical-list");
 const bulkActions = $("bulk-actions");
 const selectAllBtn = $("select-all");
 const downloadSelectedBtn = $("download-selected");
-const MIN_HELPER_VERSION = "0.4.1-go";
+const MIN_HELPER_VERSION = FCDL_MIN_HELPER_VERSION || "0.4.1-go";
+const HELPER_API_VERSION = FCDL_LOCAL_HELPER_API || "v1";
 // Exceed the background worker's 3.5 second probe and allow MV3 wake-up time.
 const HELPER_STATUS_TIMEOUT_MS = 6000;
 const HELPER_START_TIMEOUT_MS = 26000;
 const HELPER_READY_GRACE_MS = 10000;
+const COMPANION_RELEASES_API = "https://api.github.com/repos/otterlymavis/fcdownloader/releases?per_page=10";
+const COMPANION_LATEST_RELEASE_URL = "https://github.com/otterlymavis/fcdownloader/releases/latest";
 const LOCAL_HELPER_BASE_URLS = [
   "http://127.0.0.1:8765",
   "http://localhost:8765",
@@ -49,6 +57,7 @@ let helperTimer = null;
 let helperIsReady = false;
 let helperLastReadyAt = 0;
 let helperNeedsSetup = false;
+let helperLastHealth = null;
 let preferCapturedMedia = false;
 let waitingForCapturedMedia = false;
 let currentVisibleItems = [];
@@ -638,7 +647,52 @@ function helperVersionAtLeast(version, minimum = MIN_HELPER_VERSION) {
 }
 
 function helperHealthReady(health) {
-  return Boolean(health?.ok && helperVersionAtLeast(health.version));
+  return Boolean(
+    health?.ok &&
+    (health.apiVersion === HELPER_API_VERSION || helperVersionAtLeast(health.version))
+  );
+}
+
+function helperHealthOutdated(health) {
+  return Boolean(health?.ok && !helperHealthReady(health));
+}
+
+function companionInstallerAsset(assets = []) {
+  const platform = String(navigator.userAgentData?.platform || navigator.platform || "").toLowerCase();
+  const namedAssets = assets.filter((asset) => asset?.name && asset?.browser_download_url);
+  if (platform.includes("win")) {
+    return namedAssets.find((asset) => /companion[ ._-]+nobrowser[ ._-]+go[ ._-]+setup.*\.exe$/i.test(asset.name))
+      || namedAssets.find((asset) => /companion.*setup.*\.exe$/i.test(asset.name));
+  }
+  if (platform.includes("mac")) {
+    return namedAssets.find((asset) => /companion.*\.dmg$/i.test(asset.name));
+  }
+  return null;
+}
+
+async function openLatestCompanionDownload() {
+  let url = COMPANION_LATEST_RELEASE_URL;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 5000);
+  try {
+    const response = await fetch(COMPANION_RELEASES_API, {
+      headers: { Accept: "application/vnd.github+json" },
+      cache: "no-store",
+      signal: ac.signal,
+    });
+    if (response.ok) {
+      const releases = await response.json();
+      const release = Array.isArray(releases)
+        ? releases.find((item) => !item?.draft && !item?.prerelease && companionInstallerAsset(item?.assets))
+        : null;
+      url = companionInstallerAsset(release?.assets)?.browser_download_url || release?.html_url || url;
+    }
+  } catch {
+    // The stable latest-release page remains a safe fallback.
+  } finally {
+    clearTimeout(timer);
+  }
+  await chrome.tabs.create({ url, active: true });
 }
 
 function helperReadyForOrdering() {
@@ -686,7 +740,7 @@ function friendlyErrorMessage(error, fallback = "Something went wrong.") {
     return "The extension background service stopped. Reload FCDownloader at chrome://extensions and try again.";
   }
   if (/missing its bundled backend|Backend URL is not configured|Backend URL isn't set/i.test(raw)) {
-    return "This extension build is missing its bundled download service.";
+    return "Remote extraction is unavailable. Direct browser downloads still work.";
   }
   if (/Companion is not running|Install or start FCDownloader Companion/i.test(raw)) {
     return "Companion is not running. Open FCDownloader Companion for HD or protected server downloads.";
@@ -713,7 +767,7 @@ function friendlyErrorMessage(error, fallback = "Something went wrong.") {
     return `${sitePrefix}the domain could not be reached from this environment. Try again later or use the extension while the page is open in your browser.`;
   }
   if (/All download methods failed/i.test(raw)) {
-    return `${sitePrefix}all download routes failed. Try signing in, starting playback, or opening Companion for the browser-session route.`;
+    return `${sitePrefix}all available download methods failed. Start playback, then click Find media again. Companion may unlock additional formats.`;
   }
   return raw.length > 220 ? `${raw.slice(0, 217)}...` : raw;
 }
@@ -759,25 +813,29 @@ async function renderHelperStatus(show) {
   const popupHealth = await fetchLocalHelperFromPopup();
   const resp = await sendMessage({ type: "fcdl:helper_status" }, HELPER_STATUS_TIMEOUT_MS);
   const health = resp?.health || popupHealth || null;
+  helperLastHealth = health;
   const ready = Boolean((resp?.ok && resp.ready) || helperHealthReady(popupHealth));
   const needsSetup = Boolean(health?.needsSetup);
   if (ready) helperLastReadyAt = Date.now();
-  else if (health?.ok && !helperVersionAtLeast(health.version)) helperLastReadyAt = 0;
+  else if (health?.ok && !helperHealthReady(health)) helperLastReadyAt = 0;
   const effectiveReady = helperReadyForOrdering();
   const changed = wasReadyForOrdering !== effectiveReady;
   helperIsReady = ready;
   helperNeedsSetup = effectiveReady && needsSetup;
   helperEl.classList.toggle("ready", effectiveReady);
   helperEl.classList.toggle("missing", !effectiveReady);
+  helperEl.classList.toggle("outdated", helperHealthOutdated(health));
   const statusLabel = helperStatusText(effectiveReady, health);
   helperText.textContent = statusLabel;
   if (helperStateIcon) {
     helperStateIcon.title = statusLabel;
     helperStateIcon.setAttribute("aria-label", statusLabel);
   }
-  helperOpen.hidden = effectiveReady;
+  helperOpen.hidden = effectiveReady && !helperHealthOutdated(health);
+  helperOpen.title = helperHealthOutdated(health) ? "Update for HD downloads" : "Enable HD downloads";
+  helperOpen.setAttribute("aria-label", helperOpen.title);
   if (helperTools) {
-    helperTools.hidden = false;
+    helperTools.hidden = !effectiveReady;
     helperTools.title = health?.needsSetup ? "Install Video Tools" : "Update Video Tools";
     helperTools.setAttribute("aria-label", helperTools.title);
   }
@@ -788,13 +846,13 @@ async function renderHelperStatus(show) {
 }
 
 function helperStatusText(ready, health) {
-  if (health?.ok && !helperVersionAtLeast(health.version)) return "Companion outdated: update required";
-  if (!ready) return "Companion optional: 360p works";
-  if (health?.needsSetup) return "Companion ready: install tools for HD";
+  if (helperHealthOutdated(health)) return "Standard downloads ready · Update for HD";
+  if (!ready) return "Standard downloads ready · HD is optional";
+  if (health?.needsSetup) return "Standard downloads ready · Set up HD";
   const toolBits = Array.isArray(health?.tools)
     ? health.tools.filter((tool) => tool.installed).length + "/" + health.tools.length
     : "";
-  return toolBits ? `Companion ready: HD enabled (${toolBits} tools)` : "Companion ready: HD enabled";
+  return toolBits ? `Standard + HD ready (${toolBits} tools)` : "Standard + HD downloads ready";
 }
 
 async function launchCompanionFromPopup() {
@@ -991,18 +1049,25 @@ function refresh() {
 if (helperOpen) {
   helperOpen.addEventListener("click", async () => {
     helperOpen.disabled = true;
-    helperText.textContent = "Opening companion...";
+    if (helperHealthOutdated(helperLastHealth)) {
+      helperText.textContent = "Opening the Companion update...";
+      await openLatestCompanionDownload();
+      helperOpen.disabled = false;
+      return;
+    }
+    helperText.textContent = "Checking for Companion...";
     if (helperStateIcon) {
       helperStateIcon.title = "Opening Companion";
       helperStateIcon.setAttribute("aria-label", "Opening Companion");
     }
     await launchCompanionFromPopup();
-    const popupHealth = await waitForLocalHelperFromPopup();
+    const popupHealth = await waitForLocalHelperFromPopup(7000);
     const resp = await sendMessage({ type: "fcdl:helper_start" }, HELPER_START_TIMEOUT_MS);
     helperOpen.disabled = false;
     renderHelperStatus(true);
     if (!resp?.ready && !helperHealthReady(popupHealth)) {
-      setErrorStatus("Install or start FCDownloader Companion, then try again.");
+      await openLatestCompanionDownload();
+      setStatus("Standard downloads still work. Install Companion only if you want HD and advanced formats.");
     }
   });
 }
@@ -1091,26 +1156,16 @@ extractBtn.addEventListener("click", async () => {
     // Tag the item so background.js can download it directly without re-routing
     // through /download (which would throw the URL away and double-extract).
     const isYtdlStream = typeof info.url === "string" && info.url.includes("/ytdl-stream?");
-    if (isYtdlStream && !helperIsReady) {
-      const helperResp = await sendMessage({ type: "fcdl:helper_status" }, HELPER_STATUS_TIMEOUT_MS);
-      helperIsReady = Boolean(helperResp?.ok && helperResp.ready);
-      if (helperIsReady) helperLastReadyAt = Date.now();
-      if (!helperIsReady) {
-        setStatus("Companion is optional: play this video for a detected 360p download, or open Companion for HD.");
-        refresh();
-        return;
-      }
-    }
     const item = {
-      url: isYtdlStream ? currentPageUrl : (info.kind === "paired" ? info.videoUrl : info.url),
+      url: info.kind === "paired" ? info.videoUrl : info.url,
       title: info.title,
-      label: isYtdlStream ? "HD (local helper)" : info.label,
+      label: isYtdlStream ? "HD (server stream)" : info.label,
       width: info.width,
       height: info.height,
       ext: "mp4",
-      kind: isYtdlStream ? "embed" : info.kind,
-      source: info.source || (isYtdlStream ? "youtube-hd-local" : "backend"),
-      backendRouted: info.backendRouted ?? !isYtdlStream,
+      kind: isYtdlStream ? "direct" : info.kind,
+      source: info.source || "backend",
+      backendRouted: info.backendRouted ?? false,
       pageUrl: currentPageUrl,
       formatId: info.formatId,
       formats: info.formats,

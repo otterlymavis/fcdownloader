@@ -7,7 +7,8 @@ const path = require("node:path");
 const HELPER_HOST = "127.0.0.1";
 const HELPER_PORT = 8765;
 const HEALTH_URL = `http://${HELPER_HOST}:${HELPER_PORT}/health`;
-const PROTOCOL = "fcdownloader-companion";
+const PROTOCOL = "fcdownloader-companion-electron";
+const REQUIRED_HELPER_API = "v1";
 const MIN_HELPER_VERSION = [0, 4, 1];
 
 let mainWindow = null;
@@ -129,13 +130,13 @@ function checkHealth() {
   });
 }
 
-function checkHelperVersion() {
+function checkHelperInfo() {
   return new Promise((resolve) => {
     const req = http.get(HEALTH_URL, { timeout: 2500 }, (res) => {
       let body = "";
       res.on("data", (d) => { body += d; });
       res.on("end", () => {
-        try { resolve(parseVersion(JSON.parse(body).version)); } catch { resolve(null); }
+        try { resolve(JSON.parse(body)); } catch { resolve(null); }
       });
     });
     req.on("timeout", () => { req.destroy(); resolve(null); });
@@ -143,10 +144,18 @@ function checkHelperVersion() {
   });
 }
 
+function helperInfoCompatible(info) {
+  return Boolean(
+    info?.ok &&
+    (info.apiVersion === REQUIRED_HELPER_API || versionAtLeast(parseVersion(info.version), MIN_HELPER_VERSION))
+  );
+}
+
 async function pollHealth() {
   const reachable = await checkHealth();
-  const version = reachable ? await checkHelperVersion() : null;
-  const healthy = reachable && versionAtLeast(version, MIN_HELPER_VERSION);
+  const info = reachable ? await checkHelperInfo() : null;
+  const version = parseVersion(info?.version);
+  const healthy = reachable && helperInfoCompatible(info);
   setState({
     healthy,
     running: reachable || Boolean(helperProcess),
@@ -211,8 +220,9 @@ async function stopExternalLocalHelpers() {
 
 async function startHelper() {
   if (await checkHealth()) {
-    const version = await checkHelperVersion();
-    if (versionAtLeast(version, MIN_HELPER_VERSION)) {
+    const info = await checkHelperInfo();
+    const version = parseVersion(info?.version);
+    if (helperInfoCompatible(info)) {
       setState({ running: true, healthy: true, pid: helperProcess?.pid ?? null, message: "Ready on 127.0.0.1:8765", runtime: helperState.runtime || "external helper" });
       return helperState;
     }
@@ -249,8 +259,9 @@ async function startHelper() {
       for (let i = 0; i < 12; i += 1) {
         await new Promise((resolve) => setTimeout(resolve, 750));
         if (await checkHealth()) {
-          const version = await checkHelperVersion();
-          if (versionAtLeast(version, MIN_HELPER_VERSION)) {
+          const info = await checkHelperInfo();
+          const version = parseVersion(info?.version);
+          if (helperInfoCompatible(info)) {
             setState({ running: true, healthy: true, pid: child.pid, message: "Ready on 127.0.0.1:8765", runtime: candidate.label });
             return helperState;
           }

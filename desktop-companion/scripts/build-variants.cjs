@@ -12,6 +12,19 @@ const DIST_NOBROWSER = path.join(COMPANION_ROOT, "dist-nobrowser-ver");
 const DIST_NOBROWSER_GO = path.join(COMPANION_ROOT, "dist-nobrowser-go-ver");
 const DIST_NOBROWSER_GO_MAC = path.join(COMPANION_ROOT, "dist-nobrowser-go-mac");
 const VERSION = require(path.join(COMPANION_ROOT, "package.json")).version;
+const RELEASE = require(path.join(REPO_ROOT, "release.json"));
+const HELPER_BUILD_ID = process.env.FCDL_HELPER_BUILD_ID || `${VERSION}-${Date.now()}`;
+const HELPER_BUILD = (process.env.FCDL_HELPER_BUILD || HELPER_BUILD_ID).trim() || HELPER_BUILD_ID;
+const MINIMUM_EXTENSION_BUILD = (process.env.FCDL_MIN_EXTENSION_BUILD || RELEASE.extension).trim() || RELEASE.extension;
+const HELPER_LDFLAGS = [
+  "-s",
+  "-w",
+  `-X main.serviceVersion=${RELEASE.localHelperVersion}`,
+  `-X main.apiVersion=${RELEASE.localHelperApi}`,
+  `-X main.buildID=${HELPER_BUILD_ID}`,
+  `-X main.helperBuild=${HELPER_BUILD}`,
+  `-X main.minimumExtensionBuild=${MINIMUM_EXTENSION_BUILD}`,
+].join(" ");
 const NOBROWSER_LAUNCHER = path.join(BUILD_ROOT, "nobrowser", "FCDownloaderCompanionNoBrowser.exe");
 const NOBROWSER_GO_HELPER = path.join(BUILD_ROOT, "nobrowser-go", "FCDownloaderNativeHelper.exe");
 const NOBROWSER_GO_TRAY = path.join(BUILD_ROOT, "nobrowser-go", "FCDownloaderCompanionTray.exe");
@@ -354,16 +367,18 @@ Section "Install"
   File /oname=FCDownloaderCompanionNoBrowser.exe "${escapeNsis(NOBROWSER_LAUNCHER)}"
   File /oname=fcdownloader-local-helper.exe "${escapeNsis(HELPER_EXE)}"
   File /oname=local-youtube-helper.py "${escapeNsis(HELPER_SCRIPT)}"
-  WriteRegStr HKCU "Software\\Classes\\fcdownloader-companion" "" "URL:FCDownloader Companion Protocol"
-  WriteRegStr HKCU "Software\\Classes\\fcdownloader-companion" "URL Protocol" ""
-  WriteRegStr HKCU "Software\\Classes\\fcdownloader-companion\\shell\\open\\command" "" '"$INSTDIR\\FCDownloaderCompanionNoBrowser.exe" "%1"'
+  WriteRegStr HKCU "Software\\Classes\\fcdownloader-companion-legacy" "" "URL:FCDownloader Legacy Companion Protocol"
+  WriteRegStr HKCU "Software\\Classes\\fcdownloader-companion-legacy" "URL Protocol" ""
+  WriteRegStr HKCU "Software\\Classes\\fcdownloader-companion-legacy\\shell\\open\\command" "" '"$INSTDIR\\FCDownloaderCompanionNoBrowser.exe" "%1"'
   CreateDirectory "$SMPROGRAMS\\FCDownloader"
   CreateShortCut "$SMPROGRAMS\\FCDownloader\\Companion NoBrowser.lnk" "$INSTDIR\\FCDownloaderCompanionNoBrowser.exe"
   WriteUninstaller "$INSTDIR\\Uninstall.exe"
 SectionEnd
 
 Section "Uninstall"
-  DeleteRegKey HKCU "Software\\Classes\\fcdownloader-companion"
+  ReadRegStr $0 HKCU "Software\\Classes\\fcdownloader-companion-legacy\\shell\\open\\command" ""
+  StrCmp $0 '"$INSTDIR\\FCDownloaderCompanionNoBrowser.exe" "%1"' 0 +2
+  DeleteRegKey HKCU "Software\\Classes\\fcdownloader-companion-legacy"
   Delete "$SMPROGRAMS\\FCDownloader\\Companion NoBrowser.lnk"
   RMDir "$SMPROGRAMS\\FCDownloader"
   Delete "$INSTDIR\\FCDownloaderCompanionNoBrowser.exe"
@@ -393,7 +408,7 @@ function buildNoBrowserGo() {
     "build",
     "-trimpath",
     "-ldflags",
-    "-s -w",
+    HELPER_LDFLAGS,
     "-o",
     NOBROWSER_GO_HELPER,
     ".",
@@ -438,7 +453,7 @@ function buildNoBrowserGo() {
       "build",
       "-trimpath",
       "-ldflags",
-      "-s -w",
+      HELPER_LDFLAGS,
       "-o",
       outBin,
       ".",
@@ -525,6 +540,7 @@ Section "Install"
   File /oname=FCDownloaderCompanionTray.exe "${escapeNsis(NOBROWSER_GO_TRAY)}"
   WriteRegStr HKCU "Software\\Classes\\fcdownloader-companion" "" "URL:FCDownloader Companion Protocol"
   WriteRegStr HKCU "Software\\Classes\\fcdownloader-companion" "URL Protocol" ""
+  WriteRegStr HKCU "Software\\Classes\\fcdownloader-companion" "Owner" "nobrowser-go"
   WriteRegStr HKCU "Software\\Classes\\fcdownloader-companion\\shell\\open\\command" "" '"$INSTDIR\\FCDownloaderCompanionTray.exe" "%1"'
   CreateDirectory "$APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\FCDownloader"
   CreateShortCut "$APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\FCDownloader\\Start Companion.lnk" "$INSTDIR\\FCDownloaderCompanionTray.exe"
@@ -542,13 +558,17 @@ Section "Install"
   WriteUninstaller "$INSTDIR\\Uninstall.exe"
 SectionEnd
 
-Section /o "Run Companion on login" SecRunAtLogin
+Section "Run Companion on login" SecRunAtLogin
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "FCDownloaderCompanion" '"$INSTDIR\\FCDownloaderCompanionTray.exe"'
 SectionEnd
 
 Section "Uninstall"
   SetShellVarContext current
+  ReadRegStr $0 HKCU "Software\\Classes\\fcdownloader-companion\\shell\\open\\command" ""
+  StrCmp $0 '"$INSTDIR\\FCDownloaderCompanionTray.exe" "%1"' 0 +2
   DeleteRegKey HKCU "Software\\Classes\\fcdownloader-companion"
+  ReadRegStr $0 HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "FCDownloaderCompanion"
+  StrCmp $0 '"$INSTDIR\\FCDownloaderCompanionTray.exe"' 0 +2
   DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "FCDownloaderCompanion"
   Delete "$APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\FCDownloader\\Start Companion.lnk"
   Delete "$APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\FCDownloader\\Companion NoBrowser Go.lnk"

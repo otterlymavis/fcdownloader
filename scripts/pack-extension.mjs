@@ -24,6 +24,7 @@ const ROOT = path.resolve(__dirname, "..");
 const SRC  = path.join(ROOT, "extension");
 const OUT  = path.join(ROOT, "dist", "extension");
 const DIST = path.join(ROOT, "dist");
+const release = JSON.parse(await fs.readFile(path.join(ROOT, "release.json"), "utf-8"));
 
 function gitShortSha() {
   try {
@@ -84,12 +85,25 @@ const minHelperVersion = (process.env.FCDL_MIN_HELPER_VERSION || "0.4.1-go").tri
 
 const configPath = path.join(OUT, "config.js");
 let cfg = await fs.readFile(configPath, "utf-8");
-const replaced = cfg.replace(
+let replaced = cfg.replace(
   /export const FCDL_DEFAULT_BACKEND = "[^"]*";/,
   `export const FCDL_DEFAULT_BACKEND = ${JSON.stringify(backend)};`,
 );
 if (replaced === cfg) {
   console.error("[pack] FAILED to substitute FCDL_DEFAULT_BACKEND — has the pattern in config.js changed?");
+  process.exit(1);
+}
+cfg = replaced;
+if (!/export const FCDL_LOCAL_HELPER_API = "[^"]*";/.test(cfg)) {
+  console.error("[pack] FAILED to find FCDL_LOCAL_HELPER_API in config.js");
+  process.exit(1);
+}
+replaced = cfg.replace(
+  /export const FCDL_LOCAL_HELPER_API = "[^"]*";/,
+  `export const FCDL_LOCAL_HELPER_API = ${JSON.stringify(release.localHelperApi)};`,
+);
+if (!release.localHelperApi) {
+  console.error("[pack] FAILED to bake localHelperApi from release.json");
   process.exit(1);
 }
 await fs.writeFile(configPath, replaced, "utf-8");

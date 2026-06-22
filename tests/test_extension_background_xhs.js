@@ -4,7 +4,10 @@ const path = require("path");
 const vm = require("vm");
 
 const backgroundScript = fs.readFileSync(path.join(__dirname, "..", "extension", "background.js"), "utf8")
-  .replace(/import \{ FCDL_DEFAULT_BACKEND \} from "\.\/config\.js";/, 'const FCDL_DEFAULT_BACKEND = "";');
+  .replace(
+    /import\s+\{[\s\S]*?\}\s+from "\.\/config\.js";/,
+    'const FCDL_DEFAULT_BACKEND = ""; const FCDL_EXTENSION_BUILD = "test"; const FCDL_EXTENSION_BUILT_AT = ""; const FCDL_LOCAL_HELPER_API = "v1"; const FCDL_MIN_HELPER_VERSION = "0.4.1-go";',
+  );
 
 const listeners = [];
 const tabUrl = "https://www.rednote.com/explore/69fdcbfa0000000023004a17";

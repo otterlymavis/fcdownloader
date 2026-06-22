@@ -6,7 +6,7 @@ const vm = require("vm");
 const backgroundScript = fs.readFileSync(path.join(__dirname, "..", "extension", "background.js"), "utf8")
   .replace(
     /import\s+\{[\s\S]*?\}\s+from "\.\/config\.js";/,
-    'const FCDL_DEFAULT_BACKEND = ""; const FCDL_EXTENSION_BUILD = "test"; const FCDL_EXTENSION_BUILT_AT = ""; const FCDL_MIN_HELPER_VERSION = "0.4.1-go";'
+    'const FCDL_DEFAULT_BACKEND = ""; const FCDL_EXTENSION_BUILD = "test"; const FCDL_EXTENSION_BUILT_AT = ""; const FCDL_LOCAL_HELPER_API = "v1"; const FCDL_MIN_HELPER_VERSION = "0.4.1-go";'
   );
 
 const listeners = [];
@@ -131,7 +131,11 @@ vm.runInNewContext(backgroundScript, {
         };
       }
     }
-    return { ok: true, json: async () => ({ ok: true }) };
+    return {
+      ok: true,
+      headers: { get: () => "video/mp4" },
+      json: async () => ({ ok: true }),
+    };
   },
   btoa: (value) => Buffer.from(value, "binary").toString("base64"),
   unescape,
@@ -348,6 +352,37 @@ function send(msg) {
     [{ name: "X-FCDL-Cookies", value: "SESSDATA=local-session" }],
     "local companion should receive browser cookies even when remote cookie sharing is disabled"
   );
+
+  const fallbackUrl = "https://cdn.example.com/video-360.mp4";
+  await send({
+    type: "fcdl:detected",
+    tabId: 1,
+    pageUrl: currentTab.url,
+    items: [{
+      url: fallbackUrl,
+      pageUrl: currentTab.url,
+      kind: "direct",
+      source: "video-tag",
+      title: "Browser fallback",
+      ext: "mp4",
+    }],
+  });
+  helperHealth = { ok: true, version: "0.2.0-go", apiVersion: "v0" };
+  lastDownload = null;
+  const outdatedFallback = await send({
+    type: "fcdl:download",
+    tabId: 1,
+    item: {
+      url: currentTab.url,
+      pageUrl: currentTab.url,
+      kind: "embed",
+      source: "youtube-hd-local",
+      title: "Test YouTube",
+    },
+  });
+  assert.strictEqual(outdatedFallback.ok, true, outdatedFallback.error);
+  assert.strictEqual(outdatedFallback.route, "direct");
+  assert.strictEqual(lastDownload.url, fallbackUrl);
 
   console.log("extension background helper tests passed");
 })().catch((error) => {

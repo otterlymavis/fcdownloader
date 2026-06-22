@@ -33,8 +33,6 @@ var toolManifestJSON []byte
 const (
 	host                 = "127.0.0.1"
 	port                 = "8765"
-	serviceVersion       = "0.4.1-go"
-	apiVersion           = "v1"
 	maxURLLength         = 4096
 	maxCookieBytes       = 32 * 1024
 	defaultFormat        = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/best[ext=mp4]/best"
@@ -49,9 +47,14 @@ const (
 )
 
 var (
+	serviceVersion        = "0.4.1-go"
+	apiVersion            = "v1"
+	buildID               = "dev"
 	helperBuild           = "dev"
 	minimumExtensionBuild = "1.5.25"
 )
+
+const helperVariant = "nobrowser-go"
 
 type toolAsset struct {
 	URL      string
@@ -178,6 +181,8 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"version":     serviceVersion,
 		"helperBuild": strings.TrimSpace(helperBuild),
 		"apiVersion":  apiVersion,
+		"variant":     helperVariant,
+		"buildId":     buildID,
 		"compatibility": map[string]interface{}{
 			"helperApi":             apiVersion,
 			"minimumExtensionBuild": minimumExtensionBuild,

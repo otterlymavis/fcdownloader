@@ -575,6 +575,27 @@ func TestCorsAllowsPrivateNetworkPreflight(t *testing.T) {
 	}
 }
 
+func TestHealthReportsCompatibilityIdentity(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8765/health", nil)
+	rec := httptest.NewRecorder()
+
+	handleHealth(rec, req)
+
+	var health map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	if health["apiVersion"] != apiVersion {
+		t.Fatalf("expected apiVersion %q, got %q", apiVersion, health["apiVersion"])
+	}
+	if health["variant"] != helperVariant {
+		t.Fatalf("expected variant %q, got %q", helperVariant, health["variant"])
+	}
+	if health["buildId"] != buildID {
+		t.Fatalf("expected buildId %q, got %q", buildID, health["buildId"])
+	}
+}
+
 func TestRateLimit(t *testing.T) {
 	limitMu.Lock()
 	limitHits = map[string][]time.Time{}

@@ -24,6 +24,7 @@ DEFAULT_FORMAT = "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/be
 MAX_URL_LENGTH = 4096
 SERVICE_VERSION = "0.4.0-python"
 LOCAL_HELPER_API_VERSION = "v1"
+HELPER_VARIANT = "python"
 YTDLP_DELEGATE_FLAG = "--fcdl-run-yt-dlp"
 COOKIE_MAX_BYTES = 32 * 1024
 FFMPEG_BASE_URL = "https://raw.githubusercontent.com/imageio/imageio-binaries/master/ffmpeg"
@@ -937,6 +938,8 @@ class Handler(BaseHTTPRequestHandler):
                 "service": "fcdownloader-local-helper",
                 "version": SERVICE_VERSION,
                 "apiVersion": LOCAL_HELPER_API_VERSION,
+                "variant": HELPER_VARIANT,
+                "buildId": os.environ.get("FCDL_HELPER_BUILD_ID", "dev"),
                 "endpoints": ["/health", "/tools", "/tools/ensure", "/formats", "/download", "/youtube-hd"],
                 "needsSetup": status["needsSetup"],
                 "tools": status["tools"],

@@ -3,7 +3,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const COMPANION_ROOT = path.resolve(__dirname, "..");
+const REPO_ROOT = path.resolve(COMPANION_ROOT, "..");
 const GO_HELPER_DIR = path.join(COMPANION_ROOT, "nobrowser-go-helper");
+const RELEASE = require(path.join(REPO_ROOT, "release.json"));
 const BUILD_DIR = path.join(COMPANION_ROOT, "build", "helper");
 const EXE = process.platform === "win32" ? "fcdownloader-local-helper.exe" : "fcdownloader-local-helper";
 const OUT = path.join(BUILD_DIR, EXE);
@@ -18,11 +20,15 @@ fs.mkdirSync(BUILD_DIR, { recursive: true });
 const goCmd = process.env.FCDL_GO || "go";
 const helperBuild = (process.env.FCDL_HELPER_BUILD || "dev").trim() || "dev";
 const minimumExtensionBuild = (process.env.FCDL_MIN_EXTENSION_BUILD || "1.5.25").trim() || "1.5.25";
+const buildID = process.env.FCDL_HELPER_BUILD_ID || `${RELEASE.companion}-${Date.now()}`;
 const ldflags = [
   "-s",
   "-w",
   `-X main.helperBuild=${helperBuild}`,
   `-X main.minimumExtensionBuild=${minimumExtensionBuild}`,
+  `-X main.serviceVersion=${RELEASE.localHelperVersion}`,
+  `-X main.apiVersion=${RELEASE.localHelperApi}`,
+  `-X main.buildID=${buildID}`,
 ].join(" ");
 
 const result = spawnSync(

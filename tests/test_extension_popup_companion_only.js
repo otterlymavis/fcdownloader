@@ -46,5 +46,21 @@ assert(
   popup.includes('data.status === "starting"') && popup.includes('setProgressIndeterminate("Companion is starting download...")'),
   "popup should show an active companion state before numeric download percent is available",
 );
+assert(
+  popup.includes("Standard downloads ready · HD is optional"),
+  "missing Companion should be presented as an optional capability upgrade",
+);
+assert(
+  popup.includes("Standard downloads ready · Update for HD"),
+  "outdated Companion should not block standard downloads",
+);
+assert(
+  popup.includes('label: isYtdlStream ? "HD (server stream)"'),
+  "backend HD streams should remain downloadable without Companion",
+);
+assert(
+  !popup.includes("if (isYtdlStream && !helperIsReady)"),
+  "backend streams should not be gated on Companion readiness",
+);
 
 console.log("extension popup companion-only tests passed");
