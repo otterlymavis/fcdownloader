@@ -685,8 +685,8 @@ function friendlyErrorMessage(error, fallback = "Something went wrong.") {
   if (/Background service is not responding|Extension context invalidated|Receiving end does not exist/i.test(raw)) {
     return "The extension background service stopped. Reload FCDownloader at chrome://extensions and try again.";
   }
-  if (/Backend URL is not configured|Backend URL isn't set/i.test(raw)) {
-    return "Backend URL is not set. Open settings and add the FCDownloader backend URL.";
+  if (/missing its bundled backend|Backend URL is not configured|Backend URL isn't set/i.test(raw)) {
+    return "This extension build is missing its bundled download service.";
   }
   if (/Companion is not running|Install or start FCDownloader Companion/i.test(raw)) {
     return "Companion is not running. Open FCDownloader Companion for HD or protected server downloads.";
@@ -983,15 +983,6 @@ function refresh() {
     );
     return;
   }
-
-  // A backend is optional when the local companion or direct browser captures
-  // can handle the page. Keep the popup usable for companion-only installs.
-  try {
-    const { settings } = (await sendMessage({ type: "fcdl:list", tabId: currentTabId }, 3000)) || {};
-    if (!settings?.backend?.trim()) {
-      setStatus("Backend not set; Companion and direct downloads still work.");
-    }
-  } catch {}
 
   refresh();
   setInterval(refresh, 1500);

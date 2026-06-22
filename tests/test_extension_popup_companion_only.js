@@ -3,14 +3,24 @@ const fs = require("fs");
 const path = require("path");
 
 const popup = fs.readFileSync(path.join(__dirname, "..", "extension", "popup.js"), "utf8");
+const config = fs.readFileSync(path.join(__dirname, "..", "extension", "config.js"), "utf8");
+const optionsHtml = fs.readFileSync(path.join(__dirname, "..", "extension", "options.html"), "utf8");
+const optionsJs = fs.readFileSync(path.join(__dirname, "..", "extension", "options.js"), "utf8");
 
 assert(
-  popup.includes("Backend not set; Companion and direct downloads still work."),
-  "popup should show a non-blocking companion-only backend warning",
+  config.includes('FCDL_DEFAULT_BACKEND = "https://fcdownloader-extractor.fly.dev"'),
+  "extension source should include the production backend",
+);
+assert(!optionsHtml.includes('id="backend"'), "options should not expose a backend URL field");
+assert(!optionsJs.includes('$("backend")'), "options code should not read or save a backend URL");
+
+assert(
+  !popup.includes("Backend not set; Companion and direct downloads still work."),
+  "popup should not expose backend configuration state",
 );
 assert(
-  !popup.includes("Backend URL isn't set yet."),
-  "popup should not hard-block when the backend is missing",
+  !popup.includes("Open settings and add the FCDownloader backend URL."),
+  "popup should not ask users to configure the bundled backend",
 );
 assert(
   !popup.includes("return;  // skip the refresh loop: nothing to fetch"),

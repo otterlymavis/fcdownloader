@@ -11,10 +11,8 @@
  *    YouTube HD streams.
  */
 
-// Default backend URL baked into THIS build at packaging time. The OSS
-// source has FCDL_DEFAULT_BACKEND = "" in config.js so forks don't inherit
-// anyone's infrastructure; a distribution build replaces that value at
-// packaging time so end users never have to enter the URL manually.
+// Backend URL baked into this build. Distribution packaging may replace it,
+// but end users never configure or override it.
 import {
   FCDL_DEFAULT_BACKEND,
   FCDL_EXTENSION_BUILD,
@@ -60,25 +58,12 @@ function debugWarn(...args) {
   if (DEBUG_LOGS) console.warn(...args);
 }
 
-// On install: seed the storage.sync backend from DEFAULT_BACKEND so the
-// user never sees the "configure backend" screen on a public-distribution
-// build. Existing user overrides are preserved.
-//
-// On update or fresh install with NO default baked in (i.e. someone built
-// from source without setting the env var), open the options page so the
-// configuration step is at least obvious.
+// Clean up the legacy user-configurable value. The backend is an internal
+// build detail and should not be stored in browser sync.
 chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason !== "install" && details.reason !== "update") return;
   try {
-    const stored = await chrome.storage.sync.get({ backend: "" });
-    if (!stored.backend?.trim()) {
-      if (DEFAULT_BACKEND) {
-        await chrome.storage.sync.set({ backend: DEFAULT_BACKEND });
-        debugLog("[fcdl] seeded backend from build default:", DEFAULT_BACKEND);
-      } else {
-        chrome.runtime.openOptionsPage();
-      }
-    }
+    await chrome.storage.sync.remove("backend");
   } catch (e) {
     debugWarn("[fcdl] onInstalled setup failed:", e);
   }
@@ -703,13 +688,12 @@ async function youtubeCookieHeader() {
 
 async function getSettings() {
   const stored = await chrome.storage.sync.get({
-    backend: "",
     muxRemote: true,
     allowCookies: false,
     removeWatermark: false,
   });
   return {
-    backend: (stored.backend || DEFAULT_BACKEND).trim().replace(/\/+$/, ""),
+    backend: DEFAULT_BACKEND,
     muxRemote: stored.muxRemote !== false,
     allowCookies: stored.allowCookies === true,
     removeWatermark: stored.removeWatermark === true,
@@ -721,9 +705,7 @@ async function getSettings() {
 async function callExtract(pageUrl, referer, cookies, pageHtml, mediaHints, sourceAudit) {
   const { backend, removeWatermark } = await getSettings();
   if (!backend) {
-    throw new Error(
-      "Backend URL is not configured. Open the extension options and set one (e.g. https://your-instance.fly.dev)."
-    );
+    throw new Error("This extension build is missing its bundled backend.");
   }
   const body = { pageUrl };
   if (referer) body.referer = referer;
@@ -842,9 +824,8 @@ function isBilibiliPageUrl(url) {
 
 function localHelperDownloadUrl(pageUrl, youtubeOnly = false, options = {}) {
   const params = new URLSearchParams({ url: pageUrl });
-  if (options.formatId) params.set("format", options.formatId);
-  if (options.maxHeight) params.set("max_height", String(options.maxHeight));
-  if (!youtubeOnly && !isBilibiliPageUrl(pageUrl) && !params.has("max_height")) params.set("max_height", "1080");
+  // Leave Bilibili uncapped so 1080P+, 4K, and higher streams remain eligible.
+  if (!youtubeOnly && !isBilibiliPageUrl(pageUrl)) params.set("max_height", "1080");
   if (options.removeWatermark) params.set("remove_watermark", "1");
   return `${localHelperBaseUrl}/${youtubeOnly ? "youtube-hd" : "download"}?${params.toString()}`;
 }
@@ -1363,12 +1344,15 @@ function helperVersionAtLeast(version, minimum = LOCAL_HELPER_MIN_VERSION) {
 }
 
 function localHelperReady(health) {
-  return Boolean(health?.ok && helperVersionAtLeast(health.version));
+  return Boolean(
+    health?.ok &&
+    (health.apiVersion === "v1" || helperVersionAtLeast(health.version))
+  );
 }
 
 function localHelperProblem(health) {
   if (!health?.ok) return "Companion is not running.";
-  if (!helperVersionAtLeast(health.version)) {
+  if (!localHelperReady(health)) {
     return `Companion is outdated (${health.version || "unknown"}). Update FCDownloader Companion to ${LOCAL_HELPER_MIN_VERSION} or newer.`;
   }
   return "";
@@ -1457,7 +1441,7 @@ async function downloadItem(tabId, item) {
 
   async function viaBackend(pageForBackend) {
     if (!backend) {
-      throw new Error("Backend URL is not configured.");
+      throw new Error("This extension build is missing its bundled backend.");
     }
     const dlUrl = backendDownloadUrl(backend, pageForBackend, referer, item.headers || null, {
       audioOnly: item.audioOnly,
@@ -1473,7 +1457,7 @@ async function downloadItem(tabId, item) {
 
   async function viaProxy(sourceUrl) {
     if (!backend) {
-      throw new Error("Backend URL is not configured.");
+      throw new Error("This extension build is missing its bundled backend.");
     }
     const filename = suggestedFilename(item, downloadPageUrl, tabTitle);
     const proxied = await buildProxiedUrl(
@@ -1593,9 +1577,7 @@ async function downloadItem(tabId, item) {
       if (!setup.ok) throw new Error(setup.error || "Companion video tools are not ready.");
     }
     const localUrl = localHelperDownloadUrl(helperTarget, false, {
-      formatId: item.formatId,
-      maxHeight: item.maxHeight,
-      removeWatermark: item.removeWatermark ?? removeWatermark,
+      removeWatermark,
     });
     const check = await preflightLocalHelperUrl(localUrl, helperHeaders);
     if (!check.ok) throw new Error(check.error);
@@ -1917,7 +1899,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const s = tabId != null ? tabState.get(tabId) : null;
       const pageUrl = tab?.url || "";
       const items = isXhsPageUrl(pageUrl) ? pruneXhsTabState(tabId, pageUrl) : (s?.items || []);
-      sendResponse({ pageUrl, items, technicalItems: s?.technicalItems || [], settings: await getSettings() });
+      const { backend: _backend, ...settings } = await getSettings();
+      sendResponse({ pageUrl, items, technicalItems: s?.technicalItems || [], settings });
       return;
     }
     if (msg.type === "fcdl:helper_status") {
@@ -1944,15 +1927,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse(await ensureLocalHelperTools());
       return;
     }
-    if (msg.type === "fcdl:helper_formats") {
-      try {
-        const info = await callLocalHelperFormats(msg.pageUrl);
-        sendResponse({ ok: true, info });
-      } catch (e) {
-        sendResponse({ ok: false, error: String(e.message || e) });
-      }
-      return;
-    }
     if (msg.type === "fcdl:detected") {
       // From content script: items it found in the DOM
       const tabId = msg.tabId ?? sender.tab?.id;
@@ -1964,7 +1938,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
     if (msg.type === "fcdl:extract") {
-      // Popup-initiated: hit backend /extract with pageUrl + cookies
+      // Popup-initiated: use the backend first, then fall back to Companion.
       const t0 = Date.now();
       try {
         const cookies = await cookieHeaderFor(msg.referer || msg.pageUrl);
