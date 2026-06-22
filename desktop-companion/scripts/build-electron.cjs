@@ -13,6 +13,9 @@ fs.mkdirSync(ELECTRON_BUILDER_CACHE, { recursive: true });
 
 const signingEnv = {};
 const builderArgs = process.argv.slice(2);
+if (!builderArgs.some((arg) => arg === "--publish" || arg.startsWith("--publish="))) {
+  builderArgs.push("--publish", "never");
+}
 if (!process.env.CSC_LINK && !process.env.WIN_CSC_LINK) {
   signingEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
   if (process.platform === "win32") {
