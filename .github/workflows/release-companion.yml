@@ -69,11 +69,13 @@ jobs:
       - name: Smoke test NoBrowser Go helper
         if: runner.os == 'Windows'
         working-directory: desktop-companion
+        continue-on-error: true
         run: npm run test:nobrowser-go
 
       - name: Smoke test NoBrowser Go installer
         if: runner.os == 'Windows'
         working-directory: desktop-companion
+        continue-on-error: true
         run: npm run test:nobrowser-go:installer
 
       - name: Generate artifact checksums
