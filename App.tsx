@@ -1037,6 +1037,11 @@ export default function App() {
     setLibSelected(new Set());
   }, []);
 
+  const enterLibSelectMode = useCallback((initialTaskId?: string) => {
+    setLibSelectMode(true);
+    setLibSelected(initialTaskId ? new Set([initialTaskId]) : new Set());
+  }, []);
+
   const selectAllLib = useCallback(() => {
     setLibSelected((previous) => {
       const next = new Set(previous);
@@ -1054,6 +1059,10 @@ export default function App() {
     if (selectedGalleryTasks.length === 0 || libGallerySaving) return;
     setLibGallerySaving(true);
     try {
+      const galleryTaskIds = new Set(selectedGalleryTasks.map((task) => task.id));
+      const nonGallerySelectedIds = selectedLibraryTasks
+        .filter((task) => !galleryTaskIds.has(task.id))
+        .map((task) => task.id);
       const { status } = await MediaLibrary.requestPermissionsAsync(true, ['photo', 'video']);
       if (status !== 'granted') {
         showToast(translate('galleryPermissionDenied', resolvedLangRef.current), 'error');
@@ -1062,22 +1071,29 @@ export default function App() {
 
       let saved = 0;
       let firstError = '';
+      const failedIds = new Set<string>();
       for (const task of selectedGalleryTasks) {
         try {
           await MediaLibrary.saveToLibraryAsync(task.localPlaylistPath!);
           saved += 1;
         } catch (error) {
+          failedIds.add(task.id);
           if (!firstError) firstError = (error as Error).message;
         }
       }
 
       if (saved === selectedGalleryTasks.length) {
         showToast(`${translate('savedToGallery', resolvedLangRef.current)} (${saved})`, 'success');
-        exitLibSelectMode();
+        if (nonGallerySelectedIds.length > 0) {
+          setLibSelected(new Set(nonGallerySelectedIds));
+        } else {
+          exitLibSelectMode();
+        }
       } else {
+        setLibSelected(new Set([...nonGallerySelectedIds, ...failedIds]));
         showToast(
           translate('gallerySaveFailed', resolvedLangRef.current, {
-            error: firstError || `${selectedGalleryTasks.length - saved} item(s)`,
+            error: `${saved}/${selectedGalleryTasks.length} · ${firstError || `${failedIds.size} item(s)`}`,
           }),
           'error',
         );
@@ -1090,7 +1106,7 @@ export default function App() {
     } finally {
       setLibGallerySaving(false);
     }
-  }, [exitLibSelectMode, libGallerySaving, selectedGalleryTasks, showToast]);
+  }, [exitLibSelectMode, libGallerySaving, selectedGalleryTasks, selectedLibraryTasks, showToast]);
 
   const deleteLibSelected = useCallback(() => {
     const ids = Array.from(libSelected);
@@ -1475,7 +1491,7 @@ export default function App() {
                   : <Text style={[s.titleAndroid, { color: t.ink, textAlign: resolvedLanguage === 'ar' ? 'right' : 'left' }]}>{translate('library', resolvedLanguage)}</Text>
                 }
                 {history.length > 0 && (
-                  <Pressable onPress={() => { setLibSelectMode(true); setLibSelected(new Set()); }}
+                  <Pressable onPress={() => enterLibSelectMode()}
                     hitSlop={S.sm} android_ripple={RIPPLE_BL}>
                     <Text style={[{ color: t.ink2, fontSize: fs(14), fontWeight: '600' }]}>{editLabel}</Text>
                   </Pressable>
@@ -1731,6 +1747,9 @@ export default function App() {
 
                 return libSelectMode ? (
                   <Pressable key={task.id} android_ripple={RIPPLE}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: isSelected }}
+                    accessibilityLabel={`${source}, ${translate('selected', resolvedLanguage)}`}
                     onPress={() => toggleLibSelect(task.id)}
                     style={[s.libraryCard, subtleShadow,
                       { backgroundColor: isSelected ? t.card2 : t.card }]}>
@@ -1741,13 +1760,19 @@ export default function App() {
                     accessibilityRole="button"
                     accessibilityLabel={translate('share', resolvedLanguage)}
                     onPress={() => handleExport(task)}
+                    onLongPress={() => enterLibSelectMode(task.id)}
                     style={[s.libraryCard, { backgroundColor: t.card }, subtleShadow]}>
                     {cardContent}
                   </Pressable>
                 ) : (
-                  <View key={task.id} style={[s.libraryCard, { backgroundColor: t.card }, subtleShadow]}>
+                  <Pressable key={task.id}
+                    android_ripple={RIPPLE}
+                    accessibilityRole="button"
+                    accessibilityLabel={source}
+                    onLongPress={() => enterLibSelectMode(task.id)}
+                    style={[s.libraryCard, { backgroundColor: t.card }, subtleShadow]}>
                     {cardContent}
-                  </View>
+                  </Pressable>
                 );
               })}
             </ScrollView>

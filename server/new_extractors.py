@@ -313,9 +313,96 @@ def _parse_bilibili_playinfo(
     data: dict[str, Any], title: str, page_url: str, thumb: str | None = None
 ) -> dict[str, Any] | None:
     play = data.get("data") or data  # API wraps in .data; inline HTML doesn't
+    headers = {"Referer": "https://www.bilibili.com/"}
 
-    # durl = single MP4/FLV file (video + audio combined) — always prefer this.
-    # DASH baseUrl = video-only .m4s segment that requires separate audio muxing.
+    # Prefer DASH when both tracks are present. Bilibili commonly includes a
+    # low-resolution progressive durl alongside much better DASH video tracks;
+    # choosing durl first silently caps otherwise-HD downloads at 480p.
+    dash = play.get("dash")
+    if isinstance(dash, dict):
+        videos = dash.get("video") or []
+        audios = dash.get("audio") or []
+        video_candidates = [
+            {
+                "url": v.get("baseUrl") or v.get("base_url"),
+                "fieldPath": f"dash.video[{idx}].baseUrl",
+                "formatId": v.get("id"),
+                "width": v.get("width"),
+                "height": v.get("height"),
+                "bandwidth": v.get("bandwidth"),
+                "codec": v.get("codecs"),
+                "mimeType": v.get("mimeType") or v.get("mime_type"),
+                "hasVideo": True,
+                "hasAudio": False,
+            }
+            for idx, v in enumerate(videos)
+            if isinstance(v, dict) and (v.get("baseUrl") or v.get("base_url"))
+        ]
+        audio_candidates = [
+            {
+                "url": a.get("baseUrl") or a.get("base_url"),
+                "fieldPath": f"dash.audio[{idx}].baseUrl",
+                "formatId": a.get("id"),
+                "bandwidth": a.get("bandwidth"),
+                "codec": a.get("codecs"),
+                "mimeType": a.get("mimeType") or a.get("mime_type"),
+                "hasVideo": False,
+                "hasAudio": True,
+            }
+            for idx, a in enumerate(audios)
+            if isinstance(a, dict) and (a.get("baseUrl") or a.get("base_url"))
+        ]
+        best_video, video_audit = _select_candidate(
+            video_candidates,
+            strategy="bilibili extractor",
+            source="playurl DASH video",
+            headers=headers,
+        )
+        best_audio, audio_audit = _select_candidate(
+            audio_candidates,
+            strategy="bilibili extractor",
+            source="playurl DASH audio",
+            headers=headers,
+        )
+        if best_video and best_audio:
+            video_format = {
+                "url": best_video["url"],
+                "format_id": str(best_video.get("formatId") or ""),
+                "ext": "mp4",
+                "protocol": "https",
+                "http_headers": headers,
+                "width": best_video.get("width"),
+                "height": best_video.get("height"),
+                "vcodec": best_video.get("codec"),
+                "acodec": "none",
+            }
+            audio_format = {
+                "url": best_audio["url"],
+                "format_id": str(best_audio.get("formatId") or ""),
+                "ext": "m4a",
+                "protocol": "https",
+                "http_headers": headers,
+                "vcodec": "none",
+                "acodec": best_audio.get("codec"),
+            }
+            return source_audit.add_audit({
+                "id": cache_key(page_url),
+                "title": title,
+                "url": best_video["url"],
+                "ext": "mp4",
+                "protocol": "https",
+                "http_headers": headers,
+                "thumbnail": thumb,
+                "width": best_video.get("width"),
+                "height": best_video.get("height"),
+                "vcodec": best_video.get("codec"),
+                "requested_formats": [video_format, audio_format],
+                "format_id": "+".join(filter(None, (
+                    video_format["format_id"], audio_format["format_id"],
+                ))),
+            }, [*video_audit, *audio_audit])
+
+    # Progressive durl remains the reliable fallback when DASH audio is absent.
     durl = play.get("durl") or []
     if durl:
         candidates = [
@@ -333,7 +420,7 @@ def _parse_bilibili_playinfo(
             candidates,
             strategy="bilibili extractor",
             source="playurl durl",
-            headers={"Referer": "https://www.bilibili.com/"},
+            headers=headers,
         )
         if best and best.get("url"):
             return source_audit.add_audit({
@@ -342,12 +429,12 @@ def _parse_bilibili_playinfo(
                 "url": best["url"],
                 "ext": "mp4",
                 "protocol": "https",
-                "http_headers": {"Referer": "https://www.bilibili.com/"},
+                "http_headers": headers,
                 "thumbnail": thumb,
             }, audit)
 
-    # DASH fallback: video-only stream — acceptable when durl is unavailable.
-    dash = play.get("dash")
+    # Last resort: return the best video-only DASH track when no progressive
+    # file or audio companion exists.
     if isinstance(dash, dict):
         videos = dash.get("video") or []
         if videos:
@@ -370,7 +457,7 @@ def _parse_bilibili_playinfo(
                 candidates,
                 strategy="bilibili extractor",
                 source="playurl DASH video",
-                headers={"Referer": "https://www.bilibili.com/"},
+                headers=headers,
             )
             if best and best.get("url"):
                 return source_audit.add_audit({
@@ -379,7 +466,7 @@ def _parse_bilibili_playinfo(
                     "url": best["url"],
                     "ext": "mp4",
                     "protocol": "https",
-                    "http_headers": {"Referer": "https://www.bilibili.com/"},
+                    "http_headers": headers,
                     "thumbnail": thumb,
                     "width": best.get("width"),
                     "height": best.get("height"),
@@ -472,7 +559,7 @@ def extract_bilibili(page_url: str, cookies: str | None) -> dict[str, Any] | Non
                             "height": info.get("height"),
                             "width": info.get("width"),
                             "hasVideo": True,
-                            "hasAudio": info.get("vcodec") is None,
+                            "hasAudio": bool(info.get("requested_formats")) or info.get("vcodec") is None,
                             "contentLength": info.get("filesize"),
                         }))
                         merged_audit: list[dict[str, Any]] = []

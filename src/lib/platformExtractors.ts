@@ -717,6 +717,19 @@ async function extractInstagram(pageUrl: string): Promise<DetectedMedia[]> {
       pushUnique(results, makeItem(u, pageUrl));
     });
 
+    // Instagram Reel pages expose alternate video encodings and poster images
+    // alongside the actual clip. They are not carousel items: return one video
+    // so a single Reel starts a single download. Keep the full result set for
+    // /p/ posts because those can be real mixed-media carousels.
+    if (/instagram\.com\/(?:reel|reels|tv)\//i.test(pageUrl)) {
+      const video = results.find(item =>
+        item.mediaKind === 'video' ||
+        item.mediaType === 'hls' ||
+        /\.(?:mp4|m3u8)(?:[?#]|$)/i.test(item.url),
+      );
+      if (video) return [video];
+    }
+
     if (results.length === 0) {
       extractUrls(
         html,

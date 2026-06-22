@@ -168,6 +168,72 @@ class TestClassifier:
         assert not p.auth_likely
 
 
+# ── Instagram extraction ─────────────────────────────────────────────────────
+
+class TestInstagramExtraction:
+    class FakeResponse:
+        headers = {}
+
+        def __init__(self, html_text: str):
+            self._body = html_text.encode("utf-8")
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def test_reel_with_variants_returns_one_video(self, monkeypatch):
+        html_text = """
+          <meta property="og:title" content="A reel">
+          <meta property="og:image" content="https://scontent.cdninstagram.com/poster.jpg">
+          <script>
+            {"video_url":"https:\\/\\/scontent.cdninstagram.com\\/clip-hd.mp4?token=hd"}
+            {"playable_url":"https:\\/\\/scontent.cdninstagram.com\\/clip-sd.mp4?token=sd"}
+            {"display_url":"https:\\/\\/scontent.cdninstagram.com\\/poster.jpg?token=poster"}
+          </script>
+        """
+        monkeypatch.setattr(
+            extractors.urllib.request,
+            "urlopen",
+            lambda *_args, **_kwargs: self.FakeResponse(html_text),
+        )
+
+        result = extractors.extract_instagram(
+            "https://www.instagram.com/reel/ABC123/",
+            None,
+        )
+
+        assert result is not None
+        assert result.get("_type") != "playlist"
+        assert result["url"].startswith("https://scontent.cdninstagram.com/clip-hd.mp4")
+
+    def test_regular_post_keeps_real_carousel(self, monkeypatch):
+        html_text = """
+          <script>
+            {"display_url":"https:\\/\\/scontent.cdninstagram.com\\/photo-1.jpg?token=one"}
+            {"display_url":"https:\\/\\/scontent.cdninstagram.com\\/photo-2.jpg?token=two"}
+          </script>
+        """
+        monkeypatch.setattr(
+            extractors.urllib.request,
+            "urlopen",
+            lambda *_args, **_kwargs: self.FakeResponse(html_text),
+        )
+
+        result = extractors.extract_instagram(
+            "https://www.instagram.com/p/ABC123/",
+            None,
+        )
+
+        assert result is not None
+        assert result["_type"] == "playlist"
+        assert len(result["entries"]) == 2
+
+
 # ── registry.lookup ───────────────────────────────────────────────────────────
 
 class TestRegistry:

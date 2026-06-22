@@ -21,8 +21,10 @@
     "variants:nobrowser-go": "node scripts/build-variants.cjs nobrowser-go",
     "test:nobrowser-go": "powershell.exe -ExecutionPolicy Bypass -File scripts/test-nobrowser-go-helper.ps1",
     "test:nobrowser-go:installer": "powershell.exe -ExecutionPolicy Bypass -File scripts/test-nobrowser-go-installer.ps1",
+    "helper:build:go": "node scripts/build-companion-go.cjs",
     "pack": "npm run helper:build && node scripts/build-electron.cjs --dir",
-    "dist": "npm run helper:build && node scripts/build-electron.cjs"
+    "dist": "npm run helper:build && node scripts/build-electron.cjs",
+    "dist:companion:nobrowser-go": "npm run helper:build:go && node scripts/build-electron.cjs"
   },
   "devDependencies": {
     "electron": "^39.2.6",

@@ -376,6 +376,19 @@ def extract_meta_page(
     if filtered:
         uniq = filtered
 
+    # A Reel is one video, even though Instagram commonly embeds several
+    # encodings/quality variants and its poster image in the page HTML. Treating
+    # those URLs as a carousel makes the clients download multiple files for a
+    # single Reel. Regular /p/ posts may be genuine carousels, so preserve the
+    # multi-item behavior for those.
+    is_single_video_post = bool(
+        re.search(r"instagram\.com/(?:reel|reels|tv)/", page_url, re.I)
+    )
+    if is_single_video_post:
+        first_video = next(((u, k) for u, k in uniq if k == "video"), None)
+        if first_video:
+            uniq = [first_video]
+
     if len(uniq) >= 2:
         entries = []
         for u, kind in uniq:
