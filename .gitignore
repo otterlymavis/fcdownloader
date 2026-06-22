@@ -127,3 +127,9 @@ extension_helper_report_v*.md
 webapp_url_report.md
 generate_webapp_report.py
 tests/temp_downloads*/
+
+# AI Agent files
+AGENT.md
+AGENTS.md
+CLAUDE.md
+.agents/
