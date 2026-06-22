@@ -183,6 +183,33 @@ function isBilibiliPageUrl(url) {
   return /(?:bilibili\.com|b23\.tv|bilibili\.tv)/i.test(String(url || ""));
 }
 
+function formatQualityValue(format = {}) {
+  const candidates = [
+    format.quality,
+    format.qn,
+    format.id,
+    format.formatId,
+  ];
+  for (const value of candidates) {
+    const match = String(value || "").match(/\d+/);
+    if (match) return Number(match[0]) || 0;
+  }
+  return 0;
+}
+
+function formatSizeValue(format = {}) {
+  return Number(format.filesize || format.filesizeApprox || format.bandwidth || format.tbr || 0) || 0;
+}
+
+function compareLocalHelperFormats(a = {}, b = {}) {
+  return (
+    (Number(b.height || 0) - Number(a.height || 0)) ||
+    (formatQualityValue(b) - formatQualityValue(a)) ||
+    (formatSizeValue(b) - formatSizeValue(a)) ||
+    (Number(b.width || 0) - Number(a.width || 0))
+  );
+}
+
 function videoFormatsForOptions(formats = []) {
   const bestByKey = new Map();
   for (const format of formats || []) {
