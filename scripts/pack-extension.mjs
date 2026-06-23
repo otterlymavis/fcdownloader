@@ -89,7 +89,7 @@ let replaced = cfg.replace(
   /export const FCDL_DEFAULT_BACKEND = "[^"]*";/,
   `export const FCDL_DEFAULT_BACKEND = ${JSON.stringify(backend)};`,
 );
-if (replaced === cfg) {
+if (!/export const FCDL_DEFAULT_BACKEND = "[^"]*";/.test(cfg)) {
   console.error("[pack] FAILED to substitute FCDL_DEFAULT_BACKEND — has the pattern in config.js changed?");
   process.exit(1);
 }

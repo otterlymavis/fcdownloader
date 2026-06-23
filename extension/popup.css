@@ -161,6 +161,7 @@ main {
   padding: 0;
   flex: 0 0 auto;
 }
+#helper-open[hidden],
 #helper-tools[hidden] {
   display: none;
 }
