@@ -1486,6 +1486,7 @@ def expected_failure_reason(platform, label, r, platform_results):
         "Xiaohongshu (xhslink)", "Xiaohongshu (explore)", "Douyin", "TVer", "ABEMA",
         "FC2 Video", "FC2 Live", "OpenREC", "FOD / Fuji TV", "DMM",
         "Hulu Japan / TELASA", "Bunshun",
+        "Naver Blog", "Naver News", "Naver Entertainment", "Naver Sports",
         # TBS: episode-specific URLs expire and playback metadata loads only in the browser
         "TBS",
         # Yahoo Japan video/news: Fly.io routing-blocked; Yahoo bots get 403

@@ -375,7 +375,10 @@ def main():
                 })
                 # Take failure screenshot of Home tab
                 screenshot_path = screenshot_dir / f"failed_web_{name}.png"
-                page.screenshot(path=str(screenshot_path))
+                try:
+                    page.screenshot(path=str(screenshot_path), timeout=5000)
+                except Exception as screenshot_err:
+                    print(f"  Warning: Failed to capture screenshot: {screenshot_err}")
                 continue
 
             page.wait_for_timeout(2000) # Wait for extraction to launch
@@ -574,8 +577,11 @@ def main():
                 detail = f"Failed: {failed_tasks[0].get('error')}"
                 failed_items.append((name, url, detail))
                 screenshot_path = screenshot_dir / f"failed_web_{name}.png"
-                page.screenshot(path=str(screenshot_path))
-                print(f"  [Failure] Saved screenshot to {screenshot_path}")
+                try:
+                    page.screenshot(path=str(screenshot_path), timeout=5000)
+                    print(f"  [Failure] Saved screenshot to {screenshot_path}")
+                except Exception as screenshot_err:
+                    print(f"  Warning: Failed to capture screenshot: {screenshot_err}")
             else:
                 expected_limitation = is_expected_limitation(note)
                 if expected_limitation:
@@ -585,8 +591,11 @@ def main():
                 if not expected_limitation:
                     failed_items.append((name, url, detail))
                     screenshot_path = screenshot_dir / f"failed_web_{name}.png"
-                    page.screenshot(path=str(screenshot_path))
-                    print(f"  [Failure] Saved screenshot to {screenshot_path}")
+                    try:
+                        page.screenshot(path=str(screenshot_path), timeout=5000)
+                        print(f"  [Failure] Saved screenshot to {screenshot_path}")
+                    except Exception as screenshot_err:
+                        print(f"  Warning: Failed to capture screenshot: {screenshot_err}")
 
             print(f"  Detection: {detection}")
             print(f"  Download:  {download_status}")
