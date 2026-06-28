@@ -145,7 +145,6 @@ try {
       extensionBuild,
       extensionBuiltAt: builtAt,
       minHelperVersion,
-      backend,
       source: path.relative(ROOT, SRC),
       unpacked: path.relative(ROOT, OUT),
       zip: path.relative(ROOT, zipPath),

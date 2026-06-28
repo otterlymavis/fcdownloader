@@ -1278,6 +1278,9 @@ async function preflightDirectUrl(url, headers = []) {
     const len = Number(r.headers.get("content-length") || "0");
     ac.abort();
     if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+    if (/mpegurl|vnd\.apple\.mpegurl|dash\+xml/i.test(ct) || /\.(?:m3u8|mpd)(?:[?#]|$)/i.test(url)) {
+      return { ok: false, error: "stream manifest requires helper/backend download" };
+    }
     if (/^(text\/html|application\/xhtml\+xml|application\/json)\b/i.test(ct)) {
       return { ok: false, error: ct || "page response" };
     }

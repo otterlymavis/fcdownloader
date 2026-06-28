@@ -127,6 +127,4 @@ jobs:
           gh release upload "$TAG" \
             "${{ steps.pack.outputs.zip }}" \
             "${{ steps.pack.outputs.helper }}" \
-            dist/extension-release-manifest.json \
-            dist/distribution-manifest.json \
             --clobber

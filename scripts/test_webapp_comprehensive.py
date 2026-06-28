@@ -71,6 +71,29 @@ def safe_evaluate_tasks(page):
     return []
 
 
+def summarize_tasks(tasks, max_items=5):
+    """Return a compact task summary so large galleries do not flood stdout."""
+    counts = {}
+    preview = []
+    for task in tasks:
+        status = task.get("status", "unknown")
+        counts[status] = counts.get(status, 0) + 1
+        if len(preview) >= max_items:
+            continue
+        media = task.get("media") or {}
+        preview.append({
+            "status": status,
+            "kind": media.get("mediaKind"),
+            "url": str(media.get("url") or "")[:120],
+        })
+    return {
+        "total": len(tasks),
+        "statusCounts": counts,
+        "preview": preview,
+        "truncated": len(tasks) > len(preview),
+    }
+
+
 # ── MP4 Track and Media Verification ─────────────────────────────────────────
 
 def check_mp4_tracks(filepath):
@@ -149,7 +172,7 @@ def verify_media_file(filepath, media_kind):
 
 def clean_url(u):
     if not u: return ""
-    u = u.split('?')[0].split('#')[0]
+    u = urllib.parse.unquote(u.split('?')[0].split('#')[0])
     u = re.sub(r'^https?://(www\.)?', '', u)
     return u.rstrip('/')
 
@@ -501,7 +524,7 @@ def main():
             # Determine extraction status
             raw_tasks = safe_evaluate_tasks(page)
             tasks = filter_tasks_for_url(raw_tasks, url)
-            print(f"  Tasks in localStorage (filtered): {tasks}")
+            print(f"  Tasks in localStorage (filtered): {summarize_tasks(tasks)}")
 
             # Switch to Library tab to ensure we can see visual status or capture screenshots
             try:

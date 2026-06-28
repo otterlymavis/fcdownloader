@@ -103,7 +103,6 @@ const out = {
   extensionVersion,
   distributionBuild: buildId,
   builtAt,
-  backend,
   helper: "desktop-companion/build/helper/fcdownloader-local-helper",
   extension: "dist/extension",
   extensionZip: `dist/fcdownloader-extension-v${extensionVersion}.zip`,

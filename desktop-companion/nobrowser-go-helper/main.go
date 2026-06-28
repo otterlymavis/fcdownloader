@@ -298,18 +298,6 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 		}
 	}
 
-	// Start the browser download before yt-dlp finishes producing the file.
-	// Without an early response Chrome waits with no visible download and can
-	// time out on longer videos. URL validation still happens above, while
-	// extraction failures are reported by closing the in-progress download.
-	w.Header().Set("Content-Type", "video/mp4")
-	w.Header().Set("Content-Disposition", `attachment; filename="fcdownloader_video.mp4"`)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-
 	filePath, cleanup, err := downloadMedia(
 		r.Context(),
 		rawURL,
@@ -324,6 +312,7 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 	if err != nil {
 		logf("download error: %v", err)
 		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -331,10 +320,23 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 	if err != nil {
 		logf("failed to open downloaded file: %v", err)
 		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 	defer file.Close()
 
+	info, err := file.Stat()
+	if err != nil {
+		logf("failed to stat downloaded file: %v", err)
+		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", mediaContentType(filePath))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, safeName(filepath.Base(filePath))))
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 99, Status: "serving"})
 	if _, err := io.Copy(w, file); err != nil {
 		logf("failed to serve downloaded file: %v", err)
@@ -342,6 +344,35 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 		return
 	}
 	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 100, Status: "complete"})
+}
+
+func mediaContentType(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".mp4", ".m4v":
+		return "video/mp4"
+	case ".mov":
+		return "video/quicktime"
+	case ".webm":
+		return "video/webm"
+	case ".mkv":
+		return "video/x-matroska"
+	case ".avi":
+		return "video/x-msvideo"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".m4a", ".aac":
+		return "audio/aac"
+	case ".opus":
+		return "audio/opus"
+	case ".ogg":
+		return "audio/ogg"
+	case ".wav":
+		return "audio/wav"
+	case ".flac":
+		return "audio/flac"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 func runYtDlpJSON(ctx context.Context, rawURL, cookies string) (map[string]interface{}, error) {

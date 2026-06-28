@@ -31,6 +31,7 @@ SCREENSHOT_DIR = ROOT / "artifacts" / "screenshots"
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 TEMP_DOWNLOAD_DIR = ROOT / "tests" / "temp_downloads_comp"
 TEMP_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+STRATEGY_MATRIX_COOLDOWN_SECONDS = int(os.environ.get("FCDL_REPORT_BACKEND_COOLDOWN_SECONDS", "65"))
 
 # Pure Python MP4 Track Inspector
 def check_mp4_tracks(filepath):
@@ -189,8 +190,11 @@ def download_file(url, target_path, headers=None, timeout=30, max_size=5*1024*10
 MEDIA_EXTENSIONS = {
     ".mp4", ".m4v", ".webm", ".mov", ".avi", ".mkv", ".mp3", ".m4a", ".aac",
     ".opus", ".ogg", ".wav", ".flac", ".jpg", ".jpeg", ".png", ".gif", ".webp",
-    ".heic", ".m3u8", ".mpd",
+    ".heic", ".avif", ".m3u8", ".mpd",
 }
+AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".opus", ".ogg", ".wav", ".flac"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".avif"}
+VIDEO_EXTENSIONS = {".mp4", ".m4v", ".webm", ".mov", ".avi", ".mkv", ".m3u8", ".mpd"}
 MEDIA_KINDS = {"image", "video", "audio", "hls", "dash", "direct", "paired"}
 REPLAY_HEADERS = {"accept", "accept-language", "origin", "range", "referer", "user-agent"}
 
@@ -201,7 +205,100 @@ def is_valid_media_item(item):
     path = urllib.parse.urlparse(item_url).path.lower()
     kind = str(item.get("kind") or "").lower()
     extractor = str(item.get("extractor") or "").lower()
-    return any(path.endswith(ext) for ext in MEDIA_EXTENSIONS) or kind in MEDIA_KINDS or "ytdl" in extractor
+    mime = media_mime_type(item)
+    return (
+        any(path.endswith(ext) for ext in MEDIA_EXTENSIONS)
+        or kind in MEDIA_KINDS
+        or mime.startswith(("audio/", "image/", "video/"))
+        or "mpegurl" in mime
+        or "dash+xml" in mime
+        or "ytdl" in extractor
+    )
+
+def media_mime_type(item):
+    return str(
+        item.get("mimeType")
+        or item.get("mime")
+        or item.get("contentType")
+        or item.get("type")
+        or ""
+    ).lower()
+
+def extension_for_media_item(item):
+    item_ext = str(item.get("ext") or "").lower().lstrip(".")
+    if item_ext:
+        return item_ext
+    mime = media_mime_type(item)
+    if "dash+xml" in mime:
+        return "mpd"
+    if "mpegurl" in mime:
+        return "m3u8"
+    if "ogg" in mime or "opus" in mime:
+        return "ogg"
+    if "mpeg" in mime or "mp3" in mime:
+        return "mp3"
+    if "wav" in mime:
+        return "wav"
+    if "flac" in mime:
+        return "flac"
+    if "avif" in mime:
+        return "avif"
+    if "png" in mime:
+        return "png"
+    if "webp" in mime:
+        return "webp"
+    if "gif" in mime:
+        return "gif"
+    path = urllib.parse.urlparse(str(item.get("url") or "")).path.lower()
+    suffix = Path(path).suffix.lower().lstrip(".")
+    if suffix:
+        return suffix
+    kind = infer_media_kind(item, "video")
+    return "mp4" if kind == "video" else "jpg" if kind == "image" else "m4a"
+
+def infer_media_kind(item, fallback_kind):
+    kind = str(item.get("kind") or "").lower()
+    if kind in ("hls", "dash", "paired"):
+        return "video"
+    if kind in ("video", "audio", "image"):
+        return kind
+
+    mime = media_mime_type(item)
+    if mime.startswith("audio/"):
+        return "audio"
+    if mime.startswith("image/"):
+        return "image"
+    if mime.startswith("video/") or "mpegurl" in mime or "dash+xml" in mime:
+        return "video"
+
+    path = urllib.parse.urlparse(str(item.get("url") or "")).path.lower()
+    suffix = Path(path).suffix.lower()
+    if suffix in AUDIO_EXTENSIONS:
+        return "audio"
+    if suffix in IMAGE_EXTENSIONS:
+        return "image"
+    if suffix in VIDEO_EXTENSIONS:
+        return "video"
+
+    return fallback_kind
+
+def is_stream_manifest_item(item):
+    kind = str(item.get("kind") or "").lower()
+    mime = media_mime_type(item)
+    url = str(item.get("url") or "")
+    ext = "." + extension_for_media_item(item).lower().lstrip(".")
+    return (
+        kind in {"hls", "dash"}
+        or ext in {".m3u8", ".mpd"}
+        or "mpegurl" in mime
+        or "dash+xml" in mime
+        or urllib.parse.urlparse(url).path.lower().endswith((".m3u8", ".mpd"))
+    )
+
+def single_media_item_from_response(data, fallback_kind):
+    item = dict(data)
+    item["kind"] = item.get("kind") or fallback_kind
+    return item
 
 def backend_proxy_url(item, page_url):
     replay = {
@@ -216,6 +313,26 @@ def backend_proxy_url(item, page_url):
             json.dumps(replay, separators=(",", ":")).encode("utf-8")
         ).decode("ascii").rstrip("=")
     return f"{BACKEND}/proxy?{urllib.parse.urlencode(params)}"
+
+def attempt_direct_media_download(result, item, page_url, temp_file, media_kind):
+    stream_url = item.get("url")
+    if not stream_url:
+        return False, "No direct media URL available for image download"
+
+    ok, dl_err = download_file(stream_url, temp_file, headers=item.get("headers"), timeout=60)
+    if ok:
+        if record_verified_download(result, temp_file, media_kind, "✅ PASS", "Direct download"):
+            return True, None
+        return False, result.get("error") or "Direct download returned an invalid media payload"
+
+    ok, proxy_err = download_file(backend_proxy_url(item, page_url), temp_file, timeout=60)
+    if ok:
+        if record_verified_download(result, temp_file, media_kind, "✅ PASS (Proxy Fallback)", "Proxy"):
+            result["retry"] = "Backend Proxy"
+            return True, None
+        return False, result.get("error") or "Proxy returned an invalid media payload"
+
+    return False, f"Direct download failed: {dl_err}; Proxy: {proxy_err}"
 
 def test_url(name, url, thread_id):
     print(f"[{thread_id}] Testing {name}: {url}")
@@ -254,7 +371,7 @@ def test_url(name, url, thread_id):
                 if kind == "gallery":
                     extracted_items = srv_data.get("items", [])
                 else:
-                    extracted_items = [{"url": srv_data.get("url"), "kind": kind}]
+                    extracted_items = [single_media_item_from_response(srv_data, kind)]
             else:
                 result["error"] = f"Format extraction failed: Local: {err}, Server: {srv_err}"
                 result["screenshot"] = capture_screenshot(url, name)
@@ -269,7 +386,7 @@ def test_url(name, url, thread_id):
                 extracted_items = srv_data.get("items", [])
                 result["gallery"] = f"✅ PASS ({len(extracted_items)} items)"
             else:
-                extracted_items = [{"url": srv_data.get("url"), "kind": kind}]
+                extracted_items = [single_media_item_from_response(srv_data, kind)]
                 result["gallery"] = "✅ PASS (1 item)"
         else:
             result["error"] = f"Gallery extraction failed: {srv_err}"
@@ -285,15 +402,11 @@ def test_url(name, url, thread_id):
         return result
 
     first_item = valid_media_items[0]
-    media_kind = first_item.get("kind", "video" if is_video else "image")
-    if media_kind in ("hls", "dash", "paired"):
-        media_kind = "video"
-    elif media_kind == "direct":
-        media_kind = "video" if is_video else "image"
-    ext = first_item.get("ext", "mp4" if media_kind == "video" else "jpg")
-    temp_file = TEMP_DOWNLOAD_DIR / f"temp_{thread_id}_{re.sub(r'[^a-zA-Z0-9]', '_', name.lower())}.{ext}"
+    first_media_kind = infer_media_kind(first_item, "video" if is_video else "image")
 
-    if is_video and media_kind == "video":
+    if is_video and first_media_kind == "video":
+        ext = extension_for_media_item(first_item)
+        temp_file = TEMP_DOWNLOAD_DIR / f"temp_{thread_id}_{re.sub(r'[^a-zA-Z0-9]', '_', name.lower())}.{ext}"
         # Download via local helper /download endpoint
         download_url = f"{LOCAL_HELPER}/download?{urllib.parse.urlencode({'url': url, 'max_height': '1080'})}"
         ok, dl_err = download_file(download_url, temp_file, timeout=120)
@@ -302,43 +415,49 @@ def test_url(name, url, thread_id):
         else:
             # Fallback direct download
             stream_url = first_item.get("url")
-            if stream_url:
+            if stream_url and not is_stream_manifest_item(first_item):
                 ok, dl_err2 = download_file(stream_url, temp_file, headers=first_item.get("headers"), timeout=120)
                 if ok:
                     record_verified_download(result, temp_file, "video", "✅ PASS (Direct Fallback)", "Direct fallback")
                 else:
                     result["error"] = f"Download failed: Helper: {dl_err}, Direct: {dl_err2}"
                     result["screenshot"] = capture_screenshot(url, name)
+            elif stream_url:
+                result["error"] = f"Helper download failed for stream manifest; not saving raw manifest directly: {dl_err}"
+                result["screenshot"] = capture_screenshot(url, name)
             else:
                 result["error"] = f"Download failed via helper: {dl_err}"
                 result["screenshot"] = capture_screenshot(url, name)
+        if temp_file.exists():
+            try:
+                temp_file.unlink()
+            except Exception:
+                pass
     else:
-        # Download image / gallery item directly
-        stream_url = first_item.get("url")
-        if stream_url:
-            ok, dl_err = download_file(stream_url, temp_file, headers=first_item.get("headers"), timeout=60)
+        errors = []
+        for idx, item in enumerate(valid_media_items, 1):
+            media_kind = infer_media_kind(item, "video" if is_video else "image")
+            ext = extension_for_media_item(item)
+            temp_file = TEMP_DOWNLOAD_DIR / f"temp_{thread_id}_{re.sub(r'[^a-zA-Z0-9]', '_', name.lower())}_{idx}.{ext}"
+            result["error"] = None
+            ok, err = attempt_direct_media_download(result, item, url, temp_file, media_kind)
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except Exception:
+                    pass
             if ok:
-                record_verified_download(result, temp_file, media_kind, "✅ PASS", "Direct download")
-            else:
-                ok, proxy_err = download_file(backend_proxy_url(first_item, url), temp_file, timeout=60)
-                if ok:
-                    if record_verified_download(result, temp_file, media_kind, "✅ PASS (Proxy Fallback)", "Proxy"):
-                        result["retry"] = "Backend Proxy"
-                else:
-                    result["error"] = f"Direct download failed: {dl_err}; Proxy: {proxy_err}"
-                    result["screenshot"] = capture_screenshot(url, name)
+                break
+            errors.append(f"item {idx}: {err}")
         else:
-            result["error"] = "No direct media URL available for image download"
+            result["error"] = "; ".join(errors[:3])
+            if len(errors) > 3:
+                result["error"] += f"; {len(errors) - 3} more item(s) failed"
             result["screenshot"] = capture_screenshot(url, name)
 
-    # Clean up temp file
-    if temp_file.exists():
-        try:
-            temp_file.unlink()
-        except Exception:
-            pass
-
     return result
+
+test_url.__test__ = False
 
 def extract_urls_from_dict(filepath, var_name):
     path = ROOT / filepath
@@ -472,6 +591,10 @@ def main():
         pass
 
     # 2. Run test_all_strategies.py to gather full strategy matrix
+    if STRATEGY_MATRIX_COOLDOWN_SECONDS > 0:
+        print(f"\nWaiting {STRATEGY_MATRIX_COOLDOWN_SECONDS}s before strategy matrix to avoid backend rate limits...")
+        time.sleep(STRATEGY_MATRIX_COOLDOWN_SECONDS)
+
     print("\nRunning test_all_strategies.py to gather full strategy matrix...")
     strategy_report_path = ROOT / "artifacts" / "raw_strategy_report.txt"
     with open(strategy_report_path, "w", encoding="utf-8") as f:

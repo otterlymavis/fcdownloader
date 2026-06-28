@@ -117,6 +117,12 @@ vm.runInNewContext(backgroundScript, {
     }
     if (String(url).includes("/formats?")) {
       const checkedUrl = new URL(String(url)).searchParams.get("url") || "";
+      if (/\.(?:m3u8|mpd)(?:[?#]|$)/i.test(checkedUrl)) {
+        return {
+          ok: false,
+          json: async () => ({ ok: false, error: "unsupported manifest fixture" }),
+        };
+      }
       if (/bilibili\.com|b23\.tv|bilibili\.tv/i.test(checkedUrl)) {
         return {
           ok: true,
@@ -130,6 +136,22 @@ vm.runInNewContext(backgroundScript, {
           }),
         };
       }
+    }
+    if (String(url).startsWith("https://fcdownloader-extractor.fly.dev/download?") && /bbb_30fps\.mpd/.test(String(url))) {
+      return {
+        ok: false,
+        status: 502,
+        headers: { get: () => "application/json" },
+        text: async () => JSON.stringify({ error: "backend manifest fixture failed" }),
+        json: async () => ({ error: "backend manifest fixture failed" }),
+      };
+    }
+    if (String(url).startsWith("https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd")) {
+      return {
+        ok: true,
+        headers: { get: (name) => name.toLowerCase() === "content-type" ? "application/dash+xml" : "3060" },
+        json: async () => ({ ok: true }),
+      };
     }
     return {
       ok: true,
@@ -383,6 +405,23 @@ function send(msg) {
   assert.strictEqual(outdatedFallback.ok, true, outdatedFallback.error);
   assert.strictEqual(outdatedFallback.route, "direct");
   assert.strictEqual(lastDownload.url, fallbackUrl);
+
+  helperHealth = { ok: true, version: "0.4.1-go" };
+  lastDownload = null;
+  const manifestDownload = await send({
+    type: "fcdl:download",
+    tabId: 1,
+    item: {
+      url: "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd",
+      pageUrl: "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd",
+      kind: "dash",
+      source: "network",
+      title: "DASH manifest",
+    },
+  });
+  assert.strictEqual(manifestDownload.ok, false);
+  assert.match(manifestDownload.error, /stream manifest requires helper\/backend download/);
+  assert.strictEqual(lastDownload, null, "raw DASH manifests must not be saved through chrome.downloads");
 
   console.log("extension background helper tests passed");
 })().catch((error) => {

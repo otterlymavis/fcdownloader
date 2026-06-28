@@ -63,6 +63,14 @@ const lo: DetectedMedia = { ...video, id: 'lo', url: 'https://cdn.example.com/lo
 const resSorted = sortUniversalCandidates([lo, hd, sd]);
 assert.deepEqual(resSorted.map((c) => c.width), [1920, 1280, 640], 'Resolution descending sort');
 
+const largeImageLowerConfidence = { ...image, id: 'large-image', url: 'https://cdn.example.com/large.jpg', confidence: 0.7, width: 2400, height: 1600 };
+const smallImageHigherConfidence = { ...image, id: 'small-image', url: 'https://cdn.example.com/small.jpg', confidence: 0.99, width: 640, height: 480 };
+assert.deepEqual(
+  sortUniversalCandidates([smallImageHigherConfidence, largeImageLowerConfidence]).map((candidate) => candidate.url),
+  [largeImageLowerConfidence.url, smallImageHigherConfidence.url],
+  'Within the same media kind, higher-quality image dimensions sort before confidence',
+);
+
 const hlsMaster = item('https://cdn.example.com/video/master.m3u8', 'video', 0.9, 'hls');
 const hls720 = item('https://cdn.example.com/video/720p/index.m3u8', 'video', 0.7, 'hls');
 const hls360 = item('https://cdn.example.com/video/360p/index.m3u8', 'video', 0.7, 'hls');
@@ -215,6 +223,179 @@ assert.equal(
   'Different gallery paths remain selectable',
 );
 
+const instagramReelPage = 'https://www.instagram.com/reel/C7VgIvhsKgR/';
+const instagramReelMp4 = {
+  ...item('https://scontent.cdninstagram.com/v/t50.2886-16/reel.mp4?token=mp4', 'video', 0.85),
+  pageUrl: instagramReelPage,
+};
+const instagramReelHls = {
+  ...item('https://scontent.cdninstagram.com/v/t50.2886-16/reel.m3u8?token=hls', 'video', 0.85, 'hls'),
+  pageUrl: instagramReelPage,
+};
+const instagramReelPosters = [
+  'https://scontent.cdninstagram.com/v/t51.2885-15/poster-a.jpg?token=a',
+  'https://scontent.cdninstagram.com/v/t51.2885-15/poster-b.webp?token=b',
+].map((url) => ({
+  ...item(url, 'image', 0.99),
+  pageUrl: instagramReelPage,
+}));
+assert.deepEqual(
+  simplifyUniversalPickerCandidates([instagramReelMp4, instagramReelHls, ...instagramReelPosters], instagramReelPage).map((candidate) => candidate.url),
+  [instagramReelHls.url],
+  'Instagram Reels collapse video plus poster candidates to one video',
+);
+assert.equal(
+  decideUniversalResultHandling('universal-browser-probe', [instagramReelMp4, instagramReelHls, ...instagramReelPosters], instagramReelPage).action,
+  'enqueue',
+  'Instagram Reel posters should not force the universal picker open',
+);
+
+const instagramReelOld = {
+  ...item('https://scontent.cdninstagram.com/v/t50.2886-16/reel.mp4?token=old', 'video', 0.7),
+  pageUrl: instagramReelPage,
+};
+const instagramReelNew = {
+  ...item('https://scontent.cdninstagram.com/v/t50.2886-16/reel.mp4?token=new', 'video', 0.9),
+  pageUrl: instagramReelPage,
+};
+assert.deepEqual(
+  simplifyUniversalPickerCandidates([instagramReelOld, instagramReelNew, ...instagramReelPosters], instagramReelPage).map((candidate) => candidate.url),
+  [instagramReelNew.url],
+  'Instagram Reel token refreshes collapse to the best media candidate',
+);
+
+const instagramPostPage = 'https://www.instagram.com/p/C7VgIvhsKgR/';
+const instagramPostVideo = {
+  ...item('https://scontent.cdninstagram.com/v/t50.2886-16/post-video.mp4?token=v', 'video', 0.85),
+  pageUrl: instagramPostPage,
+};
+const instagramPostImage = {
+  ...item('https://scontent.cdninstagram.com/v/t51.2885-15/post-image.jpg?token=i', 'image', 0.99),
+  pageUrl: instagramPostPage,
+};
+assert.equal(
+  simplifyUniversalPickerCandidates([instagramPostVideo, instagramPostImage], instagramPostPage).length,
+  2,
+  'Instagram /p/ post galleries remain selectable',
+);
+assert.equal(
+  decideUniversalResultHandling('universal-browser-probe', [instagramPostVideo, instagramPostImage], instagramPostPage).action,
+  'pick',
+  'Instagram /p/ post galleries still open the picker',
+);
+
+const tiktokVideoPage = 'https://www.tiktok.com/@example/video/7350000000000000000';
+const tiktokVideo = {
+  ...item('https://v16m.tiktokcdn.com/video/tiktok-video.mp4?token=v', 'video', 0.88),
+  pageUrl: tiktokVideoPage,
+};
+const tiktokPoster = {
+  ...item('https://p16-sign.tiktokcdn-us.com/tos-useast5-p/poster.jpeg?token=p', 'image', 0.95),
+  pageUrl: tiktokVideoPage,
+};
+assert.deepEqual(
+  simplifyUniversalPickerCandidates([tiktokPoster, tiktokVideo], tiktokVideoPage).map((candidate) => candidate.url),
+  [tiktokVideo.url],
+  'TikTok video pages collapse poster plus video candidates to one video',
+);
+
+const tiktokPhotoPage = 'https://www.tiktok.com/@example/video/7350000000000000001';
+const tiktokSmallPhoto = {
+  ...item('https://p16-sign.tiktokcdn-us.com/tos-useast5-p/photo-small.jpeg?token=p', 'image', 0.95),
+  pageUrl: tiktokPhotoPage,
+  width: 720,
+  height: 960,
+};
+const tiktokLargePhoto = {
+  ...item('https://p16-sign.tiktokcdn-us.com/tos-useast5-p/photo-large.jpeg?token=p', 'image', 0.8),
+  pageUrl: tiktokPhotoPage,
+  width: 1440,
+  height: 1920,
+};
+assert.deepEqual(
+  simplifyUniversalPickerCandidates([tiktokSmallPhoto, tiktokLargePhoto], tiktokPhotoPage).map((candidate) => candidate.url),
+  [tiktokLargePhoto.url, tiktokSmallPhoto.url],
+  'Single-media pages keep image-only candidates selectable with the best quality first',
+);
+
+const xStatusPage = 'https://x.com/example/status/1800000000000000000';
+const xHls = {
+  ...item('https://video.twimg.com/amplify_video/playlist.m3u8?token=hls', 'video', 0.86, 'hls'),
+  pageUrl: xStatusPage,
+};
+const xThumb = {
+  ...item('https://pbs.twimg.com/media/thumb.jpg?format=jpg&name=small', 'image', 0.9),
+  pageUrl: xStatusPage,
+};
+assert.deepEqual(
+  simplifyUniversalPickerCandidates([xThumb, xHls], xStatusPage).map((candidate) => candidate.url),
+  [xHls.url],
+  'X/Twitter status pages collapse thumbnail plus video candidates to one video',
+);
+
+const youtubeShortPage = 'https://www.youtube.com/shorts/abc123XYZ';
+const youtubeShortVideo = {
+  ...item('https://rr1---sn.example.googlevideo.com/videoplayback?id=abc&mime=video%2Fmp4', 'video', 0.82),
+  pageUrl: youtubeShortPage,
+};
+const youtubeShortPoster = {
+  ...item('https://i.ytimg.com/vi/abc123XYZ/hqdefault.jpg', 'image', 0.99),
+  pageUrl: youtubeShortPage,
+};
+assert.deepEqual(
+  simplifyUniversalPickerCandidates([youtubeShortPoster, youtubeShortVideo], youtubeShortPage).map((candidate) => candidate.url),
+  [youtubeShortVideo.url],
+  'YouTube Shorts collapse thumbnail plus video candidates to one video',
+);
+
+const genericGalleryPage = 'https://example.com/gallery/abc';
+const genericGalleryVideo = {
+  ...item('https://cdn.example.com/gallery/clip.mp4?token=v', 'video', 0.85),
+  pageUrl: genericGalleryPage,
+};
+const genericGalleryImage = {
+  ...item('https://cdn.example.com/gallery/photo.jpg?token=i', 'image', 0.95),
+  pageUrl: genericGalleryPage,
+};
+assert.equal(
+  simplifyUniversalPickerCandidates([genericGalleryVideo, genericGalleryImage], genericGalleryPage).length,
+  2,
+  'Generic gallery pages remain selectable unless the page URL is allowlisted',
+);
+
+const xImageA = {
+  ...item('https://pbs.twimg.com/media/image-a.jpg?format=jpg&name=large', 'image', 0.9),
+  pageUrl: xStatusPage,
+  width: 1200,
+  height: 800,
+};
+const xImageB = {
+  ...item('https://pbs.twimg.com/media/image-b.jpg?format=jpg&name=large', 'image', 0.88),
+  pageUrl: xStatusPage,
+  width: 1600,
+  height: 1000,
+};
+assert.deepEqual(
+  simplifyUniversalPickerCandidates([xImageA, xImageB], xStatusPage).map((candidate) => candidate.url),
+  [xImageB.url, xImageA.url],
+  'X/Twitter image-only posts remain selectable with best quality first',
+);
+
+const facebookWatchPage = 'https://fb.watch/abc123/';
+const facebookVideo = {
+  ...item('https://video-lga3-1.xx.fbcdn.net/v/t42/video.mp4?token=v', 'video', 0.82),
+  pageUrl: facebookWatchPage,
+};
+const facebookPoster = {
+  ...item('https://scontent-lga3-1.xx.fbcdn.net/v/t39/poster.jpg?token=p', 'image', 0.95),
+  pageUrl: facebookWatchPage,
+};
+assert.deepEqual(
+  simplifyUniversalPickerCandidates([facebookPoster, facebookVideo], facebookWatchPage).map((candidate) => candidate.url),
+  [facebookVideo.url],
+  'fb.watch short links collapse supporting posters when a video candidate exists',
+);
+
 const vimeoPage = 'https://player.vimeo.com/video/103195?h=private';
 const vimeoHls = {
   ...item('https://vod-adaptive.vimeocdn.com/video/master.m3u8?token=a', 'video', 0.85, 'hls'),
@@ -269,6 +450,54 @@ assert.equal(
   simplifyUniversalPickerCandidates([threadsOld, threadsNew], threadsPage).length,
   1,
   'Threads extensionless CDN duplicates still collapse',
+);
+
+const threadsRealMedia = {
+  ...item('https://scontent.cdninstagram.com/v/t50.2886-16/clip.mp4?token=real', 'video', 0.92),
+  pageUrl: threadsPage,
+};
+const threadsScriptAssets = Array.from({ length: 35 }, (_, idx) => ({
+  ...item(`https://static.cdninstagram.com/rsrc.php/v4/y${idx}/r/bundle-${idx}.js?_nc_x=abc`, 'video', 0.81),
+  pageUrl: threadsPage,
+  mimeType: 'application/javascript',
+}));
+const threadsStaticFiles = [
+  'https://static.cdninstagram.com/rsrc.php/v4/yD/r/meta-resource?_nc_x=abc',
+  'https://static.cdninstagram.com/rsrc.php/v4/yd/r/styles.css?_nc_x=abc',
+  'https://static.xx.fbcdn.net/rsrc.php/v4/yw/r/runtime.wasm',
+  'https://www.threads.net/ajax/bz?__a=1',
+].map((url) => ({
+  ...item(url, 'video', 0.81),
+  pageUrl: threadsPage,
+}));
+assert.deepEqual(
+  simplifyUniversalPickerCandidates([threadsRealMedia, ...threadsScriptAssets, ...threadsStaticFiles], threadsPage).map((candidate) => candidate.url),
+  [threadsRealMedia.url],
+  'Threads picker removes Meta JS bundles and keeps the real media candidate',
+);
+assert.equal(
+  decideUniversalResultHandling('universal-browser-probe', [threadsRealMedia, ...threadsScriptAssets, ...threadsStaticFiles], threadsPage).action,
+  'enqueue',
+  'Threads JS bundle noise should not force the universal picker open',
+);
+assert.equal(
+  decideUniversalResultHandling('server-extraction', [...threadsScriptAssets, ...threadsStaticFiles], threadsPage).action,
+  'none',
+  'Server/platform Threads results containing only static files are ignored',
+);
+
+const threadsImageA = {
+  ...item('https://scontent.cdninstagram.com/v/t51.2885-15/photo-a.jpg?token=a', 'image', 0.85),
+  pageUrl: threadsPage,
+};
+const threadsImageB = {
+  ...item('https://scontent.cdninstagram.com/v/t51.2885-15/photo-b.jpg?token=b', 'image', 0.84),
+  pageUrl: threadsPage,
+};
+assert.equal(
+  simplifyUniversalPickerCandidates([threadsImageA, threadsImageB, ...threadsStaticFiles], threadsPage).length,
+  2,
+  'Threads image carousels remain selectable while static files are removed',
 );
 
 console.log('universal result picker ok');

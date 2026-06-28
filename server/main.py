@@ -222,7 +222,8 @@ def _cache_put(key: str, val: dict[str, Any]) -> None:
 
 # ── Response shaping ──────────────────────────────────────────────────────────
 
-_IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "heic"}
+_IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "avif", "heic"}
+_AUDIO_EXTS = {"mp3", "m4a", "aac", "wav", "ogg", "opus", "flac"}
 _UNIVERSAL_PAGE_FETCH_TIMEOUT = 8
 
 
@@ -255,7 +256,13 @@ def _mime_for(f: dict[str, Any]) -> str | None:
         return None
     return {
         "mpd": "application/dash+xml",
+        "mp3": "audio/mpeg",
         "m4a": "audio/mp4",
+        "aac": "audio/aac",
+        "wav": "audio/wav",
+        "ogg": "audio/ogg",
+        "opus": "audio/opus",
+        "flac": "audio/flac",
         "mp4": "video/mp4",
         "webm": "video/webm",
         "mkv": "video/x-matroska",
@@ -267,6 +274,27 @@ def _mime_for(f: dict[str, Any]) -> str | None:
         "avif": "image/avif",
         "heic": "image/heic",
     }.get(ext, f"video/{ext}")
+
+
+def _gallery_entry_is_probably_webpage(entry: dict[str, Any], url: str, ext: str) -> bool:
+    if ext:
+        return False
+    protocol = safe_text(entry.get("protocol")).lower()
+    if protocol and protocol not in {"https", "http"}:
+        return False
+    mime_type = safe_text(entry.get("mimeType") or entry.get("mime_type") or entry.get("mimetype")).lower()
+    if re.match(r"^(?:video|audio|image)/", mime_type):
+        return False
+    if any(entry.get(key) for key in ("format_id", "vcodec", "acodec", "duration", "width", "height")):
+        return False
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return False
+    host = (parsed.hostname or "").lower()
+    if re.search(r"(?:cdn|media|video|vod|stream|akamai|cloudfront|fbcdn|twimg|smartmediarep)", host):
+        return False
+    return True
 
 
 def _format_options(info: dict[str, Any]) -> list[dict[str, Any]]:
@@ -460,6 +488,22 @@ def _to_response(info: dict[str, Any]) -> dict[str, Any]:
             "thumbnail": info.get("thumbnail"),
         }
 
+    if ext in _AUDIO_EXTS:
+        return {
+            "kind":      "audio",
+            "url":       url,
+            "headers":   _headers_for(info),
+            "label":     _label_for(info),
+            "width":     info.get("width"),
+            "height":    info.get("height"),
+            "mimeType":  _mime_for({**info, "ext": ext}),
+            "expire":    expire_of(url),
+            "extractor": info.get("extractor"),
+            "formatId":  info.get("format_id"),
+            "formats":   _format_options(info),
+            "thumbnail": info.get("thumbnail"),
+        }
+
     if ext == "mpd" or safe_text(info.get("protocol")).lower() == "http_dash_segments":
         return {
             "kind":      "dash",
@@ -558,16 +602,39 @@ def _to_gallery_response(info: dict[str, Any]) -> dict[str, Any]:
             continue
 
         ext = (entry.get("ext") or guess_ext_from_url(url) or "").lower()
+        if _gallery_entry_is_probably_webpage(entry, url, ext):
+            continue
         is_image = ext in _IMAGE_EXTS
+        is_audio = ext in _AUDIO_EXTS
+        if is_image:
+            kind = "image"
+            shaped_ext = ext or "jpg"
+            mime_type = _mime_for({**entry, "ext": shaped_ext})
+        elif is_audio:
+            kind = "audio"
+            shaped_ext = ext or "m4a"
+            mime_type = _mime_for({**entry, "ext": shaped_ext})
+        elif ext == "mpd" or safe_text(entry.get("protocol")).lower() == "http_dash_segments":
+            kind = "dash"
+            shaped_ext = ext or "mpd"
+            mime_type = "application/dash+xml"
+        elif looks_like_hls(url, entry.get("protocol")):
+            kind = "hls"
+            shaped_ext = ext or "m3u8"
+            mime_type = _mime_for(entry)
+        else:
+            kind = "direct"
+            shaped_ext = ext or "mp4"
+            mime_type = _mime_for(entry)
         items.append(_without_thumbnail_fields({
-            "kind":      "image" if is_image else ("dash" if ext == "mpd" or safe_text(entry.get("protocol")).lower() == "http_dash_segments" else ("hls" if looks_like_hls(url, entry.get("protocol")) else "direct")),
+            "kind":      kind,
             "url":       url,
             "headers":   _headers_for(entry),
             "label":     _label_for(entry),
             "width":     entry.get("width"),
             "height":    entry.get("height"),
-            "ext":       ext or ("mp4" if not is_image else "jpg"),
-            "mimeType":  _mime_for({**entry, "ext": ext or "jpg"}) if is_image else ("application/dash+xml" if ext == "mpd" else _mime_for(entry)),
+            "ext":       shaped_ext,
+            "mimeType":  mime_type,
             "title":     entry.get("title"),
             "duration":  entry.get("duration"),
             "extractor": entry.get("extractor"),
@@ -820,6 +887,94 @@ def _fetch_universal_page_html(req: ExtractRequest) -> str | None:
     return text if text and universal.is_htmlish_content_type(ct) else None
 
 
+def _is_single_media_page_url(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return bool(re.search(
+            r"instagram\.com/(?:reel|reels|tv)/"
+            r"|tiktok\.com/[^?#]*/video/\d+"
+            r"|(?:youtube\.com/watch\?|youtube\.com/shorts/|youtu\.be/)"
+            r"|(?:x|twitter)\.com/[^?#]+/status(?:es)?/\d+"
+            r"|reddit\.com/[^?#]*/comments/[A-Za-z0-9_]+"
+            r"|redd\.it/[A-Za-z0-9_]+"
+            r"|(?:facebook\.com/(?:reel|watch|videos)/|facebook\.com/[^?#]+/videos/|fb\.watch/)",
+            url,
+            re.I,
+        ))
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+    if host in {"instagram.com", "www.instagram.com"}:
+        return bool(re.match(r"^/(?:reel|reels|tv)/", path, re.I))
+    if host == "tiktok.com" or host.endswith(".tiktok.com"):
+        return bool(re.search(r"/video/\d+", path, re.I))
+    if host in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com"}:
+        return path == "/watch" or bool(re.match(r"^/shorts/[^/]+", path, re.I))
+    if host in {"youtu.be", "www.youtu.be"}:
+        return bool(re.match(r"^/[^/]+", path, re.I))
+    if host in {"x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"}:
+        return bool(re.search(r"/status(?:es)?/\d+", path, re.I))
+    if host == "reddit.com" or host.endswith(".reddit.com"):
+        return bool(re.search(r"/comments/[A-Za-z0-9_]+", path, re.I))
+    if host in {"redd.it", "www.redd.it"}:
+        return bool(re.match(r"^/[A-Za-z0-9_]+", path, re.I))
+    if host in {"facebook.com", "www.facebook.com", "m.facebook.com"}:
+        return bool(re.match(r"^/(?:reel|watch|videos)/", path, re.I) or re.search(r"/videos/\d+", path, re.I))
+    if host in {"fb.watch", "www.fb.watch"}:
+        return bool(re.match(r"^/[A-Za-z0-9_-]+", path, re.I))
+    return False
+
+
+def _safe_score_int(value: Any) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _media_hint_entry_media_score(entry: dict[str, Any]) -> tuple[int, int, int, int, float]:
+    url = safe_text(entry.get("url"))
+    ext = (safe_text(entry.get("ext")) or guess_ext_from_url(url)).lower()
+    protocol = safe_text(entry.get("protocol")).lower()
+    mime_type = safe_text(entry.get("mimeType") or entry.get("mime_type") or entry.get("mimetype")).lower()
+    is_hls = looks_like_hls(url, protocol)
+    is_dash = ext == "mpd" or protocol == "http_dash_segments"
+    is_video = is_hls or is_dash or ext in {"mp4", "m4v", "webm", "mov", "avi", "mkv", "flv", "mpg", "mpeg", "3gp"} or mime_type.startswith("video/")
+    is_audio = ext in _AUDIO_EXTS or mime_type.startswith("audio/")
+    is_image = ext in _IMAGE_EXTS or mime_type.startswith("image/")
+    if is_video:
+        kind_score = 3
+    elif is_audio:
+        kind_score = 2
+    elif is_image:
+        kind_score = 1
+    else:
+        return (0, 0, 0, 0, 0.0)
+    confidence_raw = entry.get("confidence")
+    try:
+        confidence = float(confidence_raw) if confidence_raw is not None else 0.0
+    except (TypeError, ValueError):
+        confidence = 0.0
+    width = _safe_score_int(entry.get("width"))
+    height = _safe_score_int(entry.get("height"))
+    return (
+        kind_score,
+        2 if is_hls or is_dash else 1,
+        width * height,
+        _safe_score_int(entry.get("bitrate")),
+        confidence,
+    )
+
+
+def _collapse_single_media_page_hint_entries(page_url: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not _is_single_media_page_url(page_url):
+        return entries
+    best = max(entries, key=_media_hint_entry_media_score, default=None)
+    if not best or _media_hint_entry_media_score(best)[0] != 3:
+        return entries
+    return [best]
+
+
 def _info_from_media_hints(page_url: str, hints: list[dict[str, Any]] | None) -> dict[str, Any] | None:
     entries: list[dict[str, Any]] = []
     audit: list[dict[str, Any]] = []
@@ -857,12 +1012,19 @@ def _info_from_media_hints(page_url: str, hints: list[dict[str, Any]] | None) ->
             "protocol": protocol,
             "http_headers": headers,
             "extractor": "browser-captured",
+            "mimeType": mime_type,
+            "confidence": raw.get("confidence"),
+            "width": raw.get("width"),
+            "height": raw.get("height"),
+            "bitrate": raw.get("bitrate"),
         })
         audit.append({"strategy": "browser-capture", "source": "mediaHints", "url": url, "selected": True, "kind": kind})
         if len(entries) >= 20:
             break
     if not entries:
         return None
+    entries.sort(key=_media_hint_entry_media_score, reverse=True)
+    entries = _collapse_single_media_page_hint_entries(page_url, entries)
     if len(entries) == 1:
         entries[0]["_source_audit"] = audit
         return entries[0]

@@ -201,6 +201,21 @@ func TestMediaFileCandidatesRejectJSONDisguisedAsMP4(t *testing.T) {
 	}
 }
 
+func TestMediaContentTypeMatchesDownloadedFile(t *testing.T) {
+	cases := map[string]string{
+		"clip.mp4":    "video/mp4",
+		"movie.webm":  "video/webm",
+		"voice.ogg":   "audio/ogg",
+		"track.m4a":   "audio/aac",
+		"archive.bin": "application/octet-stream",
+	}
+	for name, want := range cases {
+		if got := mediaContentType(name); got != want {
+			t.Fatalf("mediaContentType(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestCookieFileFromHeaderMirrorsBilibiliDomains(t *testing.T) {
 	path, cleanup, err := cookieFileFromHeader("SESSDATA=abc; bili_jct=def", "https://www.bilibili.com/video/BV1xx411c7mD/")
 	if err != nil {

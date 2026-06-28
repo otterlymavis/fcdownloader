@@ -111,4 +111,4 @@ jobs:
             find desktop-companion/dist-nobrowser-go-ver -maxdepth 1 -name '*.exe' -print0 \
               | xargs -0 -r -I{} gh release upload "$tag" "{}" --clobber
           fi
-          gh release upload "$tag" desktop-companion/build/companion-artifacts.json desktop-companion/build/companion-artifacts.sha256 --clobber
+          gh release upload "$tag" desktop-companion/build/companion-artifacts.sha256 --clobber
