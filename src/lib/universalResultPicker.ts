@@ -204,15 +204,23 @@ function isPrimaryMediaCandidate(item: DetectedMedia): boolean {
   return getMediaKind(item) !== 'subtitle';
 }
 
-function isVideoCandidate(item: DetectedMedia): boolean {
+function isVideoLikeCandidate(item: DetectedMedia): boolean {
   return getMediaKind(item) === 'video' || item.mediaType === 'hls' || item.mediaType === 'dash';
+}
+
+function primaryMediaCollapseKind(item: DetectedMedia): 'video' | 'audio' | undefined {
+  if (isVideoLikeCandidate(item)) return 'video';
+  if (getMediaKind(item) === 'audio') return 'audio';
+  return undefined;
 }
 
 function collapseSingleMediaPageCandidates(items: DetectedMedia[], pageUrl?: string): DetectedMedia[] {
   if (!items.some((item) => isSingleMediaPageContext(item, pageUrl))) return items;
-  const videoItems = items.filter(isVideoCandidate);
-  if (videoItems.length === 0) return items;
-  return sortUniversalCandidates(videoItems).slice(0, 1);
+  const bestPrimaryKind = sortUniversalCandidates(items)
+    .map(primaryMediaCollapseKind)
+    .find((kind): kind is 'video' | 'audio' => !!kind);
+  if (!bestPrimaryKind) return items;
+  return sortUniversalCandidates(items.filter((item) => primaryMediaCollapseKind(item) === bestPrimaryKind)).slice(0, 1);
 }
 
 export function sortUniversalCandidates(items: DetectedMedia[]): DetectedMedia[] {

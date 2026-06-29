@@ -970,9 +970,11 @@ def _collapse_single_media_page_hint_entries(page_url: str, entries: list[dict[s
     if not _is_single_media_page_url(page_url):
         return entries
     best = max(entries, key=_media_hint_entry_media_score, default=None)
-    if not best or _media_hint_entry_media_score(best)[0] != 3:
+    best_kind_score = _media_hint_entry_media_score(best)[0] if best else 0
+    if best_kind_score < 2:
         return entries
-    return [best]
+    same_primary_kind = [entry for entry in entries if _media_hint_entry_media_score(entry)[0] == best_kind_score]
+    return [max(same_primary_kind, key=_media_hint_entry_media_score)]
 
 
 def _info_from_media_hints(page_url: str, hints: list[dict[str, Any]] | None) -> dict[str, Any] | None:

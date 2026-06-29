@@ -328,7 +328,7 @@ export function getMediaGroupKey(item: DetectedMedia, contextPageUrl?: string): 
   try {
     if (YT_CDN_RE.test(url)) {
       const id = new URL(url).searchParams.get('id');
-      return id ? `yt_${id}` : null;
+      return id ? `yt_${id}_${getMediaKind(item)}` : null;
     }
     const ytManifest = url.match(/manifest\.googlevideo\.com\/api\/manifest\/[^/]+\/.*?\/id\/([^/.]+)/);
     if (ytManifest) return `ytm_${ytManifest[1]}`;
@@ -426,7 +426,7 @@ function getQualityScore(url: string): number {
     try {
       const params = new URL(url).searchParams;
       const itag = parseInt(params.get('itag') ?? '0', 10);
-      if ((params.get('mime') ?? '').startsWith('audio/')) return -1;
+      if ((params.get('mime') ?? '').startsWith('audio/')) return 1;
       return YT_ITAG_RANK[itag] ?? 1;
     } catch {
       return 1;

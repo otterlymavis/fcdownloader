@@ -225,7 +225,7 @@ def test_media_hints_collapse_other_single_media_pages() -> None:
         assert info["url"] == video_url
 
 
-def test_media_hints_collapse_audio_only_single_media_page() -> None:
+def test_media_hints_collapse_audio_single_media_page_over_thumbnail() -> None:
     info = main._info_from_media_hints(
         "https://www.youtube.com/watch?v=abc123XYZ",
         [
@@ -248,11 +248,8 @@ def test_media_hints_collapse_audio_only_single_media_page() -> None:
     )
 
     assert info is not None
-    assert info["_type"] == "playlist"
-    assert [entry["url"] for entry in info["entries"]] == [
-        "https://rr1---sn.example.googlevideo.com/videoplayback/audio.m4a?id=abc",
-        "https://i.ytimg.com/vi/abc123XYZ/hqdefault.jpg",
-    ]
+    assert info.get("_type") != "playlist"
+    assert info["url"] == "https://rr1---sn.example.googlevideo.com/videoplayback/audio.m4a?id=abc"
 
 
 def test_media_hints_tolerate_stringy_quality_fields() -> None:

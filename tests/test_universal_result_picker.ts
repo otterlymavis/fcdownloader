@@ -348,6 +348,41 @@ assert.deepEqual(
   'YouTube Shorts collapse thumbnail plus video candidates to one video',
 );
 
+const youtubeAudioOnly = {
+  ...item('https://rr1---sn.example.googlevideo.com/videoplayback?id=abc&mime=audio%2Fmp4', 'audio', 0.82),
+  pageUrl: youtubeShortPage,
+  bitrate: 192000,
+};
+assert.deepEqual(
+  simplifyUniversalPickerCandidates([youtubeShortPoster, youtubeAudioOnly], youtubeShortPage).map((candidate) => candidate.url),
+  [youtubeAudioOnly.url],
+  'Single-media pages collapse thumbnail plus audio candidates to one audio item',
+);
+assert.equal(
+  decideUniversalResultHandling('universal-browser-probe', [youtubeShortPoster, youtubeAudioOnly], youtubeShortPage).action,
+  'enqueue',
+  'Single-media audio captures should not force the universal picker open because of thumbnails',
+);
+
+const youtubeVideoSameId = {
+  ...item('https://rr1---sn.example.googlevideo.com/videoplayback?id=same&mime=video%2Fmp4', 'video', 0.5),
+  pageUrl: youtubeShortPage,
+};
+const youtubeAudioSameIdHigherConfidence = {
+  ...item('https://rr1---sn.example.googlevideo.com/videoplayback?id=same&mime=audio%2Fmp4', 'audio', 0.99),
+  pageUrl: youtubeShortPage,
+};
+assert.deepEqual(
+  sortUniversalCandidates([youtubeVideoSameId, youtubeAudioSameIdHigherConfidence]).map((candidate) => candidate.url),
+  [youtubeVideoSameId.url, youtubeAudioSameIdHigherConfidence.url],
+  'YouTube audio-only candidates should not dedupe away video candidates with the same CDN id',
+);
+assert.deepEqual(
+  simplifyUniversalPickerCandidates([youtubeAudioSameIdHigherConfidence, youtubeVideoSameId], youtubeShortPage).map((candidate) => candidate.url),
+  [youtubeVideoSameId.url],
+  'Single-media YouTube pages prefer video over audio when both are captured for the same CDN id',
+);
+
 const genericGalleryPage = 'https://example.com/gallery/abc';
 const genericGalleryVideo = {
   ...item('https://cdn.example.com/gallery/clip.mp4?token=v', 'video', 0.85),
