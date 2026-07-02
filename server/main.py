@@ -1255,6 +1255,35 @@ def _ffmpeg_stream(
             + (f" stderr={stderr_tail!r}" if stderr_tail else ""),
             flush=True,
         )
+        if bytes_sent == 0 and disconnect_reason is None:
+            detail = f"ffmpeg produced no media output (rc={proc.returncode})"
+            if stderr_tail:
+                detail = f"{detail}: {stderr_tail}"
+            raise RuntimeError(detail)
+
+
+def _validated_streaming_response(
+    chunks: Iterator[bytes],
+    *,
+    media_type: str,
+    headers: dict[str, str],
+    empty_detail: str,
+) -> StreamingResponse:
+    """Read the first chunk before sending HTTP 200 for generator-backed media."""
+    try:
+        first = next(chunks)
+    except StopIteration:
+        raise HTTPException(502, empty_detail)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"{empty_detail}: {str(exc)[:200]}")
+
+    def stream() -> Iterator[bytes]:
+        yield first
+        yield from chunks
+
+    return StreamingResponse(stream(), media_type=media_type, headers=headers)
 
 
 def _youtube_video_id(page_url: str) -> str | None:
@@ -2193,10 +2222,11 @@ def download(
             request_headers["Cookie"] = safe_text(cookies)
         rid = uuid.uuid4().hex[:12]
         if direct_kind == "hls":
-            return StreamingResponse(
+            return _validated_streaming_response(
                 _ffmpeg_stream("", None, url, request_headers, request_id=rid),
                 media_type="video/mp4",
                 headers=out_headers,
+                empty_detail="ffmpeg produced no media output",
             )
         return _direct_media_stream(url, request_headers, out_headers)
 
@@ -2218,18 +2248,20 @@ def download(
     rid = uuid.uuid4().hex[:12]
     kind = response["kind"]
     if kind == "paired":
-        return StreamingResponse(
+        return _validated_streaming_response(
             _ffmpeg_stream(response["videoUrl"], response["audioUrl"], None, request_headers, request_id=rid),
             media_type="video/mp4", headers=headers,
+            empty_detail="ffmpeg produced no media output",
         )
     if kind == "hls":
         hls_headers = {
             **(info.get("http_headers") or {}),
             **_download_headers(referer, cookies, page_url=url),
         }
-        return StreamingResponse(
+        return _validated_streaming_response(
             _ffmpeg_stream("", None, response["url"], hls_headers, request_id=rid),
             media_type="video/mp4", headers=headers,
+            empty_detail="ffmpeg produced no media output",
         )
     # ytdl-stream short-circuit: extraction resolved to our own /ytdl-stream proxy
     # (YouTube SABR — yt-dlp skip_download returned HLS, so the HLS guard triggered
@@ -2271,10 +2303,11 @@ def download_post(request: Request, req: DownloadRequest) -> StreamingResponse:
             request_headers["Cookie"] = safe_text(req.cookies)
         rid = uuid.uuid4().hex[:12]
         if direct_kind == "hls":
-            return StreamingResponse(
+            return _validated_streaming_response(
                 _ffmpeg_stream("", None, req.pageUrl, request_headers, request_id=rid),
                 media_type="video/mp4",
                 headers=headers,
+                empty_detail="ffmpeg produced no media output",
             )
         return _buffered_direct_media_stream(req.pageUrl, request_headers, headers)
 
@@ -2300,18 +2333,20 @@ def download_post(request: Request, req: DownloadRequest) -> StreamingResponse:
     rid = uuid.uuid4().hex[:12]
     kind = response["kind"]
     if kind == "paired":
-        return StreamingResponse(
+        return _validated_streaming_response(
             _ffmpeg_stream(response["videoUrl"], response["audioUrl"], None, request_headers, request_id=rid),
             media_type="video/mp4", headers=headers,
+            empty_detail="ffmpeg produced no media output",
         )
     if kind == "hls":
         hls_headers = {
             **(info.get("http_headers") or {}),
             **_download_headers(req.referer, req.cookies, page_url=req.pageUrl),
         }
-        return StreamingResponse(
+        return _validated_streaming_response(
             _ffmpeg_stream("", None, response["url"], hls_headers, request_id=rid),
             media_type="video/mp4", headers=headers,
+            empty_detail="ffmpeg produced no media output",
         )
     # ytdl-stream short-circuit: same as GET /download — call supervisor directly
     # so the user's cookies reach yt-dlp (Cookie header ≠ X-FCDL-Cookies).
@@ -2448,7 +2483,7 @@ def youtube_hd_stream_endpoint(
         f"[youtube-hd] rid={rid} video_itag={video.get('itag')} "
         f"height={video.get('height')} audio_itag={audio.get('itag')}"
     )
-    return StreamingResponse(
+    return _validated_streaming_response(
         _ffmpeg_stream(
             video["url"],
             audio["url"],
@@ -2458,6 +2493,7 @@ def youtube_hd_stream_endpoint(
         ),
         media_type="video/mp4",
         headers=headers,
+        empty_detail="ffmpeg produced no media output",
     )
 
 
@@ -2524,7 +2560,7 @@ def youtube_mux_stream_endpoint(
     safe_id = safe_text(video_id or cache_key(video_url))[:80]
     filename = _safe_filename(title or "YouTube HD", safe_id)
     print(f"[youtube-mux] rid={rid} browser-provided googlevideo URLs")
-    return StreamingResponse(
+    return _validated_streaming_response(
         _ffmpeg_stream(video_url, audio_url, None, None, request_id=rid),
         media_type="video/mp4",
         headers={
@@ -2532,6 +2568,7 @@ def youtube_mux_stream_endpoint(
             "Cache-Control": "no-cache, no-store",
             "X-Request-ID": rid,
         },
+        empty_detail="ffmpeg produced no media output",
     )
 
 

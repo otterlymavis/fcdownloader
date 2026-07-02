@@ -597,8 +597,9 @@ class TestFfmpegStream:
 
     @pytest.fixture(autouse=True)
     def _import_ffmpeg_stream(self):
-        from main import _ffmpeg_stream
+        from main import _ffmpeg_stream, _validated_streaming_response
         self._ffmpeg_stream = _ffmpeg_stream
+        self._validated_streaming_response = _validated_streaming_response
 
     def _make_ffmpeg_proc(
         self,
@@ -710,6 +711,43 @@ class TestFfmpegStream:
         list(self._ffmpeg_stream("", None, "http://hls.example.com/master.m3u8"))
         assert captured
         assert captured[0].get("preexec_fn") is os.setsid
+
+    def test_zero_byte_ffmpeg_exit_raises_with_stderr(self, monkeypatch):
+        mock_proc = self._make_ffmpeg_proc(
+            output=b"",
+            stderr_lines=[b"Server returned 403 Forbidden"],
+            returncode=8,
+        )
+        monkeypatch.setattr("main.subprocess.Popen", lambda *a, **kw: mock_proc)
+
+        with pytest.raises(RuntimeError) as exc:
+            list(self._ffmpeg_stream("", None, "http://hls.example.com/master.m3u8"))
+
+        assert "rc=8" in str(exc.value)
+        assert "403 Forbidden" in str(exc.value)
+
+    def test_validated_response_rejects_empty_ffmpeg_output(self):
+        with pytest.raises(HTTPException) as exc:
+            self._validated_streaming_response(
+                iter(()),
+                media_type="video/mp4",
+                headers={},
+                empty_detail="ffmpeg produced no media output",
+            )
+
+        assert exc.value.status_code == 502
+        assert "no media output" in exc.value.detail
+
+    def test_validated_response_accepts_first_ffmpeg_chunk(self):
+        response = self._validated_streaming_response(
+            iter((b"first", b"second")),
+            media_type="video/mp4",
+            headers={"X-Test": "ok"},
+            empty_detail="ffmpeg produced no media output",
+        )
+
+        assert response.media_type == "video/mp4"
+        assert response.headers["x-test"] == "ok"
 
 
 # ── TestLargeAndLongDownloads ─────────────────────────────────────────────────
