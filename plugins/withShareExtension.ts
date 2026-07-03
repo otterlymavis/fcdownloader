@@ -223,11 +223,23 @@ class ShareViewController: UIViewController {
 
     @discardableResult
     private func openViaResponderChain(_ url: URL) -> Bool {
-        let selector = NSSelectorFromString("openURL:")
+        let modernSelector = NSSelectorFromString("openURL:options:completionHandler:")
         var responder: UIResponder? = self
         while let current = responder {
-            if current.responds(to: selector) {
-                current.perform(selector, with: url)
+            if current.responds(to: modernSelector), let method = current.method(for: modernSelector) {
+                typealias OpenUrlHandler = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, AnyObject?) -> Void
+                let function = unsafeBitCast(method, to: OpenUrlHandler.self)
+                function(current, modernSelector, url as NSURL, NSDictionary(), nil)
+                return true
+            }
+            responder = current.next
+        }
+
+        let legacySelector = NSSelectorFromString("openURL:")
+        responder = self
+        while let current = responder {
+            if current.responds(to: legacySelector) {
+                current.perform(legacySelector, with: url)
                 return true
             }
             responder = current.next
