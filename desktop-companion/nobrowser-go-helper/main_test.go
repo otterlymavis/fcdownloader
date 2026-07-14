@@ -227,21 +227,17 @@ func TestDirectMediaURL(t *testing.T) {
 	}
 }
 
-func TestHandleFormatsShortCircuitsDirectMedia(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/formats?url="+url.QueryEscape("https://example.com/video.mp4"), nil)
-	res := httptest.NewRecorder()
-
-	handleFormats(res, req)
-
-	if res.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
-	}
+func TestDirectMediaJSON(t *testing.T) {
 	var payload struct {
 		OK        bool         `json:"ok"`
 		Extractor string       `json:"extractor"`
 		Formats   []formatInfo `json:"formats"`
 	}
-	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+	body, err := json.Marshal(directMediaJSON("https://example.com/video.mp4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatal(err)
 	}
 	if !payload.OK || payload.Extractor != "DirectMedia" || len(payload.Formats) != 1 {
@@ -249,6 +245,35 @@ func TestHandleFormatsShortCircuitsDirectMedia(t *testing.T) {
 	}
 	if payload.Formats[0].FormatID != "direct" || payload.Formats[0].Ext != "mp4" {
 		t.Fatalf("unexpected direct media format: %+v", payload.Formats[0])
+	}
+}
+
+func TestValidateDirectMediaURLRejectsHTMLDisguisedAsMP4(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("<html>not media</html>"))
+	}))
+	defer upstream.Close()
+
+	err := validateDirectMediaURL(context.Background(), upstream.URL+"/fake.mp4")
+	if err == nil {
+		t.Fatal("expected direct media validation to reject HTML masquerading as media")
+	}
+	if !strings.Contains(err.Error(), "JSON/page response") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateDirectMediaURLAcceptsMP4Prefix(t *testing.T) {
+	body := append([]byte{0, 0, 0, 24}, []byte("ftypmp42media")...)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write(body)
+	}))
+	defer upstream.Close()
+
+	if err := validateDirectMediaURL(context.Background(), upstream.URL+"/clip.mp4"); err != nil {
+		t.Fatal(err)
 	}
 }
 

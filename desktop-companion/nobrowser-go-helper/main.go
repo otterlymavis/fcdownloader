@@ -264,6 +264,10 @@ func handleFormats(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 	if directMediaURL(rawURL) {
+		if err := validateDirectMediaURL(ctx, rawURL); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusOK, directMediaJSON(rawURL))
 		return
 	}
@@ -430,19 +434,7 @@ func streamDirectMedia(ctx context.Context, w http.ResponseWriter, rawURL string
 	if err != nil {
 		return err
 	}
-	client := &http.Client{
-		Timeout: time.Hour,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return errors.New("stopped after too many redirects")
-			}
-			if !allowedURL(req.URL.String()) {
-				return errors.New("redirected to a disallowed URL")
-			}
-			return nil
-		},
-	}
-	resp, err := client.Do(req)
+	resp, err := directMediaHTTPClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -450,12 +442,10 @@ func streamDirectMedia(ctx context.Context, w http.ResponseWriter, rawURL string
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("direct media request failed: %s", resp.Status)
 	}
-	prefix := make([]byte, 512)
-	n, readErr := io.ReadFull(resp.Body, prefix)
-	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) && !errors.Is(readErr, io.EOF) {
-		return readErr
+	prefix, err := readMediaPrefix(resp.Body)
+	if err != nil {
+		return err
 	}
-	prefix = prefix[:n]
 	if err := validateMediaPrefix(prefix); err != nil {
 		return err
 	}
@@ -480,6 +470,50 @@ func streamDirectMedia(ctx context.Context, w http.ResponseWriter, rawURL string
 	}
 	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 100, Status: "complete"})
 	return nil
+}
+
+func validateDirectMediaURL(ctx context.Context, rawURL string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := directMediaHTTPClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("direct media request failed: %s", resp.Status)
+	}
+	prefix, err := readMediaPrefix(resp.Body)
+	if err != nil {
+		return err
+	}
+	return validateMediaPrefix(prefix)
+}
+
+func directMediaHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: time.Hour,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after too many redirects")
+			}
+			if !allowedURL(req.URL.String()) {
+				return errors.New("redirected to a disallowed URL")
+			}
+			return nil
+		},
+	}
+}
+
+func readMediaPrefix(reader io.Reader) ([]byte, error) {
+	prefix := make([]byte, 512)
+	n, err := io.ReadFull(reader, prefix)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return prefix[:n], nil
 }
 
 func runYtDlpJSON(ctx context.Context, rawURL, cookies string) (map[string]interface{}, error) {
