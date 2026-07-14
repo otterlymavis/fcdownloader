@@ -558,7 +558,7 @@ Section "Install"
   WriteUninstaller "$INSTDIR\\Uninstall.exe"
 SectionEnd
 
-Section "Run Companion on login" SecRunAtLogin
+Section /o "Run Companion on login" SecRunAtLogin
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "FCDownloaderCompanion" '"$INSTDIR\\FCDownloaderCompanionTray.exe"'
 SectionEnd
 
