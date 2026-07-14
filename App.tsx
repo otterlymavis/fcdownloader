@@ -407,7 +407,12 @@ export default function App() {
   const handledSharedUrlsRef = useRef<Map<string, number>>(new Map());
   const queuedExtractionUrlsRef = useRef(new Set<string>());
   const extractionRunnerActiveRef = useRef(false);
+  const extractingRef = useRef(extracting);
   const handleIncomingUrlRef = useRef<(raw: string) => void>(() => {});
+
+  useEffect(() => {
+    extractingRef.current = extracting;
+  }, [extracting]);
 
   const runExtractionAndDownload = useCallback(async (url: string, browserFallbackUrl?: string) => {
     let targetUrl = url.trim();
@@ -538,14 +543,28 @@ export default function App() {
   }, [extracting, extractionQueue, extractionRunnerTick, runExtractionAndDownload]);
 
   // ── Start download and extraction ───────────────────────
-  const startDownloadAndExtraction = useCallback((url: string, browserFallbackUrl?: string) => {
+  const startDownloadAndExtraction = useCallback((
+    url: string,
+    browserFallbackUrl?: string,
+    options: { immediate?: boolean } = {},
+  ) => {
     const targetUrl = url.trim();
     if (!targetUrl) return;
     const dedupeKey = extractionDedupeKey(targetUrl);
     if (queuedExtractionUrlsRef.current.has(dedupeKey)) return;
     queuedExtractionUrlsRef.current.add(dedupeKey);
+    if (options.immediate && !extractingRef.current && !extractionRunnerActiveRef.current) {
+      extractionRunnerActiveRef.current = true;
+      void runExtractionAndDownload(targetUrl, browserFallbackUrl).finally(() => {
+        queuedExtractionUrlsRef.current.delete(dedupeKey);
+        extractionRunnerActiveRef.current = false;
+        setExtracting(false);
+        setExtractionRunnerTick((tick) => tick + 1);
+      });
+      return;
+    }
     setExtractionQueue((prev) => [...prev, { url: targetUrl, browserFallbackUrl }]);
-  }, []);
+  }, [runExtractionAndDownload]);
 
   const handleSharedMediaUrl = useCallback((url: string) => {
     const mediaUrl = extractFirstUrl(url).trim();
@@ -566,9 +585,9 @@ export default function App() {
     }
     handledSharedUrlsRef.current.set(dedupeKey, now);
     setPasteUrl(mediaUrl);
-    setTab('home');
+    setTab(IS_IOS ? 'library' : 'home');
     showToast(translate('linkReceived', resolvedLangRef.current), 'success');
-    startDownloadAndExtraction(mediaUrl, mediaUrl);
+    startDownloadAndExtraction(mediaUrl, mediaUrl, { immediate: IS_IOS });
   }, [showToast, startDownloadAndExtraction, setPasteUrl, setTab]);
 
   const handleIncomingUrl = useCallback((raw: string) => {
