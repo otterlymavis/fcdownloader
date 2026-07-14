@@ -450,6 +450,15 @@ func streamDirectMedia(ctx context.Context, w http.ResponseWriter, rawURL string
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("direct media request failed: %s", resp.Status)
 	}
+	prefix := make([]byte, 512)
+	n, readErr := io.ReadFull(resp.Body, prefix)
+	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) && !errors.Is(readErr, io.EOF) {
+		return readErr
+	}
+	prefix = prefix[:n]
+	if err := validateMediaPrefix(prefix); err != nil {
+		return err
+	}
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = mediaContentType(resp.Request.URL.Path)
@@ -461,6 +470,11 @@ func streamDirectMedia(ctx context.Context, w http.ResponseWriter, rawURL string
 		w.Header().Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
 	}
 	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 50, Status: "serving"})
+	if len(prefix) > 0 {
+		if _, err := w.Write(prefix); err != nil {
+			return err
+		}
+	}
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		return err
 	}
@@ -802,7 +816,14 @@ func validateMediaOutputFile(path string) error {
 	if err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
-	sample := strings.ToLower(strings.TrimSpace(string(prefix[:n])))
+	return validateMediaPrefix(prefix[:n])
+}
+
+func validateMediaPrefix(prefix []byte) error {
+	if len(prefix) == 0 {
+		return errors.New("downloader produced an empty media file")
+	}
+	sample := strings.ToLower(strings.TrimSpace(string(prefix)))
 	for _, marker := range []string{"{", "[", "<html", "<!doctype html", "<?xml"} {
 		if strings.HasPrefix(sample, marker) {
 			return errors.New("downloader returned a JSON/page response instead of media")

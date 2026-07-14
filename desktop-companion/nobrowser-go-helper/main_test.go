@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -247,6 +249,50 @@ func TestHandleFormatsShortCircuitsDirectMedia(t *testing.T) {
 	}
 	if payload.Formats[0].FormatID != "direct" || payload.Formats[0].Ext != "mp4" {
 		t.Fatalf("unexpected direct media format: %+v", payload.Formats[0])
+	}
+}
+
+func TestStreamDirectMediaRejectsHTMLDisguisedAsMP4(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("<html>not media</html>"))
+	}))
+	defer upstream.Close()
+
+	res := httptest.NewRecorder()
+	err := streamDirectMedia(context.Background(), res, upstream.URL+"/fake.mp4")
+	if err == nil {
+		t.Fatal("expected direct stream to reject HTML masquerading as media")
+	}
+	if !strings.Contains(err.Error(), "JSON/page response") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Body.Len() != 0 {
+		t.Fatalf("rejected direct stream wrote response body: %q", res.Body.String())
+	}
+}
+
+func TestStreamDirectMediaServesValidatedMP4(t *testing.T) {
+	body := append([]byte{0, 0, 0, 24}, []byte("ftypmp42media")...)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		_, _ = w.Write(body)
+	}))
+	defer upstream.Close()
+
+	res := httptest.NewRecorder()
+	if err := streamDirectMedia(context.Background(), res, upstream.URL+"/clip.mp4"); err != nil {
+		t.Fatal(err)
+	}
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", res.Code, res.Body.String())
+	}
+	if got := res.Body.Bytes(); !bytes.Equal(got, body) {
+		t.Fatalf("streamed body mismatch: got %q want %q", got, body)
+	}
+	if got := res.Header().Get("Content-Type"); got != "video/mp4" {
+		t.Fatalf("content type = %q", got)
 	}
 }
 
