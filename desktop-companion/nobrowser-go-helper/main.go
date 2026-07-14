@@ -263,6 +263,10 @@ func handleFormats(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
+	if directMediaURL(rawURL) {
+		writeJSON(w, http.StatusOK, directMediaJSON(rawURL))
+		return
+	}
 	data, err := runYtDlpJSON(ctx, rawURL, r.Header.Get("X-FCDL-Cookies"))
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
@@ -281,6 +285,14 @@ func handleDownload(w http.ResponseWriter, r *http.Request, youtubeOnly bool) {
 	}
 	if youtubeOnly && !youtubeURL(rawURL) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "url must be a YouTube URL"})
+		return
+	}
+	if directMediaURL(rawURL) {
+		if err := streamDirectMedia(r.Context(), w, rawURL); err != nil {
+			logf("direct media download error: %v", err)
+			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 	format := strings.TrimSpace(q.Get("format"))
@@ -373,6 +385,87 @@ func mediaContentType(path string) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+func directMediaURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return isMediaOutputFile(parsed.Path)
+}
+
+func directMediaJSON(rawURL string) map[string]interface{} {
+	parsed, _ := url.Parse(rawURL)
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(parsed.Path)), ".")
+	title := safeName(filepath.Base(parsed.Path))
+	if title == "" || title == "." {
+		title = "media"
+	}
+	format := formatInfo{
+		FormatID: "direct",
+		Label:    "Original",
+		Ext:      ext,
+		Protocol: parsed.Scheme,
+	}
+	return map[string]interface{}{
+		"ok":         true,
+		"service":    "fcdownloader-native-helper",
+		"extractor":  "DirectMedia",
+		"title":      title,
+		"id":         directMediaID(rawURL),
+		"webpageUrl": rawURL,
+		"formats":    []formatInfo{format},
+	}
+}
+
+func directMediaID(rawURL string) string {
+	sum := md5.Sum([]byte(rawURL))
+	return hex.EncodeToString(sum[:])
+}
+
+func streamDirectMedia(ctx context.Context, w http.ResponseWriter, rawURL string) error {
+	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 5, Status: "downloading"})
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{
+		Timeout: time.Hour,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after too many redirects")
+			}
+			if !allowedURL(req.URL.String()) {
+				return errors.New("redirected to a disallowed URL")
+			}
+			return nil
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("direct media request failed: %s", resp.Status)
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = mediaContentType(resp.Request.URL.Path)
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, safeName(filepath.Base(resp.Request.URL.Path))))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if resp.ContentLength > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
+	}
+	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 50, Status: "serving"})
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		return err
+	}
+	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 100, Status: "complete"})
+	return nil
 }
 
 func runYtDlpJSON(ctx context.Context, rawURL, cookies string) (map[string]interface{}, error) {

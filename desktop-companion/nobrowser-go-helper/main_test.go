@@ -216,6 +216,40 @@ func TestMediaContentTypeMatchesDownloadedFile(t *testing.T) {
 	}
 }
 
+func TestDirectMediaURL(t *testing.T) {
+	if !directMediaURL("https://example.com/path/clip.mp4?token=abc") {
+		t.Fatal("direct media URL with query should be detected")
+	}
+	if directMediaURL("https://example.com/watch?v=clip.mp4") {
+		t.Fatal("page URL should not be treated as direct media")
+	}
+}
+
+func TestHandleFormatsShortCircuitsDirectMedia(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/formats?url="+url.QueryEscape("https://example.com/video.mp4"), nil)
+	res := httptest.NewRecorder()
+
+	handleFormats(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		OK        bool         `json:"ok"`
+		Extractor string       `json:"extractor"`
+		Formats   []formatInfo `json:"formats"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.OK || payload.Extractor != "DirectMedia" || len(payload.Formats) != 1 {
+		t.Fatalf("unexpected direct media response: %+v", payload)
+	}
+	if payload.Formats[0].FormatID != "direct" || payload.Formats[0].Ext != "mp4" {
+		t.Fatalf("unexpected direct media format: %+v", payload.Formats[0])
+	}
+}
+
 func TestCookieFileFromHeaderMirrorsBilibiliDomains(t *testing.T) {
 	path, cleanup, err := cookieFileFromHeader("SESSDATA=abc; bili_jct=def", "https://www.bilibili.com/video/BV1xx411c7mD/")
 	if err != nil {
