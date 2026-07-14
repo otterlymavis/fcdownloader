@@ -1,5 +1,5 @@
 param(
-  [string] $Installer = "$PSScriptRoot\..\dist-nobrowser-go-ver\FCDownloader Companion NoBrowser Go Setup 0.2.1.exe",
+  [string] $Installer = "",
   [string] $InstallDir = "$PSScriptRoot\..\..\artifacts\nobrowser-go-install-smoke"
 )
 
@@ -31,7 +31,13 @@ function Test-RunAtLoginValue {
   return $null -ne $value
 }
 
-if (!(Test-Path -LiteralPath $Installer)) {
+if (!$Installer) {
+  $Installer = Get-ChildItem -LiteralPath "$PSScriptRoot\..\dist-nobrowser-go-ver" -Filter "FCDownloader Companion NoBrowser Go Setup *.exe" |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1 -ExpandProperty FullName
+}
+
+if (!$Installer -or !(Test-Path -LiteralPath $Installer)) {
   throw "installer not found: $Installer"
 }
 
