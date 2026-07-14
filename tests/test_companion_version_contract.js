@@ -40,9 +40,8 @@ assert(
   "uninstallers must verify ownership before removing protocol registrations",
 );
 assert(
-  variants.includes('Section "Run Companion on login" SecRunAtLogin') &&
-    !variants.includes('Section /o "Run Companion on login" SecRunAtLogin'),
-  "canonical installer should select login startup by default",
+  variants.includes('Section /o "Run Companion on login" SecRunAtLogin'),
+  "canonical installer should keep login startup opt-in",
 );
 
 console.log("companion version contract tests passed");
