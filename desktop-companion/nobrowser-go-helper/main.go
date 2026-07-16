@@ -492,7 +492,9 @@ func validateDirectMediaURL(ctx context.Context, rawURL string) error {
 	return validateMediaPrefix(prefix)
 }
 
-func directMediaHTTPClient() *http.Client {
+var directMediaHTTPClient = newDirectMediaHTTPClient
+
+func newDirectMediaHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: time.Hour,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {

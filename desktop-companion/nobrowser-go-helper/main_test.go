@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +15,12 @@ import (
 	"testing"
 	"time"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
 
 func TestAllowedURL(t *testing.T) {
 	cases := []struct {
@@ -245,6 +252,36 @@ func TestDirectMediaJSON(t *testing.T) {
 	}
 	if payload.Formats[0].FormatID != "direct" || payload.Formats[0].Ext != "mp4" {
 		t.Fatalf("unexpected direct media format: %+v", payload.Formats[0])
+	}
+}
+
+func TestHandleFormatsRejectsHTMLDisguisedAsDirectMedia(t *testing.T) {
+	originalClient := directMediaHTTPClient
+	directMediaHTTPClient = func() *http.Client {
+		return &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     http.Header{"Content-Type": []string{"video/mp4"}},
+					Body:       io.NopCloser(strings.NewReader("<html>not media</html>")),
+					Request:    req,
+				}, nil
+			}),
+		}
+	}
+	t.Cleanup(func() { directMediaHTTPClient = originalClient })
+
+	req := httptest.NewRequest(http.MethodGet, "/formats?url="+url.QueryEscape("https://example.com/fake.mp4"), nil)
+	res := httptest.NewRecorder()
+
+	handleFormats(res, req)
+
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "JSON/page response") {
+		t.Fatalf("unexpected response body: %s", res.Body.String())
 	}
 }
 
