@@ -94,6 +94,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           },
         },
       ],
+      // Keep Debug iPhone builds usable when Metro is unavailable by embedding
+      // a JS bundle; simulator Debug builds still load from Metro.
+      './plugins/withIosDeviceDebugBundle',
       // iOS native MediaMuxer (AVAssetExportSession) — used for HD YouTube mux on iOS
       './plugins/withMediaMuxer',
       // iOS Share Extension — appears in Safari's share sheet
