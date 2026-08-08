@@ -32,6 +32,12 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         'android.permission.INTERNET',
         'android.permission.READ_MEDIA_VIDEO',
         'android.permission.READ_MEDIA_IMAGES',
+        // Background downloads: the keep-alive foreground service holds the
+        // process + a partial wake lock while transfers are in flight.
+        'android.permission.FOREGROUND_SERVICE',
+        'android.permission.FOREGROUND_SERVICE_DATA_SYNC',
+        'android.permission.POST_NOTIFICATIONS',
+        'android.permission.WAKE_LOCK',
       ],
       blockedPermissions: [
         'android.permission.ACCESS_MEDIA_LOCATION',

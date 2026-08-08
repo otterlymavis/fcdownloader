@@ -5,6 +5,7 @@ import { Platform } from 'react-native';
 import { DetectedMedia, DownloadStatus, DownloadStrategy, DownloadTask } from '../types';
 import { deleteDownload } from '../lib/hlsDownloader';
 import { DRMProtectedError, pickStrategy, runDownload } from '../lib/downloadStrategies';
+import { startDownloadKeepAlive, stopDownloadKeepAlive } from '../lib/downloadKeepAlive';
 import { ServerExtractionError } from '../lib/serverExtractor';
 import { extractionManager } from '../lib/extractionManager';
 import { getMediaGroupKey } from '../lib/mediaHelpers';
@@ -342,6 +343,21 @@ export function useDownloadManager(options: DownloadManagerOptions = {}) {
   const history = tasks.filter(
     (t) => t.status === 'completed' || t.status === 'handed_off' || t.status === 'failed',
   );
+
+  // Keep the process + a wake lock alive (via an Android foreground service)
+  // while any download is running, so backgrounding the app or locking the
+  // screen doesn't stall the streaming download loops. Stops once idle.
+  // Idle always issues a stop rather than only on a 1->0 transition: a service
+  // left running by a previous process (killed mid-download) would otherwise
+  // never be torn down. stopService on a dead service is a no-op.
+  const activeCount = active.length;
+  useEffect(() => {
+    if (activeCount > 0) {
+      void startDownloadKeepAlive(activeCount);
+    } else {
+      void stopDownloadKeepAlive();
+    }
+  }, [activeCount]);
 
   return { tasks, active, history, enqueue, retry, cancel, remove };
 }
