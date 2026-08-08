@@ -64,7 +64,9 @@ import {
   getSourceName,
   guessMediaType,
   isDirectMediaUrl,
+  isNonContentMediaUrl,
   isRuntimeDownloadCandidate,
+  isSelfPageUrl,
   smartDedup,
 } from './src/lib/mediaHelpers';
 import {
@@ -682,7 +684,13 @@ export default function App() {
   const allVideos = useMemo<DetectedMedia[]>(() => {
     const seen = new Set(detected.map((m) => m.url));
     const fromNet: DetectedMedia[] = networkLog
-      .filter((entry) => isRuntimeDownloadCandidate(entry.url, currentBrowserUrl) && !seen.has(entry.url))
+      .filter((entry) =>
+        isRuntimeDownloadCandidate(entry.url, currentBrowserUrl) &&
+        !seen.has(entry.url) &&
+        // Same gate as the runtime promotion in useMediaDetection: a media-looking
+        // path served as HTML is a page, not a download.
+        !isSelfPageUrl(entry.url, currentBrowserUrl) &&
+        !isNonContentMediaUrl(entry.url, entry.mimeType))
       .map((entry) => ({
         id: `net_${entry.url}`,
         url: entry.url,
@@ -1255,7 +1263,7 @@ export default function App() {
                           <Text style={[s.homeActiveTitle, { color: t.ink, fontSize: fs(14) }]} numberOfLines={1}>
                             {mediaSourceName(task.media)} · {Math.round(task.progress * 100)}%
                           </Text>
-                          <Pressable onPress={() => cancel(task.id)} hitSlop={S.xs}>
+                          <Pressable onPress={() => cancel(task.id)} hitSlop={S.md}>
                             <Icon name="close" size={18} color={t.ink2} />
                           </Pressable>
                         </View>
@@ -1648,7 +1656,10 @@ export default function App() {
                               {Math.round(task.progress * 100)}%
                             </Text>
                           </View>
-                          <Pressable android_ripple={RIPPLE_BL} onPress={() => cancel(task.id)} hitSlop={S.xs}>
+                          {/* 11px of text needs generous slop to clear the ~48dp
+                              minimum tap target; the progress circle directly
+                              above is inert, so growing upward is safe. */}
+                          <Pressable android_ripple={RIPPLE_BL} onPress={() => cancel(task.id)} hitSlop={S.md}>
                             <Text style={{ color: t.ink2, fontSize: 11, fontWeight: '600', marginTop: S.xs }}>
                               {translate('cancel', resolvedLanguage)}
                             </Text>

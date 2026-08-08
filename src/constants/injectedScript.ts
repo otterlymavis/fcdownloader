@@ -260,6 +260,10 @@ export const INJECTED_SCRIPT = `
     return base;
   }
 
+  function docContentType() {
+    try { return document.contentType || ''; } catch (_) { return ''; }
+  }
+
   function emit(url, mime, provenance, confidence) {
     if (!url || typeof url !== 'string') return;
     url = url.trim();
@@ -279,6 +283,10 @@ export const INJECTED_SCRIPT = `
            userAgent: navigator.userAgent, mimeType: mime || null,
            mediaType: type, mediaKind: detectKind(url, mime), timestamp: Date.now(),
            provenance: provenance || 'perf-observer',
+           // Lets the app tell a media document (navigating straight to an .mp4,
+           // where currentSrc === location.href) apart from an HTML page whose
+           // path merely ends in a media extension (e.g. /wiki/File:Clip.webm).
+           docContentType: docContentType(),
            confidence: conf });
   }
 
@@ -309,7 +317,8 @@ export const INJECTED_SCRIPT = `
       transferSize: typeof meta.transferSize === 'number' ? meta.transferSize : undefined,
       encodedBodySize: typeof meta.encodedBodySize === 'number' ? meta.encodedBodySize : undefined,
       provenance: meta.provenance || undefined,
-      initiatorType: meta.initiatorType || undefined
+      initiatorType: meta.initiatorType || undefined,
+      docContentType: docContentType()
     });
   }
 

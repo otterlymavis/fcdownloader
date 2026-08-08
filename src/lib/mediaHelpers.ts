@@ -258,6 +258,19 @@ export function isRuntimeDownloadCandidate(url: string, pageUrl?: string): boole
   return isNetworkDownloadCandidate(url);
 }
 
+/**
+ * True when a captured URL is just the page's own document URL. A page is never
+ * its own downloadable media, but plenty of pages *look* like media because the
+ * path ends in a media extension — e.g. a wiki file page at
+ * `/wiki/File:Clip.webm`. Without this guard those get offered as downloads and
+ * then fail with "server returned a page instead of downloadable media".
+ */
+export function isSelfPageUrl(url: string, pageUrl?: string): boolean {
+  if (!pageUrl) return false;
+  const normalize = (value: string) => value.split('#')[0].replace(/\/+$/, '').toLowerCase();
+  return normalize(url) === normalize(pageUrl);
+}
+
 export function isDirectMediaUrl(url: string): boolean {
   if (isSegmentMediaUrl(url)) return false;
   return USEFUL_EXT_RE.test(url) || VIMEO_JSON_RE.test(url) || VIDEO_CDN_RE.test(url);

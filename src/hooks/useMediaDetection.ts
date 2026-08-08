@@ -6,6 +6,7 @@ import {
   isLikelyThumbnailUrl,
   isNonContentMediaUrl,
   isRuntimeDownloadCandidate,
+  isSelfPageUrl,
   isXhsPageUrl,
   isXhsMediaCandidate,
   isSegmentMediaUrl,
@@ -37,6 +38,16 @@ export interface BrowserNetworkEntry {
   provenance?: Provenance;
   initiatorType?: string;
   timestamp?: number;
+}
+
+/**
+ * True when the WebView is rendering the media file itself rather than a page
+ * about it — navigating straight to an .mp4 gives a synthetic document whose
+ * <video> currentSrc equals location.href. Such a URL is legitimately both the
+ * page and the media, so it must survive the self-page guard.
+ */
+function isMediaDocument(docContentType: unknown): boolean {
+  return /^(?:video|audio|image)\//i.test(String(docContentType ?? ''));
 }
 
 function guessType(url: string): MediaType {
@@ -144,6 +155,7 @@ export function useMediaDetection() {
         const url = String(data.url ?? '').trim();
         if (!url || isSegmentMediaUrl(url)) return;
         const pageUrl = (data.pageUrl as string) ?? currentPageUrl.current;
+        if (!isMediaDocument(data.docContentType) && isSelfPageUrl(url, pageUrl)) return;
         const fromXhsPage = isXhsPageUrl(pageUrl);
         if (fromXhsPage && !isXhsMediaCandidate(url)) return;
         if (isNonContentMediaUrl(url, data.mimeType)) return;
@@ -238,7 +250,15 @@ export function useMediaDetection() {
         // Auto-promote manifests, direct media files, and known media CDN URLs
         const isImageCdn = /(?:cdninstagram\.com\/|scontent[-\w]*\.cdninstagram\.com\/|fbcdn\.net\/|threadscdn\.com\/|pinimg\.com\/(?:originals|736x|1200x|564x)\/|sinaimg\.cn\/|xhscdn\.com\/)/i.test(url);
         if ((isImageCdn || guessKind(url) === 'image') && isLikelyThumbnailUrl(url)) return;
-        if (isRuntimeDownloadCandidate(url, currentPageUrl.current)) {
+        // The observed Content-Type is the authoritative signal here: a URL can
+        // look like media by extension while the server serves an HTML page.
+        // Promotion is gated on it, but the entry stays in networkLog above so
+        // the source audit still records what was seen.
+        if (
+          isRuntimeDownloadCandidate(url, currentPageUrl.current) &&
+          (isMediaDocument(data.docContentType) || !isSelfPageUrl(url, currentPageUrl.current)) &&
+          !isNonContentMediaUrl(url, networkEntry.mimeType)
+        ) {
           const mediaType: MediaType = guessType(url);
           setDetected((prev) => {
             if (prev.some((m) => m.url === url)) return prev;
