@@ -8,7 +8,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     name: 'FCDownloader',
     slug: 'fcdownloader',
     owner: 'mabisuuu',
-    version: '1.5.22',
+    version: '1.5.25',
     orientation: 'default',
     userInterfaceStyle: 'automatic', // dark mode support
     platforms: ['ios', 'android', 'web'],
@@ -21,7 +21,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     android: {
       package: 'com.otterpia.fcdownloader',
-      versionCode: 26,
+      versionCode: 27,
       allowBackup: false,
       icon: './web/icon-512.png',
       adaptiveIcon: {
