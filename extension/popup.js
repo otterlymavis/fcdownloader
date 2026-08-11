@@ -431,7 +431,8 @@ function startProgressPolling(mediaUrl) {
         setProgress(progressFloor, "Companion is merging formats...");
       } else if (data.status === "retrying") {
         progressFloor = Math.max(progressFloor, Math.min(Number(data.percent) || progressFloor, 95));
-        setProgress(progressFloor, "Companion is retrying with updated YouTube support...");
+        const showedToolProgress = await updateToolProgressDisplay();
+        if (!showedToolProgress) setProgress(progressFloor, "Companion is retrying with updated YouTube support...");
       } else if (data.status === "ready") {
         progressFloor = Math.max(progressFloor, 98);
         setProgress(progressFloor, "Preparing browser download...");

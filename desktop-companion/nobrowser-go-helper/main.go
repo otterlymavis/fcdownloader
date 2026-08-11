@@ -544,6 +544,7 @@ func runYtDlpJSON(ctx context.Context, rawURL, cookies string) (map[string]inter
 		return data, nil
 	}
 	if !youtubeURL(rawURL) {
+		setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
 		return data, err
 	}
 	if channel == "nightly" {
@@ -556,6 +557,8 @@ func runYtDlpJSON(ctx context.Context, rawURL, cookies string) (map[string]inter
 		data, err = runYtDlpJSONWithPath(ctx, stable, rawURL, cookieFile)
 		if err == nil {
 			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 10, Status: "extracted"})
+		} else {
+			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
 		}
 		return data, err
 	}
@@ -569,9 +572,12 @@ func runYtDlpJSON(ctx context.Context, rawURL, cookies string) (map[string]inter
 		data, err = runYtDlpJSONWithPath(ctx, nightly, rawURL, cookieFile)
 		if err == nil {
 			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Percent: 10, Status: "extracted"})
+		} else {
+			setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
 		}
 		return data, err
 	}
+	setMediaProgress(rawURL, &mediaProgress{URL: rawURL, Status: "error"})
 	return data, err
 }
 
